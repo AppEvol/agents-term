@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Tailscale encrypts traffic end-to-end via WireGuard; permit HTTP/WS inside the tailnet -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

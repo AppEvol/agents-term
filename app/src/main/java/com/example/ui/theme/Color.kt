@@ -1,0 +1,52 @@
+package com.example.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// Herdr Obsidian-Slate + Electric Cobalt & Emerald Palette
+val HerdrBlue = Color(0xFF4F8CFF)
+val HerdrBlueSoft = Color(0xFF8AB4F8)
+val HerdrPurple = Color(0xFF9E7BFF)
+val HerdrAmber = Color(0xFFF5A623)
+val HerdrEmerald = Color(0xFF34D399)
+val HerdrRed = Color(0xFFEF5350)
+val HerdrIdleSlate = Color(0xFF7B8794)
+
+// Dark surfaces
+val DarkBackground = Color(0xFF0B0F17)
+val DarkSurface = Color(0xFF111722)
+val DarkSurfaceVariant = Color(0xFF1B2333)
+val DarkSurfaceContainerLowest = Color(0xFF070A10)
+val DarkSurfaceContainerLow = Color(0xFF111722)
+val DarkSurfaceContainer = Color(0xFF171F2E)
+val DarkSurfaceContainerHigh = Color(0xFF202A3D)
+val DarkSurfaceContainerHighest = Color(0xFF2A364F)
+val DarkOnSurface = Color(0xFFE8EEF8)
+val DarkOnSurfaceVariant = Color(0xFF9AA8C2)
+val DarkOutline = Color(0xFF364461)
+val DarkOutlineVariant = Color(0xFF232D42)
+val DarkPrimaryContainer = Color(0xFF1A3358)
+val DarkOnPrimaryContainer = Color(0xFFD6E6FF)
+val DarkSecondaryContainer = Color(0xFF2A1F4A)
+val DarkOnSecondaryContainer = Color(0xFFE7DEFF)
+
+// Light surfaces
+val LightPrimary = Color(0xFF1D4ED8)
+val LightPrimaryContainer = Color(0xFFDBEAFE)
+val LightOnPrimaryContainer = Color(0xFF1E3A8A)
+val LightSecondary = Color(0xFF6D28D9)
+val LightSecondaryContainer = Color(0xFFEDE9FE)
+val LightOnSecondaryContainer = Color(0xFF4C1D95)
+val LightTertiary = Color(0xFF059669)
+val LightBackground = Color(0xFFF6F8FC)
+val LightSurface = Color(0xFFFFFFFF)
+val LightSurfaceVariant = Color(0xFFEEF2F8)
+val LightSurfaceContainerLowest = Color(0xFFF1F5F9)
+val LightSurfaceContainerLow = Color(0xFFF8FAFC)
+val LightSurfaceContainer = Color(0xFFEEF2F7)
+val LightSurfaceContainerHigh = Color(0xFFE2E8F0)
+val LightSurfaceContainerHighest = Color(0xFFD5DFEC)
+val LightOnSurface = Color(0xFF0F172A)
+val LightOnSurfaceVariant = Color(0xFF475569)
+val LightOutline = Color(0xFFCBD5E1)
+val LightOutlineVariant = Color(0xFFE2E8F0)
+val LightError = Color(0xFFDC2626)

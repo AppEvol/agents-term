@@ -1,0 +1,101 @@
+package com.example.data
+
+import android.content.Context
+
+class SettingsStore(context: Context) {
+    private val prefs = context.getSharedPreferences("herdr_mobile_prefs", Context.MODE_PRIVATE)
+
+    fun loadConnection(): ConnectionConfig {
+        return ConnectionConfig(
+            host = prefs.getString(KEY_HOST, "").orEmpty(),
+            port = prefs.getInt(KEY_PORT, 7501),
+            token = prefs.getString(KEY_TOKEN, "").orEmpty(),
+        )
+    }
+
+    fun saveConnection(config: ConnectionConfig) {
+        prefs.edit()
+            .putString(KEY_HOST, config.host.trim())
+            .putInt(KEY_PORT, config.port)
+            .putString(KEY_TOKEN, config.token.trim())
+            .apply()
+    }
+
+    fun loadLastTabId(): String? = prefs.getString(KEY_LAST_TAB, null)
+
+    fun saveLastTabId(tabId: String?) {
+        prefs.edit().putString(KEY_LAST_TAB, tabId).apply()
+    }
+
+    /**
+     * Loads non-secret SSH fields (host, port, username, auth mode, daemon port).
+     * Passwords and private keys are intentionally never stored on disk.
+     */
+    fun loadSshProfile(): SshProfile {
+        val host = prefs.getString(KEY_SSH_HOST, null)
+            ?: prefs.getString(KEY_HOST, "").orEmpty()
+        val normalizedHost = cleanHost(host)
+        return SshProfile(
+            host = host,
+            sshPort = prefs.getInt(KEY_SSH_PORT, 22),
+            username = prefs.getString(KEY_SSH_USERNAME, "").orEmpty(),
+            authMethod = SshAuthMethod.fromStorageKey(prefs.getString(KEY_SSH_AUTH_METHOD, null)),
+            daemonPort = prefs.getInt(KEY_SSH_DAEMON_PORT, 7501),
+            isBootstrapped = normalizedHost.isNotBlank() && isHostBootstrapped(normalizedHost),
+        )
+    }
+
+    fun saveSshProfile(profile: SshProfile) {
+        prefs.edit()
+            .putString(KEY_SSH_HOST, profile.host.trim())
+            .putInt(KEY_SSH_PORT, profile.sshPort)
+            .putString(KEY_SSH_USERNAME, profile.username.trim())
+            .putString(KEY_SSH_AUTH_METHOD, profile.authMethod.storageKey)
+            .putInt(KEY_SSH_DAEMON_PORT, profile.daemonPort)
+            .apply()
+    }
+
+    fun getTrustedHostFingerprint(host: String, port: Int): String? {
+        return prefs.getString(hostKeyPrefKey(host, port), null)
+    }
+
+    fun saveTrustedHostFingerprint(host: String, port: Int, fingerprint: String) {
+        prefs.edit().putString(hostKeyPrefKey(host, port), fingerprint).apply()
+    }
+
+    fun clearTrustedHostFingerprint(host: String, port: Int) {
+        prefs.edit().remove(hostKeyPrefKey(host, port)).apply()
+    }
+
+    fun isHostBootstrapped(host: String): Boolean {
+        val normalized = cleanHost(host)
+        if (normalized.isBlank()) return false
+        val set = prefs.getStringSet(KEY_BOOTSTRAPPED_HOSTS, emptySet()).orEmpty()
+        return normalized in set
+    }
+
+    fun markHostBootstrapped(host: String) {
+        val normalized = cleanHost(host)
+        if (normalized.isBlank()) return
+        val updated = prefs.getStringSet(KEY_BOOTSTRAPPED_HOSTS, emptySet()).orEmpty() + normalized
+        prefs.edit().putStringSet(KEY_BOOTSTRAPPED_HOSTS, updated).apply()
+    }
+
+    private fun hostKeyPrefKey(host: String, port: Int): String {
+        return "${KEY_HOST_KEY_PREFIX}${cleanHost(host)}:$port"
+    }
+
+    companion object {
+        private const val KEY_HOST = "vm_host"
+        private const val KEY_PORT = "vm_port"
+        private const val KEY_TOKEN = "vm_token"
+        private const val KEY_LAST_TAB = "last_tab_id"
+        private const val KEY_SSH_HOST = "ssh_host"
+        private const val KEY_SSH_PORT = "ssh_port"
+        private const val KEY_SSH_USERNAME = "ssh_username"
+        private const val KEY_SSH_AUTH_METHOD = "ssh_auth_method"
+        private const val KEY_SSH_DAEMON_PORT = "ssh_daemon_port"
+        private const val KEY_HOST_KEY_PREFIX = "ssh_host_fp_"
+        private const val KEY_BOOTSTRAPPED_HOSTS = "bootstrapped_hosts"
+    }
+}
