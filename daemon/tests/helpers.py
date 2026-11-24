@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 DAEMON_DIR = Path(__file__).resolve().parent.parent
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(DAEMON_DIR))
 
 

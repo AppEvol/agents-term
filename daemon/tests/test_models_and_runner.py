@@ -6,7 +6,7 @@ import os
 import unittest
 from pathlib import Path
 
-from helpers import TempHomeTestCase, run_async
+from helpers import FIXTURES_DIR, TempHomeTestCase, run_async
 
 from agentsterm_daemon.models import (
     clear_models_cache_for_tests,
@@ -14,7 +14,7 @@ from agentsterm_daemon.models import (
     read_claude_models_from_disk,
     read_codex_models_from_disk,
 )
-from agentsterm_daemon.runner import AgentRunner
+from agentsterm_daemon.runner import AgentRunner, block_separator
 from agentsterm_daemon.store import StateStore
 
 
@@ -247,6 +247,82 @@ class RunnerTest(TempHomeTestCase):
         first, second = [json.loads(line) for line in args_log.read_text().splitlines()]
         self.assertEqual(first, ["exec", "--json", "--skip-git-repo-check", "-C", str(self.tmp), "-s", "read-only", "go"])
         self.assertEqual(second, ["exec", "resume", "--json", "--skip-git-repo-check", "th-9", "again"])
+
+    def test_block_separator(self):
+        self.assertEqual(block_separator(None), "")
+        self.assertEqual(block_separator(""), "")
+        self.assertEqual(block_separator("Done."), "\n\n")
+        self.assertEqual(block_separator("Done.\n"), "\n")
+        self.assertEqual(block_separator("Done.\n\n"), "")
+
+    def test_claude_real_stream_separates_text_blocks_around_tool_calls(self):
+        """Replays a stream captured from the real CLI: text, a Bash tool call, then more text."""
+        self.fake_binary("claude", f"sys.stdout.write(open({str(FIXTURES_DIR / 'claude_tool_turn.ndjson')!r}).read())\n")
+        store, runner = self.make()
+        tab = store.create_tab("claude", cwd=str(self.tmp))
+        _, msg = self.run_turn(runner, store, tab, "go")
+        # Was "Starting now.All done." before the fix.
+        self.assertEqual(msg["text"], "Starting now.\n\nAll done.")
+        self.assertEqual([(t["name"], t["status"], t["output"]) for t in msg["toolCalls"]], [("Bash", "done", "hi")])
+        self.assertEqual(msg["toolCalls"][0]["inputSummary"], "echo hi")
+        self.assertEqual(msg["status"], "complete")
+        self.assertEqual(store.get_tab(tab["id"])["sessionRef"], {"kind": "claude", "value": "sess-fixture-1"})
+        # Streamed deltas must add up to exactly the stored text (the app applies deltas).
+        deltas = "".join(e.get("textDelta", "") for e in self.events if e["type"] == "message_delta")
+        self.assertEqual(deltas, msg["text"])
+
+    def test_claude_block_breaks_cover_thinking_and_skip_empty_blocks(self):
+        def start(kind):
+            return {"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": kind}}}
+
+        def delta(kind, value):
+            key = "thinking" if kind == "thinking_delta" else "text"
+            return {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": kind, key: value}}}
+
+        self.fake_binary("claude", self.emit_lines_script([
+            start("thinking"), delta("thinking_delta", "plan A"),
+            start("text"), delta("text_delta", "One"), delta("text_delta", " more."),
+            start("text"),                      # empty block: must not add blank lines
+            start("tool_use"),
+            start("thinking"), delta("thinking_delta", "plan B"),
+            start("text"), delta("text_delta", ""), delta("text_delta", "Two.\n"),
+            start("text"), delta("text_delta", "Three."),
+        ]))
+        store, runner = self.make()
+        tab = store.create_tab("claude", cwd=str(self.tmp))
+        _, msg = self.run_turn(runner, store, tab, "go")
+        self.assertEqual(msg["text"], "One more.\n\nTwo.\n\nThree.")
+        self.assertEqual(msg["thinking"], "plan A\n\nplan B")
+
+    def test_claude_without_partial_messages_separates_full_text_blocks(self):
+        self.fake_binary("claude", self.emit_lines_script([
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Starting."}]}},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {}}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}},
+        ]))
+        store, runner = self.make()
+        tab = store.create_tab("claude", cwd=str(self.tmp))
+        _, msg = self.run_turn(runner, store, tab, "go")
+        self.assertEqual(msg["text"], "Starting.\n\nDone.")
+
+    def test_agy_separates_responses_from_different_steps(self):
+        def resp(idx, **kw):
+            return {"event": "step_update", "step_update": {"step_index": idx, "step_type": "agent_response", **kw}}
+
+        self.fake_binary("agy", self.emit_lines_script([
+            resp(1, thinking_delta="think 1"),
+            resp(1, text_delta="Let me "), resp(1, text_delta="check."),
+            {"event": "step_update", "step_update": {"step_index": 2, "state": "DONE", "step_type": "tool",
+                                                     "tool_name": "run_command", "tool_info": {"output": "ok"}}},
+            resp(3, thinking_delta="think 2"),
+            resp(3, text_delta="All "), resp(3, text_delta="good."),
+            {"event": "result", "result": {"status": "SUCCESS", "response": "ignored"}},
+        ]))
+        store, runner = self.make()
+        tab = store.create_tab("agy", cwd=str(self.tmp))
+        _, msg = self.run_turn(runner, store, tab, "go")
+        self.assertEqual(msg["text"], "Let me check.\n\nAll good.")
+        self.assertEqual(msg["thinking"], "think 1\n\nthink 2")
 
     def test_interrupt_stops_turn_and_marks_message_interrupted(self):
         self.fake_binary("agy", "sys.stdout.write(json.dumps({'event':'step_update','step_update':"
