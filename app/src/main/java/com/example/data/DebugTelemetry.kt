@@ -34,7 +34,7 @@ private val queryTokenRegex = Regex("""(?i)((?:[?&]|\b)token=)[^&\s"'`<>)\]]+"""
 private val labelTokenRegex = Regex("""(?i)(\btoken\s*:\s*)\S+""")
 private val jsonTokenRegex = Regex("""(?i)("token"\s*:\s*")([^"]*)(")""")
 private val privateKeyBlockRegex = Regex(
-    """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----"""
+    """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----""",
 )
 
 /**
@@ -56,9 +56,7 @@ fun formatIsoUtc(epochMs: Long): String {
     return fmt.format(Date(epochMs))
 }
 
-fun generateDebugDumpId(): String {
-    return UUID.randomUUID().toString().substring(0, 8)
-}
+fun generateDebugDumpId(): String = UUID.randomUUID().toString().substring(0, 8)
 
 /**
  * Thread-safe bounded ring buffer capturing sanitized HTTP, WebSocket, SSH, and UI events

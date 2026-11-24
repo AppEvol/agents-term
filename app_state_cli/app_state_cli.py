@@ -37,8 +37,7 @@ EXIT_DAEMON = 2
 EXIT_NOT_READY = 3
 EXIT_APP = 4
 
-NOT_READY_CODES = {"no_app_connected", "unsupported_app", "inspection_disabled", "control_disabled",
-                   "app_disconnected"}
+NOT_READY_CODES = {"no_app_connected", "unsupported_app", "inspection_disabled", "control_disabled", "app_disconnected"}
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "herdr-mobile" / "config.json"
 
@@ -56,8 +55,9 @@ class DaemonClient:
         self.token = token
         self.http_timeout = http_timeout
 
-    def _request(self, method: str, path: str, body: Optional[Dict[str, Any]] = None,
-                 timeout: Optional[float] = None) -> Dict[str, Any]:
+    def _request(
+        self, method: str, path: str, body: Optional[Dict[str, Any]] = None, timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(self.base_url + path, data=data, method=method)
         req.add_header("Accept", "application/json")
@@ -82,7 +82,8 @@ class DaemonClient:
             if err.code == 404:
                 raise CliError(
                     f"{message}. The daemon is too old for app state reporting; update and restart it.",
-                    EXIT_DAEMON, "daemon_unsupported",
+                    EXIT_DAEMON,
+                    "daemon_unsupported",
                 )
             raise CliError(message, EXIT_DAEMON, "daemon_error")
         except (urllib.error.URLError, OSError) as err:
@@ -130,12 +131,14 @@ def emit(payload: Any, pretty: bool) -> None:
     sys.stdout.flush()
 
 
-def run_app_command(client: DaemonClient, args: argparse.Namespace, command: str,
-                    cmd_args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def run_app_command(
+    client: DaemonClient, args: argparse.Namespace, command: str, cmd_args: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     return client.command(command, cmd_args, timeout_s=args.timeout)
 
 
 # --- subcommands -------------------------------------------------------------------------------
+
 
 def cmd_status(client: DaemonClient, args: argparse.Namespace) -> int:
     status = client.status()
@@ -147,6 +150,7 @@ def cmd_simple(name: str):
     def handler(client: DaemonClient, args: argparse.Namespace) -> int:
         emit(run_app_command(client, args, name), args.pretty)
         return 0
+
     return handler
 
 
@@ -222,8 +226,10 @@ def save_screenshot(client: DaemonClient, args: argparse.Namespace, output: Opti
     b64 = result.pop("pngBase64", None)
     if not b64:
         raise CliError("App returned no screenshot data", EXIT_APP, "app_error")
-    out = Path(output).expanduser() if output else Path(
-        f"/tmp/agentsterm-screenshot-{time.strftime('%Y%m%d-%H%M%S')}.png"
+    out = (
+        Path(output).expanduser()
+        if output
+        else Path(f"/tmp/agentsterm-screenshot-{time.strftime('%Y%m%d-%H%M%S')}.png")
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     data = base64.b64decode(b64)
@@ -240,6 +246,7 @@ def cmd_screenshot(client: DaemonClient, args: argparse.Namespace) -> int:
 
 
 # --- UI tree and control -----------------------------------------------------------------------
+
 
 def selector_args(args: argparse.Namespace) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
@@ -270,8 +277,11 @@ def brief_node(node: Dict[str, Any]) -> str:
         parts.append(f"toggle={node['toggle']}")
     if node.get("selected") is not None:
         parts.append(f"selected={str(node['selected']).lower()}")
-    parts.extend(flag for flag in ("clickable", "longClickable", "scrollable", "editable", "focused", "password")
-                 if node.get(flag))
+    parts.extend(
+        flag
+        for flag in ("clickable", "longClickable", "scrollable", "editable", "focused", "password")
+        if node.get(flag)
+    )
     if node.get("enabled") is False:
         parts.append("disabled")
     if node.get("window"):
@@ -289,15 +299,22 @@ def cmd_ui(client: DaemonClient, args: argparse.Namespace) -> int:
         return 0
     result = resp.get("result") or {}
     windows = ", ".join(f"{w.get('index')}:{w.get('type')}" for w in result.get("windows") or [])
-    lines = [f"# {result.get('width')}x{result.get('height')} screenshot pixels; windows {windows}; "
-             f"[x,y] is each element's center"]
+    lines = [
+        f"# {result.get('width')}x{result.get('height')} screenshot pixels; windows {windows}; "
+        f"[x,y] is each element's center"
+    ]
     lines.extend(brief_node(n) for n in result.get("nodes") or [])
     sys.stdout.write("\n".join(lines) + "\n")
     return 0
 
 
-def act(client: DaemonClient, args: argparse.Namespace, command: str, cmd_args: Dict[str, Any],
-        timeout_s: Optional[float] = None) -> int:
+def act(
+    client: DaemonClient,
+    args: argparse.Namespace,
+    command: str,
+    cmd_args: Dict[str, Any],
+    timeout_s: Optional[float] = None,
+) -> int:
     """Runs a control command, then optionally captures what the app looks like afterwards."""
     resp = client.command(command, cmd_args, timeout_s=timeout_s or args.timeout)
     if args.screenshot:
@@ -332,8 +349,14 @@ def cmd_long_press(client: DaemonClient, args: argparse.Namespace) -> int:
 
 
 def cmd_swipe(client: DaemonClient, args: argparse.Namespace) -> int:
-    cmd_args = {"x1": args.x1, "y1": args.y1, "x2": args.x2, "y2": args.y2,
-                "durationMs": args.duration_ms, "holdMs": args.hold_ms}
+    cmd_args = {
+        "x1": args.x1,
+        "y1": args.y1,
+        "x2": args.x2,
+        "y2": args.y2,
+        "durationMs": args.duration_ms,
+        "holdMs": args.hold_ms,
+    }
     # The app answers after the stroke, so wait at least that long.
     stroke_s = (args.duration_ms + args.hold_ms) / 1000.0
     return act(client, args, "swipe", cmd_args, timeout_s=max(args.timeout, stroke_s + 10))
@@ -413,6 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
         # defaults, or they would overwrite values given before the subcommand.
         def d(value):
             return argparse.SUPPRESS if suppress else value
+
         common = argparse.ArgumentParser(add_help=False)
         common.add_argument("--host", default=d(None), help="daemon host (default: from daemon config)")
         common.add_argument("--port", type=int, default=d(None), help="daemon port (default: from daemon config)")
@@ -443,8 +467,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("logs", cmd_logs, "Show the app's in-memory debug event log (HTTP/WS/SSH/UI/errors).")
     p.add_argument("--limit", type=int, default=100, help="max events (default: 100, max 600)")
-    p.add_argument("--category", action="append",
-                   help="only these categories (repeatable): http, ws, ssh, ui, lifecycle, error, app_state")
+    p.add_argument(
+        "--category",
+        action="append",
+        help="only these categories (repeatable): http, ws, ssh, ui, lifecycle, error, app_state",
+    )
     p.add_argument("--since", type=int, help="only events with ts >= this epoch-ms timestamp")
     p.add_argument("--grep", help="only events whose event/detail/payload contains this text (case-insensitive)")
     p.add_argument("--follow", "-f", action="store_true", help="keep polling; print one JSON event per line")
@@ -457,7 +484,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("crash", cmd_crash, "Show the last uncaught-exception report saved by the app (if any).")
     p.add_argument("--raw", action="store_true", help="print plain text instead of JSON")
 
-    p = add("screenshot", cmd_screenshot, "Capture the app, including open dialogs and menus, to a PNG (app must be in the foreground).")
+    p = add(
+        "screenshot",
+        cmd_screenshot,
+        "Capture the app, including open dialogs and menus, to a PNG (app must be in the foreground).",
+    )
     p.add_argument("-o", "--output", help="PNG path (default: /tmp/agentsterm-screenshot-<time>.png)")
 
     def add_selector(p: argparse.ArgumentParser, index: bool = True) -> None:
@@ -470,11 +501,14 @@ def build_parser() -> argparse.ArgumentParser:
     def add_action(name: str, handler, help_text: str) -> argparse.ArgumentParser:
         p = add(name, handler, help_text + " Needs 'Allow VM agents to control the app'.")
         p.add_argument("--screenshot", "-s", metavar="PNG", help="also capture the app to this PNG after the action")
-        p.add_argument("--settle", type=float, default=0.6,
-                       help="seconds to let the UI settle before --screenshot (default: 0.6)")
+        p.add_argument(
+            "--settle", type=float, default=0.6, help="seconds to let the UI settle before --screenshot (default: 0.6)"
+        )
         return p
 
-    p = add("ui", cmd_ui, "List what is on screen: text, test tags, bounds and what can be tapped, scrolled or typed in.")
+    p = add(
+        "ui", cmd_ui, "List what is on screen: text, test tags, bounds and what can be tapped, scrolled or typed in."
+    )
     add_selector(p, index=False)
     p.add_argument("--interactive", action="store_true", help="only elements that can be tapped, scrolled or typed in")
     p.add_argument("--brief", action="store_true", help="one line per element instead of JSON")
@@ -503,8 +537,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hold-ms", type=int, default=0, help="rest at the end before lifting, which prevents a fling")
 
     p = add_action("scroll", cmd_scroll, "Scroll a list by dragging it, without a fling.")
-    p.add_argument("direction", nargs="?", default="down", choices=["up", "down", "left", "right"],
-                   help="which content to reveal (default: down)")
+    p.add_argument(
+        "direction",
+        nargs="?",
+        default="down",
+        choices=["up", "down", "left", "right"],
+        help="which content to reveal (default: down)",
+    )
     p.add_argument("--amount", type=float, help="fraction of the list's size to scroll (default: 0.6)")
     add_selector(p)
 
@@ -514,7 +553,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--field", help="text field whose label or content contains this")
     p.add_argument("--exact", action="store_true", help="--field must match exactly")
     p.add_argument("--index", type=int, help="which match to use when several match")
-    p.add_argument("--replace", action="store_true", help="replace the field's content instead of inserting at the cursor")
+    p.add_argument(
+        "--replace", action="store_true", help="replace the field's content instead of inserting at the cursor"
+    )
     p.add_argument("--submit", action="store_true", help="then run the field's keyboard action (Send, Done, Search...)")
 
     p = add_action("key", cmd_key, "Press Back, or Enter (the focused text field's keyboard action).")

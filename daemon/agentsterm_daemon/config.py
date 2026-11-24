@@ -161,9 +161,7 @@ def detect_tailscale_ip(use_cache: bool = True) -> Optional[str]:
 
 def _detect_tailscale_ip_uncached() -> Optional[str]:
     try:
-        out = subprocess.run(
-            ["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=3, check=False
-        ).stdout
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=3, check=False).stdout
         for line in out.splitlines():
             line = line.strip()
             if _IPV4_RE.match(line):
@@ -232,9 +230,7 @@ def detect_available_agents() -> List[Dict[str, Any]]:
     for spec in AGENT_SPECS:
         binary_path = resolve_binary(spec["binary"])
         available = binary_path is not None
-        discovered = (
-            get_cached_agent_models(spec["type"]) if available else {"defaultModel": None, "models": []}
-        )
+        discovered = get_cached_agent_models(spec["type"]) if available else {"defaultModel": None, "models": []}
         agents.append(
             {
                 **spec,

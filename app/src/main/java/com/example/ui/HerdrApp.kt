@@ -241,6 +241,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                     }
                     when (modelCmd) {
                         is ModelSlashCommand.OpenPicker -> openModelPickerForActiveTab()
+
                         is ModelSlashCommand.ResetToDefault -> {
                             if (current != null) {
                                 viewModel.updateTabModel(current.id, null) {
@@ -250,6 +251,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                                 }
                             }
                         }
+
                         is ModelSlashCommand.SetModel -> {
                             if (current != null) {
                                 val (models, _) = resolveAgentModelCatalog(
@@ -265,6 +267,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                                 }
                             }
                         }
+
                         null -> viewModel.sendMessage(rawText)
                     }
                 },
@@ -410,7 +413,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                             viewModel.renameTab(current.id, titleInput.trim())
                         }
                         showRenameDialog = false
-                    }
+                    },
                 ) { Text(stringResource(R.string.action_save)) }
             },
             dismissButton = {
@@ -548,7 +551,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         viewModel.updateTabSystemPrompt(current.id, effective) {
                             scope.launch {
                                 snackbarHostState.showSnackbar(
-                                    if (effective.isEmpty()) "System prompt cleared" else "System prompt updated"
+                                    if (effective.isEmpty()) "System prompt cleared" else "System prompt updated",
                                 )
                             }
                         }
@@ -728,7 +731,7 @@ private fun WorkspaceScaffold(
                                         if (state.attentionCount > 0) {
                                             Badge { Text(state.attentionCount.toString()) }
                                         }
-                                    }
+                                    },
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.Menu,

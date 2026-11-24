@@ -36,12 +36,16 @@ def _normalize_queued_messages(raw: Any) -> List[Dict[str, Any]]:
         if not qid or not text:
             continue
         created = item.get("createdAt")
-        out.append({
-            "id": qid,
-            "text": text,
-            "overridePermissionMode": _strip_or_none(item.get("overridePermissionMode")),
-            "createdAt": int(created) if isinstance(created, (int, float)) and not isinstance(created, bool) else now_ms(),
-        })
+        out.append(
+            {
+                "id": qid,
+                "text": text,
+                "overridePermissionMode": _strip_or_none(item.get("overridePermissionMode")),
+                "createdAt": int(created)
+                if isinstance(created, (int, float)) and not isinstance(created, bool)
+                else now_ms(),
+            }
+        )
     return out
 
 
@@ -69,7 +73,11 @@ class StateStore:
                 {
                     **t,
                     "queuedMessages": _normalize_queued_messages(t.get("queuedMessages")),
-                    **({"status": "idle", "statusDetail": None, "updatedAt": now} if t.get("status") == "working" else {}),
+                    **(
+                        {"status": "idle", "statusDetail": None, "updatedAt": now}
+                        if t.get("status") == "working"
+                        else {}
+                    ),
                 }
                 for t in (tabs if isinstance(tabs, list) else [])
                 if isinstance(t, dict)

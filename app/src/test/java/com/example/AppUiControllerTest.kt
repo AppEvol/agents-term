@@ -88,8 +88,14 @@ class AppUiControllerTest {
         val send = (all["nodes"] as List<Map<String, Any?>>).single { it["tag"] == "send_button" }
         assertEquals(
             mapOf(
-                "id" to 4, "window" to 0, "bounds" to listOf(900, 2100, 1060, 2300), "center" to listOf(980, 2200),
-                "description" to "Send", "tag" to "send_button", "role" to "Button", "clickable" to true,
+                "id" to 4,
+                "window" to 0,
+                "bounds" to listOf(900, 2100, 1060, 2300),
+                "center" to listOf(980, 2200),
+                "description" to "Send",
+                "tag" to "send_button",
+                "role" to "Button",
+                "clickable" to true,
             ),
             send,
         )
@@ -241,8 +247,7 @@ class AppUiControllerTest {
     )
 
     @Suppress("UNCHECKED_CAST")
-    private fun parse(json: String): Map<String, Any?> =
-        Moshi.Builder().build().adapter(Map::class.java).fromJson(json) as Map<String, Any?>
+    private fun parse(json: String): Map<String, Any?> = Moshi.Builder().build().adapter(Map::class.java).fromJson(json) as Map<String, Any?>
 
     @Test
     @Suppress("UNCHECKED_CAST")

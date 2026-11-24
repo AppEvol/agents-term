@@ -75,8 +75,7 @@ class FakeAgentsTermDaemon(
     private val appStateRequestCounter = AtomicInteger(0)
 
     @Suppress("UNCHECKED_CAST")
-    private fun parseFrame(raw: String): Map<String, Any?> =
-        (HerdrMoshi.adapter(Any::class.java).fromJson(raw) as? Map<String, Any?>).orEmpty()
+    private fun parseFrame(raw: String): Map<String, Any?> = (HerdrMoshi.adapter(Any::class.java).fromJson(raw) as? Map<String, Any?>).orEmpty()
 
     /** `reporter.enabled` from the most recent app_hello frame, or null if none arrived yet. */
     @Suppress("UNCHECKED_CAST")
@@ -220,15 +219,13 @@ class FakeAgentsTermDaemon(
 
     private val server = MockWebServer().apply {
         dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse {
-                return try {
-                    val resp = handleRequest(request)
-                    recordedRequests.add("  -> ${resp.status}")
-                    resp
-                } catch (t: Throwable) {
-                    recordedRequests.add("  -> EXCEPTION: $t")
-                    throw t
-                }
+            override fun dispatch(request: RecordedRequest): MockResponse = try {
+                val resp = handleRequest(request)
+                recordedRequests.add("  -> ${resp.status}")
+                resp
+            } catch (t: Throwable) {
+                recordedRequests.add("  -> EXCEPTION: $t")
+                throw t
             }
         }
     }
@@ -241,9 +238,7 @@ class FakeAgentsTermDaemon(
         server.start(InetAddress.getByName(host), 0)
     }
 
-    fun pairingUri(scheme: String = "agentsterm"): String {
-        return "$scheme://connect?host=$host&port=$port&token=$token"
-    }
+    fun pairingUri(scheme: String = "agentsterm"): String = "$scheme://connect?host=$host&port=$port&token=$token"
 
     private fun handleRequest(request: RecordedRequest): MockResponse {
         val path = request.requestUrl?.encodedPath.orEmpty()
@@ -360,16 +355,21 @@ class FakeAgentsTermDaemon(
                     "POST" -> handleSendMessage(tabId, request.body.readUtf8())
                     else -> jsonResponse(405, """{"error":"Method not allowed"}""")
                 }
+
                 "queue" -> when (method) {
                     "DELETE" -> if (itemId.isNotEmpty()) {
                         handleRemoveQueuedMessage(tabId, itemId)
                     } else {
                         jsonResponse(404, """{"error":"Not found"}""")
                     }
+
                     else -> jsonResponse(405, """{"error":"Method not allowed"}""")
                 }
+
                 "interrupt" -> handleInterrupt(tabId, request.body.readUtf8())
+
                 "read" -> handleMarkRead(tabId)
+
                 else -> jsonResponse(404, """{"error":"Not found"}""")
             }
         }
@@ -419,7 +419,7 @@ class FakeAgentsTermDaemon(
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     activeSockets.remove(webSocket)
                 }
-            }
+            },
         )
     }
 
@@ -513,7 +513,6 @@ class FakeAgentsTermDaemon(
         val (workingTab, userMsg, assistantMsg, effectivePrompt) = startTurnInternal(
             tabId = tabId,
             promptText = req.text,
-            overridePermissionMode = req.overridePermissionMode,
         ) ?: return jsonResponse(404, """{"error":"Tab not found"}""")
 
         executor.submit {
@@ -539,7 +538,6 @@ class FakeAgentsTermDaemon(
     private fun startTurnInternal(
         tabId: String,
         promptText: String,
-        overridePermissionMode: String?,
     ): StartedTurn? {
         val now = System.currentTimeMillis()
         return synchronized(lock) {
@@ -728,7 +726,7 @@ class FakeAgentsTermDaemon(
                         action = "bash",
                         displayName = "Run Shell Command",
                         detail = "gradle test",
-                    )
+                    ),
                 ),
                 status = "complete",
                 updatedAt = System.currentTimeMillis(),
@@ -749,7 +747,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 thinkingDelta = thinkingText,
-            )
+            ),
         )
 
         val runningTool = ToolCallItem(
@@ -765,7 +763,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 toolCall = runningTool,
-            )
+            ),
         )
 
         val doneTool = runningTool.copy(
@@ -779,7 +777,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 toolCall = doneTool,
-            )
+            ),
         )
 
         val chunk1 = if (overridePermissionMode == "full-access") {
@@ -800,7 +798,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 textDelta = chunk1,
-            )
+            ),
         )
         broadcast(
             WsServerEnvelope(
@@ -808,7 +806,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 textDelta = chunk2,
-            )
+            ),
         )
 
         val completeMsg = assistantMsg.copy(
@@ -882,7 +880,7 @@ class FakeAgentsTermDaemon(
 
         if (combinedToRun != null) {
             val (combinedPrompt, overrideMode) = combinedToRun
-            val started = startTurnInternal(tabId, combinedPrompt, overrideMode)
+            val started = startTurnInternal(tabId, combinedPrompt)
             if (started != null) {
                 executor.submit {
                     emitTurnEvents(
@@ -948,13 +946,11 @@ class FakeAgentsTermDaemon(
         }
     }
 
-    private fun jsonResponse(code: Int, body: String): MockResponse {
-        return MockResponse()
-            .setResponseCode(code)
-            .addHeader("Content-Type", "application/json; charset=utf-8")
-            .addHeader("Connection", "close")
-            .setBody(body)
-    }
+    private fun jsonResponse(code: Int, body: String): MockResponse = MockResponse()
+        .setResponseCode(code)
+        .addHeader("Content-Type", "application/json; charset=utf-8")
+        .addHeader("Connection", "close")
+        .setBody(body)
 
     override fun close() {
         for (ws in activeSockets) {

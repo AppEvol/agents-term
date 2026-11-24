@@ -29,12 +29,12 @@ def parse_args(argv: List[str]) -> dict:
             i += 1
             port = _int_or(argv[i], -1)
         elif arg.startswith("--port="):
-            port = _int_or(arg[len("--port="):], -1)
+            port = _int_or(arg[len("--port=") :], -1)
         elif arg == "--host" and i + 1 < len(argv):
             i += 1
             host = argv[i]
         elif arg.startswith("--host="):
-            host = arg[len("--host="):]
+            host = arg[len("--host=") :]
         elif arg == "--no-auth":
             no_auth = True
         elif arg in ("-h", "--help"):

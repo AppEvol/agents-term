@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import app_state_cli as cli  # noqa: E402
+import app_state_cli as cli
 
 TOKEN = "tok_test"
 PNG_BYTES = b"\x89PNG\r\n\x1a\nfake"
@@ -69,17 +69,41 @@ class StubDaemon(BaseHTTPRequestHandler):
         elif command == "ui":
             StubDaemon.ui_calls += 1
             nodes = [
-                {"id": 4, "window": 0, "bounds": [900, 2100, 1060, 2300], "center": [980, 2200], "role": "Button",
-                 "description": "Send", "tag": "send_button", "clickable": True},
-                {"id": 3, "window": 1, "bounds": [0, 2100, 880, 2300], "center": [440, 2200], "text": "Message",
-                 "value": "dra\"ft", "tag": "composer_input", "editable": True, "focused": True, "enabled": False,
-                 "toggle": "on", "selected": False},
+                {
+                    "id": 4,
+                    "window": 0,
+                    "bounds": [900, 2100, 1060, 2300],
+                    "center": [980, 2200],
+                    "role": "Button",
+                    "description": "Send",
+                    "tag": "send_button",
+                    "clickable": True,
+                },
+                {
+                    "id": 3,
+                    "window": 1,
+                    "bounds": [0, 2100, 880, 2300],
+                    "center": [440, 2200],
+                    "text": "Message",
+                    "value": 'dra"ft',
+                    "tag": "composer_input",
+                    "editable": True,
+                    "focused": True,
+                    "enabled": False,
+                    "toggle": "on",
+                    "selected": False,
+                },
             ]
             wanted = body.get("args", {}).get("tag")
             if wanted:
                 nodes = [n for n in nodes if n["tag"] == wanted and StubDaemon.ui_calls >= StubDaemon.appears_after]
-            result = {"width": 1080, "height": 2400, "nodeCount": len(nodes), "nodes": nodes,
-                      "windows": [{"index": 0, "type": "activity"}, {"index": 1, "type": "popup"}]}
+            result = {
+                "width": 1080,
+                "height": 2400,
+                "nodeCount": len(nodes),
+                "nodes": nodes,
+                "windows": [{"index": 0, "type": "activity"}, {"index": 1, "type": "popup"}],
+            }
         elif command == "tap" and not StubDaemon.control:
             self._send(403, {"ok": False, "code": "control_disabled", "error": "remote control is off"})
             return
@@ -141,8 +165,9 @@ class CliTest(unittest.TestCase):
         self.assertEqual(StubDaemon.requests[-2]["timeoutMs"], 7000)
 
     def test_logs_builds_filter_args(self):
-        code, out, _ = self.run_cli("logs", "--limit", "5", "--category", "http", "--category", "ws",
-                                    "--since", "123", "--grep", "fail")
+        code, out, _ = self.run_cli(
+            "logs", "--limit", "5", "--category", "http", "--category", "ws", "--since", "123", "--grep", "fail"
+        )
         self.assertEqual(code, 0)
         self.assertEqual(
             json.loads(out)["result"]["echo"],
@@ -171,25 +196,35 @@ class CliTest(unittest.TestCase):
     def sent(self, *argv):
         """Runs a subcommand and returns (command, args) of the request(s) it made."""
         StubDaemon.requests = []
-        code, out, err = self.run_cli(*argv)
+        code, _out, err = self.run_cli(*argv)
         self.assertEqual(code, 0, err)
         return [(r["command"], r["args"]) for r in StubDaemon.requests]
 
     def test_control_commands_build_app_requests(self):
         self.assertEqual(self.sent("tap", "540", "1200"), [("tap", {"x": 540, "y": 1200})])
         self.assertEqual(self.sent("tap", "--tag", "send_button"), [("tap", {"tag": "send_button"})])
-        self.assertEqual(self.sent("tap", "--text", "Send", "--exact", "--index", "2"),
-                         [("tap", {"text": "Send", "exact": True, "index": 2})])
-        self.assertEqual(self.sent("long-press", "--tag", "msg", "--duration-ms", "1200"),
-                         [("long_press", {"tag": "msg", "durationMs": 1200})])
-        self.assertEqual(self.sent("swipe", "500", "1500", "500", "400", "--hold-ms", "100"),
-                         [("swipe", {"x1": 500, "y1": 1500, "x2": 500, "y2": 400, "durationMs": 300, "holdMs": 100})])
+        self.assertEqual(
+            self.sent("tap", "--text", "Send", "--exact", "--index", "2"),
+            [("tap", {"text": "Send", "exact": True, "index": 2})],
+        )
+        self.assertEqual(
+            self.sent("long-press", "--tag", "msg", "--duration-ms", "1200"),
+            [("long_press", {"tag": "msg", "durationMs": 1200})],
+        )
+        self.assertEqual(
+            self.sent("swipe", "500", "1500", "500", "400", "--hold-ms", "100"),
+            [("swipe", {"x1": 500, "y1": 1500, "x2": 500, "y2": 400, "durationMs": 300, "holdMs": 100})],
+        )
         self.assertEqual(self.sent("scroll"), [("scroll", {"direction": "down"})])
-        self.assertEqual(self.sent("scroll", "up", "--amount", "0.3", "--tag", "messages"),
-                         [("scroll", {"tag": "messages", "direction": "up", "amount": 0.3})])
+        self.assertEqual(
+            self.sent("scroll", "up", "--amount", "0.3", "--tag", "messages"),
+            [("scroll", {"tag": "messages", "direction": "up", "amount": 0.3})],
+        )
         self.assertEqual(self.sent("type", "hello world"), [("type", {"text": "hello world"})])
-        self.assertEqual(self.sent("type", "hi", "--tag", "composer_input", "--replace", "--submit"),
-                         [("type", {"text": "hi", "tag": "composer_input", "replace": True, "submit": True})])
+        self.assertEqual(
+            self.sent("type", "hi", "--tag", "composer_input", "--replace", "--submit"),
+            [("type", {"text": "hi", "tag": "composer_input", "replace": True, "submit": True})],
+        )
         self.assertEqual(self.sent("type", "22", "--field", "Port"), [("type", {"text": "22", "field": "Port"})])
         self.assertEqual(self.sent("key", "back"), [("key", {"key": "back"})])
 
@@ -213,18 +248,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual([r["command"] for r in StubDaemon.requests], ["tap", "screenshot"])
 
     def test_ui_json_filters_and_brief_listing(self):
-        self.assertEqual(self.sent("ui", "--text", "send", "--interactive"),
-                         [("ui", {"text": "send", "interactiveOnly": True})])
+        self.assertEqual(
+            self.sent("ui", "--text", "send", "--interactive"), [("ui", {"text": "send", "interactiveOnly": True})]
+        )
         code, out, _ = self.run_cli("ui")
         self.assertEqual(json.loads(out)["result"]["nodeCount"], 2)
         code, out, _ = self.run_cli("ui", "--brief")
         self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines(), [
-            "# 1080x2400 screenshot pixels; windows 0:activity, 1:popup; [x,y] is each element's center",
-            '[980,2200] Button description="Send" tag=send_button clickable',
-            '[440,2200] "Message" value="dra\\"ft" tag=composer_input toggle=on selected=false editable focused '
-            'disabled window=1',
-        ])
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "# 1080x2400 screenshot pixels; windows 0:activity, 1:popup; [x,y] is each element's center",
+                '[980,2200] Button description="Send" tag=send_button clickable',
+                '[440,2200] "Message" value="dra\\"ft" tag=composer_input toggle=on selected=false editable focused '
+                "disabled window=1",
+            ],
+        )
 
     def test_wait_polls_until_element_appears_or_times_out(self):
         StubDaemon.appears_after = 3
@@ -238,7 +277,9 @@ class CliTest(unittest.TestCase):
 
         code, _, err = self.run_cli("wait", "--tag", "missing", "--wait-timeout", "0.2", "--interval", "0.05")
         self.assertEqual((code, json.loads(err)["code"]), (cli.EXIT_APP, "wait_timeout"))
-        code, _, err = self.run_cli("wait", "--tag", "send_button", "--gone", "--wait-timeout", "0.1", "--interval", "0.05")
+        code, _, err = self.run_cli(
+            "wait", "--tag", "send_button", "--gone", "--wait-timeout", "0.1", "--interval", "0.05"
+        )
         self.assertEqual((code, json.loads(err)["code"]), (cli.EXIT_APP, "wait_timeout"))
         code, _, err = self.run_cli("wait")
         self.assertEqual(code, cli.EXIT_USAGE)
@@ -283,7 +324,7 @@ class CliTest(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), self.assertRaises(KeyboardInterrupt):
             cli.cmd_logs(FakeClient(), args)
-        self.assertEqual([json.loads(l)["event"] for l in out.getvalue().splitlines()], ["a", "b", "c", "d"])
+        self.assertEqual([json.loads(line)["event"] for line in out.getvalue().splitlines()], ["a", "b", "c", "d"])
         self.assertEqual(sent_since, [None, 20, 30, 30])
 
     def test_raw_rejects_non_object_args(self):

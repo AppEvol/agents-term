@@ -106,14 +106,12 @@ class AgentsTermE2ETest {
     private fun startDaemon(
         initialTabs: List<TabRecord> = emptyList(),
         initialMessages: Map<String, List<ChatMessage>> = emptyMap(),
-    ): FakeAgentsTermDaemon {
-        return FakeAgentsTermDaemon(
-            initialTabs = initialTabs,
-            initialMessages = initialMessages,
-        ).also {
-            it.start()
-            daemon = it
-        }
+    ): FakeAgentsTermDaemon = FakeAgentsTermDaemon(
+        initialTabs = initialTabs,
+        initialMessages = initialMessages,
+    ).also {
+        it.start()
+        daemon = it
     }
 
     private fun launchMainActivity(intent: Intent? = null) {
@@ -329,7 +327,7 @@ class AgentsTermE2ETest {
             } else {
                 // Fallback by content description if counter shifts
                 composeRule.onAllNodes(
-                    androidx.compose.ui.test.hasContentDescription("Remove queued message")
+                    androidx.compose.ui.test.hasContentDescription("Remove queued message"),
                 )[1].performClick()
             }
         }
@@ -637,7 +635,7 @@ class AgentsTermE2ETest {
         assertEquals("on", nodes("""{"tag":"debug_remote_control_switch"}""").single()["toggle"])
         assertTrue(
             (activeDaemon.latestAppHello()!!["commands"] as List<String>)
-                .containsAll(listOf("ui", "tap", "long_press", "swipe", "scroll", "type", "key"))
+                .containsAll(listOf("ui", "tap", "long_press", "swipe", "scroll", "type", "key")),
         )
 
         // Scroll the settings list back up, by dragging it.

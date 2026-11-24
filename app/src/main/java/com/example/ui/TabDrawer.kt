@@ -125,7 +125,7 @@ fun TabSidebarBody(
                     modifier = Modifier
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(connColor)
+                        .background(connColor),
                 )
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {

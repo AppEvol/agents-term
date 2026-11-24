@@ -17,8 +17,7 @@ import kotlin.math.roundToInt
 const val SCREENSHOT_MAX_WIDTH = 1080
 
 /** Factor from window pixels to screenshot pixels for a window [windowWidth] pixels wide. */
-fun screenshotScale(windowWidth: Int): Float =
-    if (windowWidth > SCREENSHOT_MAX_WIDTH) SCREENSHOT_MAX_WIDTH.toFloat() / windowWidth else 1f
+fun screenshotScale(windowWidth: Int): Float = if (windowWidth > SCREENSHOT_MAX_WIDTH) SCREENSHOT_MAX_WIDTH.toFloat() / windowWidth else 1f
 
 /** One of the app's windows (the Activity, a dialog/bottom sheet, or a popup menu), bottom-most first. */
 data class UiWindow(
@@ -134,12 +133,12 @@ data class UiSelector(
         if (matches.isEmpty()) {
             throw AppStateCommandException(
                 "No on-screen element matches ${describe()}. Run 'ui' to list what is on screen; " +
-                    "elements scrolled out of view are not listed (use 'scroll')."
+                    "elements scrolled out of view are not listed (use 'scroll').",
             )
         }
         val i = index ?: 0
         return matches.getOrNull(i) ?: throw AppStateCommandException(
-            "Only ${matches.size} element(s) match ${describe()}; index must be below ${matches.size}."
+            "Only ${matches.size} element(s) match ${describe()}; index must be below ${matches.size}.",
         )
     }
 
@@ -192,16 +191,23 @@ class AppUiController(
         if (command in CONTROL_COMMANDS) onControl(command)
         return when (command) {
             "ui" -> ui(args)
+
             "tap" -> press(args, durationMs = TAP_MS, action = "tap")
+
             "long_press" -> press(
                 args,
                 durationMs = args.longArg("durationMs", DEFAULT_LONG_PRESS_MS).coerceIn(300L, 5_000L),
                 action = "long_press",
             )
+
             "swipe" -> swipe(args)
+
             "scroll" -> scroll(args)
+
             "type" -> type(args)
+
             "key" -> key(args)
+
             else -> throw AppStateCommandException("Unknown UI command '$command'.")
         }
     }
@@ -317,7 +323,7 @@ class AppUiController(
         val text = args["text"] as? String ?: throw AppStateCommandException("type needs 'text': the text to enter.")
         val snap = driver.snapshot()
         val selector = UiSelector.fromArgs(
-            mapOf("tag" to args["tag"], "text" to args["field"], "exact" to args["exact"], "index" to args["index"])
+            mapOf("tag" to args["tag"], "text" to args["field"], "exact" to args["exact"], "index" to args["index"]),
         )
         val node = if (selector != null) {
             selector.find(snap)
@@ -325,7 +331,7 @@ class AppUiController(
             snap.nodes.firstOrNull { it.editable && it.focused }
                 ?: snap.nodes.filter { it.editable }.singleOrNull()
                 ?: throw AppStateCommandException(
-                    "No text field has focus. Tap one first, or name it with tag or field."
+                    "No text field has focus. Tap one first, or name it with tag or field.",
                 )
         }
         if (!node.editable) {
@@ -345,33 +351,32 @@ class AppUiController(
         )
     }
 
-    private suspend fun key(args: Map<String, Any?>): Map<String, Any?> {
-        return when (val key = (args["key"] as? String)?.lowercase()) {
-            "back" -> mapOf("action" to "key", "key" to "back", "outcome" to driver.pressBack().name.lowercase())
-            "enter" -> {
-                val snap = driver.snapshot()
-                val node = snap.nodes.firstOrNull { it.editable && it.focused }
-                    ?: throw AppStateCommandException("No text field has focus; 'enter' runs the focused field's keyboard action.")
-                driver.imeAction(node.id)
-                mapOf("action" to "key", "key" to "enter", "node" to node.toMap())
-            }
-            else -> throw AppStateCommandException("Unknown key '${key ?: ""}'. Supported: ${KEYS.joinToString(", ")}.")
+    private suspend fun key(args: Map<String, Any?>): Map<String, Any?> = when (val key = (args["key"] as? String)?.lowercase()) {
+        "back" -> mapOf("action" to "key", "key" to "back", "outcome" to driver.pressBack().name.lowercase())
+
+        "enter" -> {
+            val snap = driver.snapshot()
+            val node = snap.nodes.firstOrNull { it.editable && it.focused }
+                ?: throw AppStateCommandException("No text field has focus; 'enter' runs the focused field's keyboard action.")
+            driver.imeAction(node.id)
+            mapOf("action" to "key", "key" to "enter", "node" to node.toMap())
         }
+
+        else -> throw AppStateCommandException("Unknown key '${key ?: ""}'. Supported: ${KEYS.joinToString(", ")}.")
     }
 
     private fun requireOnScreen(snap: UiSnapshot, x: Int, y: Int) {
         if (x < 0 || y < 0 || x >= snap.width || y >= snap.height) {
             throw AppStateCommandException(
                 "($x, $y) is outside the app window. Coordinates are screenshot pixels: " +
-                    "0..${snap.width - 1} by 0..${snap.height - 1}."
+                    "0..${snap.width - 1} by 0..${snap.height - 1}.",
             )
         }
     }
 
     private fun Map<String, Any?>.intArgOrNull(name: String): Int? = (this[name] as? Number)?.toDouble()?.roundToInt()
 
-    private fun Map<String, Any?>.longArg(name: String, default: Long): Long =
-        (this[name] as? Number)?.toLong() ?: default
+    private fun Map<String, Any?>.longArg(name: String, default: Long): Long = (this[name] as? Number)?.toLong() ?: default
 
     companion object {
         /** Read-only; allowed with remote inspection alone. */

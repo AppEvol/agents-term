@@ -71,6 +71,7 @@ class AndroidUiDriver(
         val decorView: View = activity.window.decorView
         val origin = IntArray(2).also { decorView.getLocationOnScreen(it) }
         val scale = screenshotScale(decorView.width)
+
         // Same arithmetic as the screenshot's downscaling, so both agree to the pixel.
         val width = minOf(decorView.width, SCREENSHOT_MAX_WIDTH)
         val height = if (decorView.width > SCREENSHOT_MAX_WIDTH) {
@@ -103,8 +104,10 @@ class AndroidUiDriver(
                 index = index,
                 type = when {
                     index == 0 -> "activity"
+
                     type != null && type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW &&
                         type <= WindowManager.LayoutParams.LAST_SUB_WINDOW -> "popup"
+
                     else -> "dialog"
                 },
                 left = toShotX(loc[0].toFloat()),
@@ -208,70 +211,72 @@ class AndroidUiDriver(
         )
     }
 
-    private fun String?.clean(): String? =
-        this?.takeIf { it.isNotBlank() }?.let { sanitizeDebugText(it).take(MAX_TEXT_CHARS) }
+    private fun String?.clean(): String? = this?.takeIf { it.isNotBlank() }?.let { sanitizeDebugText(it).take(MAX_TEXT_CHARS) }
 
-    override suspend fun stroke(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, holdMs: Long): UiWindow =
-        withContext(uiContext) {
-            val screen = screen()
-            val startX = screen.toScreenX(x1.toFloat())
-            val startY = screen.toScreenY(y1.toFloat())
-            val endX = screen.toScreenX(x2.toFloat())
-            val endY = screen.toScreenY(y2.toFloat())
+    override suspend fun stroke(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, holdMs: Long): UiWindow = withContext(uiContext) {
+        val screen = screen()
+        val startX = screen.toScreenX(x1.toFloat())
+        val startY = screen.toScreenY(y1.toFloat())
+        val endX = screen.toScreenX(x2.toFloat())
+        val endY = screen.toScreenY(y2.toFloat())
 
-            // Like the system: the top-most window under the finger gets the stroke, except that a
-            // modal window in front takes it even when the finger is outside (that is how tapping
-            // next to a dialog or menu dismisses it).
-            var target = 0
-            val outsideWatchers = mutableListOf<View>()
-            for (index in screen.roots.indices.reversed()) {
-                val root = screen.roots[index]
-                val flags = screen.flags(root)
-                if (flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0) continue
-                if (index == 0 || screen.contains(root, startX, startY) || screen.isModal(index)) {
-                    target = index
-                    break
-                }
-                if (flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH != 0) outsideWatchers += root
+        // Like the system: the top-most window under the finger gets the stroke, except that a
+        // modal window in front takes it even when the finger is outside (that is how tapping
+        // next to a dialog or menu dismisses it).
+        var target = 0
+        val outsideWatchers = mutableListOf<View>()
+        for (index in screen.roots.indices.reversed()) {
+            val root = screen.roots[index]
+            val flags = screen.flags(root)
+            if (flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0) continue
+            if (index == 0 || screen.contains(root, startX, startY) || screen.isModal(index)) {
+                target = index
+                break
             }
-            val root = screen.roots[target]
-            val window = screen.window(target)
-
-            val downTime = SystemClock.uptimeMillis()
-            for (watcher in outsideWatchers) {
-                send(watcher, downTime, downTime, MotionEvent.ACTION_OUTSIDE, startX, startY)
-            }
-            send(root, downTime, downTime, MotionEvent.ACTION_DOWN, startX, startY)
-            try {
-                val moves = startX != endX || startY != endY
-                if (moves) {
-                    val steps = (durationMs / FRAME_MS).toInt().coerceAtLeast(2)
-                    for (step in 1..steps) {
-                        delay(FRAME_MS)
-                        val f = step.toFloat() / steps
-                        send(
-                            root, downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_MOVE,
-                            startX + (endX - startX) * f, startY + (endY - startY) * f,
-                        )
-                    }
-                    // Resting on the end point brings the finger's velocity to zero: no fling.
-                    var held = 0L
-                    while (held < holdMs) {
-                        delay(FRAME_MS)
-                        held += FRAME_MS
-                        send(root, downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_MOVE, endX, endY)
-                    }
-                } else {
-                    delay(durationMs)
-                }
-                send(root, downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, endX, endY)
-            } catch (e: Throwable) {
-                // Never leave a finger down.
-                send(root, downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL, endX, endY)
-                throw e
-            }
-            window
+            if (flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH != 0) outsideWatchers += root
         }
+        val root = screen.roots[target]
+        val window = screen.window(target)
+
+        val downTime = SystemClock.uptimeMillis()
+        for (watcher in outsideWatchers) {
+            send(watcher, downTime, downTime, MotionEvent.ACTION_OUTSIDE, startX, startY)
+        }
+        send(root, downTime, downTime, MotionEvent.ACTION_DOWN, startX, startY)
+        try {
+            val moves = startX != endX || startY != endY
+            if (moves) {
+                val steps = (durationMs / FRAME_MS).toInt().coerceAtLeast(2)
+                for (step in 1..steps) {
+                    delay(FRAME_MS)
+                    val f = step.toFloat() / steps
+                    send(
+                        root,
+                        downTime,
+                        SystemClock.uptimeMillis(),
+                        MotionEvent.ACTION_MOVE,
+                        startX + (endX - startX) * f,
+                        startY + (endY - startY) * f,
+                    )
+                }
+                // Resting on the end point brings the finger's velocity to zero: no fling.
+                var held = 0L
+                while (held < holdMs) {
+                    delay(FRAME_MS)
+                    held += FRAME_MS
+                    send(root, downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_MOVE, endX, endY)
+                }
+            } else {
+                delay(durationMs)
+            }
+            send(root, downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, endX, endY)
+        } catch (e: Throwable) {
+            // Never leave a finger down.
+            send(root, downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL, endX, endY)
+            throw e
+        }
+        window
+    }
 
     /** Dispatches one touch event at screen position ([screenX], [screenY]) to the window of [root]. */
     private fun send(root: View, downTime: Long, eventTime: Long, action: Int, screenX: Float, screenY: Float) {
@@ -280,7 +285,7 @@ class AndroidUiDriver(
             MotionEvent.PointerProperties().apply {
                 id = 0
                 toolType = MotionEvent.TOOL_TYPE_FINGER
-            }
+            },
         )
         val coords = arrayOf(
             MotionEvent.PointerCoords().apply {
@@ -288,7 +293,7 @@ class AndroidUiDriver(
                 y = screenY
                 pressure = 1f
                 size = 1f
-            }
+            },
         )
         val event = MotionEvent.obtain(
             downTime, eventTime, action, 1, properties, coords,
@@ -322,10 +327,12 @@ class AndroidUiDriver(
         val set = config.getOrNull(SemanticsActions.SetText)?.action
         val done = when {
             !replace && insert != null -> insert(AnnotatedString(text))
+
             set != null -> {
                 val existing = if (replace) "" else config.getOrNull(SemanticsProperties.EditableText)?.text.orEmpty()
                 set(AnnotatedString(existing + text))
             }
+
             else -> throw AppStateCommandException("That element is not a text field.")
         }
         if (!done) throw AppStateCommandException("The text field did not accept the text (is it read-only or disabled?).")

@@ -20,10 +20,21 @@ MAX_WS_MESSAGE_BYTES = 100 * 1024 * 1024  # same default as the `ws` npm package
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 REASONS = {
-    101: "Switching Protocols", 200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
-    404: "Not Found", 405: "Method Not Allowed", 409: "Conflict", 411: "Length Required",
-    413: "Payload Too Large", 500: "Internal Server Error", 501: "Not Implemented", 502: "Bad Gateway",
-    503: "Service Unavailable", 504: "Gateway Timeout",
+    101: "Switching Protocols",
+    200: "OK",
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    409: "Conflict",
+    411: "Length Required",
+    413: "Payload Too Large",
+    500: "Internal Server Error",
+    501: "Not Implemented",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout",
 }
 
 
@@ -38,8 +49,9 @@ class BodyTooLarge(Exception):
 
 
 class Request:
-    def __init__(self, method: str, target: str, version: str, headers: Dict[str, str],
-                 reader: asyncio.StreamReader) -> None:
+    def __init__(
+        self, method: str, target: str, version: str, headers: Dict[str, str], reader: asyncio.StreamReader
+    ) -> None:
         self.method = method.upper()
         self.target = target
         self.version = version
@@ -119,7 +131,7 @@ class Response:
         self.content_type = content_type
 
     @classmethod
-    def json(cls, status: int, payload: Any) -> "Response":
+    def json(cls, status: int, payload: Any) -> Response:
         return cls(status, json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
@@ -200,8 +212,14 @@ class WebSocketClosed(Exception):
 class WebSocket:
     """Server- or client-side WebSocket over asyncio streams (client side masks its frames)."""
 
-    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, client: bool = False,
-                 max_message: int = MAX_WS_MESSAGE_BYTES) -> None:
+    def __init__(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        *,
+        client: bool = False,
+        max_message: int = MAX_WS_MESSAGE_BYTES,
+    ) -> None:
         self.reader = reader
         self.writer = writer
         self.client = client
@@ -360,8 +378,14 @@ async def connect_websocket(host: str, port: int, path: str, headers: Optional[D
     """Client-side helper (used by tests and tools)."""
     reader, writer = await asyncio.open_connection(host, port, limit=MAX_HEADER_BYTES)
     key = base64.b64encode(os.urandom(16)).decode("ascii")
-    lines = [f"GET {path} HTTP/1.1", f"Host: {host}:{port}", "Upgrade: websocket", "Connection: Upgrade",
-             f"Sec-WebSocket-Key: {key}", "Sec-WebSocket-Version: 13"]
+    lines = [
+        f"GET {path} HTTP/1.1",
+        f"Host: {host}:{port}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        f"Sec-WebSocket-Key: {key}",
+        "Sec-WebSocket-Version: 13",
+    ]
     lines += [f"{k}: {v}" for k, v in (headers or {}).items()]
     writer.write(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
     head = await reader.readuntil(b"\r\n\r\n")
@@ -379,8 +403,9 @@ Handler = Callable[[Request], Awaitable[Response]]
 UpgradeHandler = Callable[[Request, asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
 
 
-async def serve_connection(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, handler: Handler,
-                           upgrade_handler: UpgradeHandler) -> None:
+async def serve_connection(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, handler: Handler, upgrade_handler: UpgradeHandler
+) -> None:
     """Serves requests on one connection until it closes or is upgraded to a WebSocket."""
     try:
         while True:

@@ -62,7 +62,7 @@ class ModelsAndStateTest {
     @Test
     fun parsePairingUriExtractsHostPortAndToken() {
         val cfg = ConnectionConfig.parsePairingUri(
-            "herdr://connect?host=100.71.219.26&port=7501&token=abc_123"
+            "herdr://connect?host=100.71.219.26&port=7501&token=abc_123",
         )
         assertNotNull(cfg)
         assertEquals("100.71.219.26", cfg!!.host)
@@ -189,7 +189,7 @@ class ModelsAndStateTest {
         val rawOutput = """
             >>> Invoking Antigravity (agy --dangerously-skip-permissions) on dev-vm...
             Setup complete! Connect using:
-            ${esc}[32m`herdr://connect?host=100.88.12.4&port=7501&token=tok_xyz99`.${esc}[0m
+            $esc[32m`herdr://connect?host=100.88.12.4&port=7501&token=tok_xyz99`.$esc[0m
         """.trimIndent()
 
         val extracted = extractPairingUriFromOutput(rawOutput)
@@ -263,33 +263,33 @@ class ModelsAndStateTest {
         assertNull(parseAgyStreamJsonLine(">>> plain shell output"))
 
         val initEvent = parseAgyStreamJsonLine(
-            """{"event":"init","conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","init":{"cwd":"/home/ned"}}"""
+            """{"event":"init","conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","init":{"cwd":"/home/ned"}}""",
         )
         assertNotNull(initEvent)
         assertEquals("9fedea5e-6c97-4678-b333-f40fa796d7ed", initEvent!!.conversationId)
         assertTrue(initEvent.displayLines.single().contains("9fedea5e"))
 
         val activeTool = parseAgyStreamJsonLine(
-            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"npm run build","toolSummary":"Build server"}}}}"""
+            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"npm run build","toolSummary":"Build server"}}}}""",
         )
         assertNotNull(activeTool)
         assertEquals("[tool] run_command: Build server", activeTool!!.displayLines.single())
 
         val doneTool = parseAgyStreamJsonLine(
-            """{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":1.25,"tool_info":{"output":"herdr://connect?host=100.71.219.26&port=7501&token=abc"}}}"""
+            """{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":1.25,"tool_info":{"output":"herdr://connect?host=100.71.219.26&port=7501&token=abc"}}}""",
         )
         assertNotNull(doneTool)
         assertEquals("[tool done] run_command (1.3s)", doneTool!!.displayLines.single())
         assertNotNull(extractPairingUriFromOutput(doneTool.pairingSourceText!!))
 
         val delta = parseAgyStreamJsonLine(
-            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"Setup done\n"}}"""
+            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"Setup done\n"}}""",
         )
         assertNotNull(delta)
         assertEquals("Setup done\n", delta!!.textDelta)
 
         val result = parseAgyStreamJsonLine(
-            """{"event":"result","result":{"conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","status":"SUCCESS","response":"herdr://connect?host=100.71.219.26&port=7501&token=tok123\n","duration_seconds":5.3,"num_turns":2}}"""
+            """{"event":"result","result":{"conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","status":"SUCCESS","response":"herdr://connect?host=100.71.219.26&port=7501&token=tok123\n","duration_seconds":5.3,"num_turns":2}}""",
         )
         assertNotNull(result)
         assertTrue(result!!.isResult)
@@ -301,16 +301,16 @@ class ModelsAndStateTest {
     @Test
     fun sshBootstrapConfigValidatesHostAndUsername() {
         assertTrue(
-            SshBootstrapConfig(host = "100.71.219.26", username = "ned").isValid
+            SshBootstrapConfig(host = "100.71.219.26", username = "ned").isValid,
         )
         assertTrue(
-            SshBootstrapConfig(host = "dev-vm.tail1234.ts.net", username = "ubuntu").isValid
+            SshBootstrapConfig(host = "dev-vm.tail1234.ts.net", username = "ubuntu").isValid,
         )
         assertFalse(
-            SshBootstrapConfig(host = "100.71.219.26; rm -rf /", username = "ned").isValid
+            SshBootstrapConfig(host = "100.71.219.26; rm -rf /", username = "ned").isValid,
         )
         assertFalse(
-            SshBootstrapConfig(host = "100.71.219.26", username = "ned && id").isValid
+            SshBootstrapConfig(host = "100.71.219.26", username = "ned && id").isValid,
         )
     }
 
@@ -348,7 +348,7 @@ class ModelsAndStateTest {
         val state = WorkspaceState(
             config = ConnectionConfig(host = "100.71.219.26", port = 7501, token = "my_private_bearer_token"),
             tabs = listOf(
-                TabRecord(id = "t1", title = "Agy", agent = "agy", cwd = "/home/ned/app", status = "working")
+                TabRecord(id = "t1", title = "Agy", agent = "agy", cwd = "/home/ned/app", status = "working"),
             ),
             selectedTabId = "t1",
         )
@@ -372,7 +372,7 @@ class ModelsAndStateTest {
         assertEquals("agy agent mode glitched", decoded.note)
 
         val resp = decodeHerdrJson<DebugDumpUploadResponse>(
-            """{"ok":true,"dumpId":"abcd1234","remoteDir":"/home/ned/.config/herdr-mobile/debug-dumps/latest","latestSymlink":"/home/ned/.config/herdr-mobile/debug-dumps/latest","files":["summary.md","events.ndjson"]}"""
+            """{"ok":true,"dumpId":"abcd1234","remoteDir":"/home/ned/.config/herdr-mobile/debug-dumps/latest","latestSymlink":"/home/ned/.config/herdr-mobile/debug-dumps/latest","files":["summary.md","events.ndjson"]}""",
         )
         assertTrue(resp.ok)
         assertEquals("abcd1234", resp.dumpId)
@@ -402,7 +402,7 @@ class ModelsAndStateTest {
         assertEquals(SshAuthMethod.PRIVATE_KEY, parsed.authMethod)
 
         val herdrUri = parseSshSetupUri(
-            "herdr://ssh?host=ned-vm&username=ubuntu&port=2200&daemonPort=7505&authMethod=password"
+            "herdr://ssh?host=ned-vm&username=ubuntu&port=2200&daemonPort=7505&authMethod=password",
         )
         assertNotNull(herdrUri)
         assertEquals("ned-vm", herdrUri!!.host)
@@ -561,11 +561,11 @@ class ModelsAndStateTest {
         assertEquals("/home/ned/projects", normalizeFsPath(" /home/ned/projects/ "))
 
         val legacyFs = decodeHerdrJson<FsListResponse>(
-            """{"path":"/home/ned","parent":"/home","directories":[]}"""
+            """{"path":"/home/ned","parent":"/home","directories":[]}""",
         )
         assertNull(legacyFs.exists)
         val explicitFs = decodeHerdrJson<FsListResponse>(
-            """{"path":"/home/ned/gone","parent":"/home/ned","directories":[],"exists":false}"""
+            """{"path":"/home/ned/gone","parent":"/home/ned","directories":[],"exists":false}""",
         )
         assertEquals(false, explicitFs.exists)
     }
@@ -732,11 +732,11 @@ class ModelsAndStateTest {
 
         // JSON backward compatibility: decodes with and without segments
         val withoutSegments = decodeHerdrJson<ChatMessage>(
-            """{"id":"m1","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[]}"""
+            """{"id":"m1","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[]}""",
         )
         assertTrue(withoutSegments.segments.isEmpty())
         val withSegments = decodeHerdrJson<ChatMessage>(
-            """{"id":"m2","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[],"segments":[{"type":"text","text":"Hi"}]}"""
+            """{"id":"m2","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[],"segments":[{"type":"text","text":"Hi"}]}""",
         )
         assertEquals(listOf(MessageSegment(type = "text", text = "Hi")), withSegments.segments)
     }
@@ -793,7 +793,7 @@ class ModelsAndStateTest {
                 }
               ]
             }
-            """.trimIndent()
+            """.trimIndent(),
         )
         assertEquals("From daemon", snapshotWithPrompt.server?.defaultSystemPrompt)
         assertEquals("From daemon full access", snapshotWithPrompt.server?.defaultSystemPromptFullAccess)
@@ -812,7 +812,7 @@ class ModelsAndStateTest {
     fun queuedMessagesSerializationAndWorkspaceReductionRemainBackwardCompatible() {
         // Legacy tab JSON without queuedMessages decodes with an empty queue
         val legacyTab = decodeHerdrJson<TabRecord>(
-            """{"id":"tab_legacy","title":"Agy","agent":"agy","cwd":"/home/ned","status":"working"}"""
+            """{"id":"tab_legacy","title":"Agy","agent":"agy","cwd":"/home/ned","status":"working"}""",
         )
         assertTrue(legacyTab.queuedMessages.isEmpty())
 
@@ -831,7 +831,7 @@ class ModelsAndStateTest {
                 "queuedMessages": [{"id": "q_1", "text": "Follow up", "createdAt": 1700000001000}]
               }
             }
-            """.trimIndent()
+            """.trimIndent(),
         )
         assertTrue(queuedResp.queued)
         assertNull(queuedResp.userMessage)
