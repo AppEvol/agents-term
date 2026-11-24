@@ -22,6 +22,9 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\nfake"
 class StubDaemon(BaseHTTPRequestHandler):
     # Mutated by tests.
     ready = True
+    control = True
+    ui_calls = 0
+    appears_after = 0
     requests = []
 
     def log_message(self, *args):
@@ -63,6 +66,47 @@ class StubDaemon(BaseHTTPRequestHandler):
         command = body["command"]
         if command == "screenshot":
             result = {"capturedAt": 1, "pngBase64": base64.b64encode(PNG_BYTES).decode()}
+        elif command == "ui":
+            StubDaemon.ui_calls += 1
+            nodes = [
+                {
+                    "id": 4,
+                    "window": 0,
+                    "bounds": [900, 2100, 1060, 2300],
+                    "center": [980, 2200],
+                    "role": "Button",
+                    "description": "Send",
+                    "tag": "send_button",
+                    "clickable": True,
+                },
+                {
+                    "id": 3,
+                    "window": 1,
+                    "bounds": [0, 2100, 880, 2300],
+                    "center": [440, 2200],
+                    "text": "Message",
+                    "value": 'dra"ft',
+                    "tag": "composer_input",
+                    "editable": True,
+                    "focused": True,
+                    "enabled": False,
+                    "toggle": "on",
+                    "selected": False,
+                },
+            ]
+            wanted = body.get("args", {}).get("tag")
+            if wanted:
+                nodes = [n for n in nodes if n["tag"] == wanted and StubDaemon.ui_calls >= StubDaemon.appears_after]
+            result = {
+                "width": 1080,
+                "height": 2400,
+                "nodeCount": len(nodes),
+                "nodes": nodes,
+                "windows": [{"index": 0, "type": "activity"}, {"index": 1, "type": "popup"}],
+            }
+        elif command == "tap" and not StubDaemon.control:
+            self._send(403, {"ok": False, "code": "control_disabled", "error": "remote control is off"})
+            return
         elif command == "fail":
             self._send(502, {"ok": False, "code": "app_error", "error": "boom"})
             return
@@ -85,6 +129,9 @@ class CliTest(unittest.TestCase):
 
     def setUp(self):
         StubDaemon.ready = True
+        StubDaemon.control = True
+        StubDaemon.ui_calls = 0
+        StubDaemon.appears_after = 0
         StubDaemon.requests = []
         self.tmp = tempfile.TemporaryDirectory()
         self.config = Path(self.tmp.name) / "config.json"
@@ -145,6 +192,97 @@ class CliTest(unittest.TestCase):
         code, _, err = self.run_cli("state")
         self.assertEqual(code, cli.EXIT_NOT_READY)
         self.assertEqual(json.loads(err)["code"], "inspection_disabled")
+
+    def sent(self, *argv):
+        """Runs a subcommand and returns (command, args) of the request(s) it made."""
+        StubDaemon.requests = []
+        code, _out, err = self.run_cli(*argv)
+        self.assertEqual(code, 0, err)
+        return [(r["command"], r["args"]) for r in StubDaemon.requests]
+
+    def test_control_commands_build_app_requests(self):
+        self.assertEqual(self.sent("tap", "540", "1200"), [("tap", {"x": 540, "y": 1200})])
+        self.assertEqual(self.sent("tap", "--tag", "send_button"), [("tap", {"tag": "send_button"})])
+        self.assertEqual(
+            self.sent("tap", "--text", "Send", "--exact", "--index", "2"),
+            [("tap", {"text": "Send", "exact": True, "index": 2})],
+        )
+        self.assertEqual(
+            self.sent("long-press", "--tag", "msg", "--duration-ms", "1200"),
+            [("long_press", {"tag": "msg", "durationMs": 1200})],
+        )
+        self.assertEqual(
+            self.sent("swipe", "500", "1500", "500", "400", "--hold-ms", "100"),
+            [("swipe", {"x1": 500, "y1": 1500, "x2": 500, "y2": 400, "durationMs": 300, "holdMs": 100})],
+        )
+        self.assertEqual(self.sent("scroll"), [("scroll", {"direction": "down"})])
+        self.assertEqual(
+            self.sent("scroll", "up", "--amount", "0.3", "--tag", "messages"),
+            [("scroll", {"tag": "messages", "direction": "up", "amount": 0.3})],
+        )
+        self.assertEqual(self.sent("type", "hello world"), [("type", {"text": "hello world"})])
+        self.assertEqual(
+            self.sent("type", "hi", "--tag", "composer_input", "--replace", "--submit"),
+            [("type", {"text": "hi", "tag": "composer_input", "replace": True, "submit": True})],
+        )
+        self.assertEqual(self.sent("type", "22", "--field", "Port"), [("type", {"text": "22", "field": "Port"})])
+        self.assertEqual(self.sent("key", "back"), [("key", {"key": "back"})])
+
+    def test_tap_needs_exactly_one_kind_of_target(self):
+        for argv in (("tap",), ("tap", "5"), ("tap", "5", "6", "--tag", "x")):
+            code, _, err = self.run_cli(*argv)
+            self.assertEqual((code, json.loads(err)["code"]), (cli.EXIT_USAGE, "bad_args"), argv)
+        self.assertEqual(StubDaemon.requests, [])
+
+    def test_control_disabled_is_not_ready(self):
+        StubDaemon.control = False
+        code, _, err = self.run_cli("tap", "1", "2")
+        self.assertEqual((code, json.loads(err)["code"]), (cli.EXIT_NOT_READY, "control_disabled"))
+
+    def test_action_can_capture_a_screenshot_afterwards(self):
+        target = Path(self.tmp.name) / "after-tap.png"
+        code, out, err = self.run_cli("tap", "--tag", "send_button", "--screenshot", str(target), "--settle", "0")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(target.read_bytes(), PNG_BYTES)
+        self.assertEqual(json.loads(out)["screenshot"], str(target.resolve()))
+        self.assertEqual([r["command"] for r in StubDaemon.requests], ["tap", "screenshot"])
+
+    def test_ui_json_filters_and_brief_listing(self):
+        self.assertEqual(
+            self.sent("ui", "--text", "send", "--interactive"), [("ui", {"text": "send", "interactiveOnly": True})]
+        )
+        code, out, _ = self.run_cli("ui")
+        self.assertEqual(json.loads(out)["result"]["nodeCount"], 2)
+        code, out, _ = self.run_cli("ui", "--brief")
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "# 1080x2400 screenshot pixels; windows 0:activity, 1:popup; [x,y] is each element's center",
+                '[980,2200] Button description="Send" tag=send_button clickable',
+                '[440,2200] "Message" value="dra\\"ft" tag=composer_input toggle=on selected=false editable focused '
+                "disabled window=1",
+            ],
+        )
+
+    def test_wait_polls_until_element_appears_or_times_out(self):
+        StubDaemon.appears_after = 3
+        code, out, err = self.run_cli("wait", "--tag", "send_button", "--interval", "0.05")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["nodes"][0]["tag"], "send_button")
+        self.assertEqual(StubDaemon.ui_calls, 3)
+
+        code, out, _ = self.run_cli("wait", "--tag", "missing", "--gone")
+        self.assertEqual((code, json.loads(out)["gone"]), (0, True))
+
+        code, _, err = self.run_cli("wait", "--tag", "missing", "--wait-timeout", "0.2", "--interval", "0.05")
+        self.assertEqual((code, json.loads(err)["code"]), (cli.EXIT_APP, "wait_timeout"))
+        code, _, err = self.run_cli(
+            "wait", "--tag", "send_button", "--gone", "--wait-timeout", "0.1", "--interval", "0.05"
+        )
+        self.assertEqual((code, json.loads(err)["code"]), (cli.EXIT_APP, "wait_timeout"))
+        code, _, err = self.run_cli("wait")
+        self.assertEqual(code, cli.EXIT_USAGE)
 
     def test_bad_token_and_unreachable_daemon(self):
         code, _, err = self.run_cli("--token", "wrong", "ping")

@@ -2,10 +2,14 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
+    <ID>ComplexCondition:AndroidUiDriver.kt$AndroidUiDriver$text == null &amp;&amp; value == null &amp;&amp; description == null &amp;&amp; tag == null &amp;&amp; !clickable &amp;&amp; !longClickable &amp;&amp; !scrollable &amp;&amp; !editable</ID>
+    <ID>ComplexCondition:AppUiControl.kt$AppUiController$x &lt; 0 || y &lt; 0 || x &gt;= snap.width || y &gt;= snap.height</ID>
     <ID>ComplexCondition:ChatScreen.kt$(onOpenModelPicker != null &amp;&amp; !modelLabel.isNullOrBlank()) || !statusDetail.isNullOrBlank() || isHolding || showHoldHint</ID>
     <ID>ComplexCondition:ChatScreen.kt$message.status == "complete" &amp;&amp; message.error.isNullOrBlank() &amp;&amp; message.deniedActions.isEmpty() &amp;&amp; message.thinking.isNullOrBlank()</ID>
     <ID>ComplexCondition:ChatScreen.kt$pos.x &lt; -slop || pos.y &lt; -slop || pos.x &gt; size.width + slop || pos.y &gt; size.height + slop</ID>
     <ID>ComplexCondition:MarkdownText.kt$t.isEmpty() || t.startsWith("```") || t.startsWith("- ") || t.startsWith("* ") || t.startsWith("• ") || headingRegex.matches(t) || numberedItemRegex.matches(t)</ID>
+    <ID>CyclomaticComplexMethod:AndroidUiDriver.kt$AndroidUiDriver$override suspend fun stroke(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, holdMs: Long): UiWindow</ID>
+    <ID>CyclomaticComplexMethod:AppUiControl.kt$UiNode$fun toMap(): Map&lt;String, Any?&gt;</ID>
     <ID>CyclomaticComplexMethod:DebugSystemCollector.kt$suspend fun captureWindowScreenshotBase64(activity: Activity?): String?</ID>
     <ID>CyclomaticComplexMethod:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleRequest(request: RecordedRequest): MockResponse</ID>
     <ID>CyclomaticComplexMethod:HerdrRepository.kt$HerdrRepository$private fun openSocketNow( config: ConnectionConfig, expectedGeneration: Long? = null, )</ID>
@@ -17,12 +21,15 @@
     <ID>CyclomaticComplexMethod:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
     <ID>CyclomaticComplexMethod:SshBootstrapModels.kt$fun parseSshSetupInput(raw: String): SshSetupAutofill?</ID>
     <ID>CyclomaticComplexMethod:SshBootstrapModels.kt$fun parseSshSetupUri(raw: String): SshSetupAutofill?</ID>
+    <ID>DestructuringDeclarationWithTooManyEntries:AppUiControl.kt$AppUiController$val (x1, y1, x2, y2) = coords</ID>
+    <ID>DestructuringDeclarationWithTooManyEntries:AppUiControl.kt$AppUiController$val (x1, y1, x2, y2) = when (direction) { "down" -&gt; listOf(cx, cy + dy, cx, cy - dy) "up" -&gt; listOf(cx, cy - dy, cx, cy + dy) "right" -&gt; listOf(cx + dx, cy, cx - dx, cy) else -&gt; listOf(cx - dx, cy, cx + dx, cy) }</ID>
     <ID>DestructuringDeclarationWithTooManyEntries:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$val (workingTab, userMsg, assistantMsg, effectivePrompt) = startTurnInternal( tabId = tabId, promptText = req.text, ) ?: return jsonResponse(404, """{"error":"Tab not found"}""")</ID>
     <ID>InstanceOfCheckForException:HerdrApiClient.kt$HerdrApiClient$err !is IOException</ID>
     <ID>LargeClass:AgentsTermE2ETest.kt$AgentsTermE2ETest</ID>
     <ID>LargeClass:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon : AutoCloseable</ID>
     <ID>LargeClass:ModelsAndStateTest.kt$ModelsAndStateTest</ID>
     <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test @Suppress("UNCHECKED_CAST") fun appStateReporterAnswersVmRequestsOnlyWhileUserAllowsInspection()</ID>
+    <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test @Suppress("UNCHECKED_CAST") fun vmAgentDrivesTheAppOnceTheUserAllowsControl()</ID>
     <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test fun interruptWorkingAgentAndRetryBlockedPermissionWithFullAccess()</ID>
     <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test fun modelPickerAndSlashModelCommandSwitchAgentModelEndToEnd()</ID>
     <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test fun systemPromptDefaultsOnNewTabCanBeEditedOrLeftEmptyEndToEnd()</ID>
@@ -41,10 +48,13 @@
     <ID>LongMethod:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
     <ID>LongMethod:SshBootstrapModels.kt$fun buildAgyBootstrapCommand( prompt: String, daemonPort: Int = 7501, repoUrl: String = AGENTSTERM_REPO_URL, ref: String = AGENTSTERM_DAEMON_REF, ): String</ID>
     <ID>LongMethod:SshBootstrapModels.kt$fun parseSshSetupInput(raw: String): SshSetupAutofill?</ID>
+    <ID>LongParameterList:AndroidUiDriver.kt$AndroidUiDriver$(root: View, downTime: Long, eventTime: Long, action: Int, screenX: Float, screenY: Float)</ID>
+    <ID>LongParameterList:AppUiControl.kt$AppUiDriver$(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, holdMs: Long)</ID>
     <ID>LoopWithTooManyJumpStatements:MarkdownText.kt$while</ID>
     <ID>MatchingDeclarationName:DebugSystemCollector.kt$CrashLogStore</ID>
     <ID>MaxLineLength:AppStateReporterTest.kt$AppStateReporterTest$private suspend fun call(command: String, args: Map&lt;String, Any?&gt; = emptyMap()): Map&lt;String, Any?&gt;</ID>
     <ID>MaxLineLength:AppStateReporterTest.kt$AppStateReporterTest.FakeSources$override suspend fun uploadDump(note: String?, includeScreenshot: Boolean): Map&lt;String, Any?&gt;</ID>
+    <ID>MaxLineLength:AppUiControllerTest.kt$AppUiControllerTest$private</ID>
     <ID>MaxLineLength:BootstrapScriptE2ETest.kt$BootstrapScriptE2ETest$private</ID>
     <ID>MaxLineLength:BootstrapScriptE2ETest.kt$BootstrapScriptE2ETest$private fun hasTool(name: String)</ID>
     <ID>MaxLineLength:ChatToolCallsUiTest.kt$ChatToolCallsUiTest$ToolCallItem("t1", "Bash", "cd ~/projects/app &amp;&amp; git status", """{"command":"cd ~/projects/app &amp;&amp; git status","description":"Check git status"}""", "clean", "done", 120L)</ID>
@@ -81,6 +91,9 @@
     <ID>NestedBlockDepth:MarkdownText.kt$private fun parseMarkdownBlocks(raw: String): List&lt;MarkdownBlock&gt;</ID>
     <ID>NestedBlockDepth:MessagePresentation.kt$@Suppress("UNCHECKED_CAST") fun formatToolCallSummary(toolCall: ToolCallItem): String</ID>
     <ID>NestedBlockDepth:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
+    <ID>SwallowedException:AgentsTermE2ETest.kt$AgentsTermE2ETest$e: androidx.compose.ui.test.ComposeTimeoutException</ID>
+    <ID>ThrowsCount:AppUiControl.kt$AppUiController$private suspend fun type(args: Map&lt;String, Any?&gt;): Map&lt;String, Any?&gt;</ID>
+    <ID>TooGenericExceptionCaught:AndroidUiDriver.kt$AndroidUiDriver$e: Throwable</ID>
     <ID>TooGenericExceptionCaught:AppStateReporter.kt$AppStateReporter$e: Throwable</ID>
     <ID>TooGenericExceptionCaught:HerdrApiClient.kt$HerdrApiClient$err: Throwable</ID>
     <ID>TooGenericExceptionCaught:MainViewModel.kt$MainViewModel$err: Throwable</ID>

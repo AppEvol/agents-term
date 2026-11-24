@@ -66,6 +66,78 @@ class BrokerTest(unittest.TestCase):
 
         run_async(go())
 
+    def test_control_commands_need_the_apps_second_opt_in(self):
+        def control_hello(control_enabled):
+            return json.dumps(
+                {
+                    "type": "app_hello",
+                    "reporter": {
+                        "enabled": True,
+                        "appVersion": "1.2.3",
+                        "commands": ["ping", "ui", "tap"],
+                        "controlCommands": ["tap"],
+                        "controlEnabled": control_enabled,
+                    },
+                }
+            )
+
+        async def go():
+            b = AppStateBroker()
+            ws = FakeSocket()
+            b.add_socket(ws)
+            # A build without remote control: nothing is refused here, the app answers for itself.
+            b.handle_message(ws, hello(True))
+            st = b.status()
+            self.assertEqual((st["ready"], st["controlReady"], st["target"]["supportsControl"]), (True, False, False))
+            self.assertIn("cannot be remote controlled", st["reason"])
+
+            b.handle_message(ws, control_hello(False))
+            st = b.status()
+            self.assertEqual((st["ready"], st["controlReady"], st["target"]["supportsControl"]), (True, False, True))
+            self.assertIn("remote control is off", st["reason"])
+            with self.assertRaises(AppStateError) as e:
+                await b.request("tap", {"x": 1, "y": 2})
+            self.assertEqual((e.exception.code, e.exception.http_status), ("control_disabled", 403))
+            self.assertEqual(ws.sent, [])
+            # Reading the UI is inspection, not control.
+            task = asyncio.ensure_future(b.request("ui"))
+            await asyncio.sleep(0)
+            self.assertEqual(ws.sent[-1]["command"], "ui")
+            b.handle_message(
+                ws,
+                json.dumps(
+                    {
+                        "type": "app_state_response",
+                        "requestId": ws.sent[-1]["requestId"],
+                        "ok": True,
+                        "result": {"nodes": []},
+                    }
+                ),
+            )
+            await task
+
+            b.handle_message(ws, control_hello(True))
+            st = b.status()
+            self.assertEqual((st["controlReady"], st["target"]["controlEnabled"]), (True, True))
+            self.assertIn("remote control enabled", st["reason"])
+            task = asyncio.ensure_future(b.request("tap", {"x": 1, "y": 2}))
+            await asyncio.sleep(0)
+            self.assertEqual((ws.sent[-1]["command"], ws.sent[-1]["args"]), ("tap", {"x": 1, "y": 2}))
+            b.handle_message(
+                ws,
+                json.dumps(
+                    {
+                        "type": "app_state_response",
+                        "requestId": ws.sent[-1]["requestId"],
+                        "ok": True,
+                        "result": {"action": "tap"},
+                    }
+                ),
+            )
+            self.assertEqual((await task)["result"], {"action": "tap"})
+
+        run_async(go())
+
     def test_relay_error_timeout_disconnect_and_routing(self):
         async def go():
             b = AppStateBroker()

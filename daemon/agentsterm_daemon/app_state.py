@@ -5,6 +5,10 @@
 
 The app announces itself (and whether the user enabled remote inspection) with an
 {type:"app_hello"} frame after every connect and whenever the setting changes.
+
+Commands that drive the app (tap, swipe, type...) need a second opt-in on the phone. The app names
+them in its hello ("controlCommands") and says whether they are allowed ("controlEnabled"); the app
+enforces this itself, the broker only refuses early with a clearer error.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ _STATUS_BY_CODE = {
     "no_app_connected": 503,
     "unsupported_app": 501,
     "inspection_disabled": 403,
+    "control_disabled": 403,
     "app_disconnected": 503,
     "timeout": 504,
     "app_error": 502,
@@ -53,11 +58,17 @@ def _str_or_none(value: Any) -> Optional[str]:
 def _parse_hello(raw: Any) -> Dict[str, Any]:
     obj = raw if isinstance(raw, dict) else {}
     commands = obj.get("commands")
+    control_commands = obj.get("controlCommands")
     return {
         "enabled": obj.get("enabled") is True,
         "appVersion": _str_or_none(obj.get("appVersion")),
         "device": _str_or_none(obj.get("device")),
         "commands": [c for c in commands if isinstance(c, str)] if isinstance(commands, list) else [],
+        # Absent from app builds that cannot be controlled.
+        "controlEnabled": obj.get("controlEnabled") is True,
+        "controlCommands": [c for c in control_commands if isinstance(c, str)]
+        if isinstance(control_commands, list)
+        else [],
     }
 
 
@@ -85,6 +96,8 @@ class _Client:
             "appVersion": hello.get("appVersion"),
             "device": hello.get("device"),
             "commands": hello.get("commands", []),
+            "supportsControl": bool(hello.get("controlCommands")),
+            "controlEnabled": hello.get("enabled") is True and hello.get("controlEnabled") is True,
         }
 
 
@@ -169,6 +182,16 @@ class AppStateBroker:
         if target:
             version = (target.hello or {}).get("appVersion") or "unknown version"
             reason = f"Ready: app {version} is connected with remote inspection enabled"
+            summary = target.summary()
+            if summary["controlEnabled"]:
+                reason += " and remote control enabled"
+            elif summary["supportsControl"]:
+                reason += (
+                    "; remote control is off (to tap/swipe/type, enable 'Allow VM agents to control the app' "
+                    "in Settings > Debug sharing)"
+                )
+            else:
+                reason += "; this app build cannot be remote controlled"
         elif not clients:
             reason = "No app is connected to the daemon. Open AgentsTerm on the phone and connect to this VM."
         elif not any(c.hello is not None for c in clients):
@@ -180,6 +203,7 @@ class AppStateBroker:
             )
         return {
             "ready": target is not None,
+            "controlReady": bool(target and target.summary()["controlEnabled"]),
             "reason": reason,
             "target": target.summary() if target else None,
             "clients": [c.summary() for c in clients],
@@ -200,6 +224,14 @@ class AppStateBroker:
             else:
                 code = "unsupported_app"
             raise AppStateError(code, st["reason"])
+
+        hello = target.hello or {}
+        if command in hello.get("controlCommands", []) and not hello.get("controlEnabled"):
+            raise AppStateError(
+                "control_disabled",
+                f"'{command}' controls the app, and remote control is off. On the phone: Settings > Debug sharing > "
+                "'Allow VM agents to control the app'.",
+            )
 
         if not isinstance(timeout_ms, (int, float)) or isinstance(timeout_ms, bool) or timeout_ms != timeout_ms:
             timeout_ms = DEFAULT_COMMAND_TIMEOUT_MS
