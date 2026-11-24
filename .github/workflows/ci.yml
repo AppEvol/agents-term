@@ -71,7 +71,14 @@ jobs:
             robolectric-${{ runner.os }}-
 
       - name: Run unit tests and build debug & test APKs
-        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+        env:
+          APP_VERSION_CODE: ${{ github.run_number }}
+          GITHUB_SHA_FULL: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA_FULL::7}"
+          export APP_VERSION_NAME="1.0.${APP_VERSION_CODE}-${SHORT_SHA}"
+          echo "Building AgentsTerm ${APP_VERSION_NAME} (versionCode=${APP_VERSION_CODE})"
+          gradle :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -143,6 +150,12 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Set build version environment
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "APP_VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          echo "APP_VERSION_NAME=1.0.${GITHUB_RUN_NUMBER}-${SHORT_SHA}" >> "$GITHUB_ENV"
+
       - name: Run E2E instrumented tests on Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -166,7 +179,7 @@ jobs:
     name: Publish Verified APK Release
     runs-on: ubuntu-latest
     needs: [build-and-unit-test, e2e-tests]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
     timeout-minutes: 10
@@ -178,27 +191,80 @@ jobs:
           name: app-debug-apk
           path: dist
 
-      - name: Publish APK to GitHub Releases
+      - name: Publish versioned APK release and update rolling latest alias
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          cp dist/app-debug.apk dist/AgentsTerm-debug.apk
+          set -euo pipefail
           SHORT_SHA="${GITHUB_SHA::7}"
-          NOTES=$(printf 'Verified Android debug APK built and tested on commit `%s`.\n\n- Build & unit tests: passed\n- Android Emulator E2E tests: passed\n- CI run: https://github.com/%s/actions/runs/%s\n\n### Install on Android\n1. Download `AgentsTerm-debug.apk` directly on your Android phone.\n2. Open the downloaded APK and allow installing from your browser/files app if prompted.\n' "$SHORT_SHA" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
-          if gh release view latest --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload latest dist/AgentsTerm-debug.apk --clobber --repo "${GITHUB_REPOSITORY}"
-            gh release edit latest \
-              --target main \
-              --title "AgentsTerm Latest Verified Build (${SHORT_SHA})" \
+          VERSION="1.0.${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
+          TAG="v${VERSION}"
+          STABLE_APK="dist/AgentsTerm-debug.apk"
+          VERSIONED_APK="dist/AgentsTerm-${TAG}-debug.apk"
+          cp dist/app-debug.apk "$STABLE_APK"
+          cp dist/app-debug.apk "$VERSIONED_APK"
+
+          EXISTING_TAGS=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=30" --jq '.[].tag_name' \
+            | grep -E '^v1\.0\.[0-9]+-' || true)
+
+          IS_NEWEST="true"
+          EXISTING_MAX=$(printf '%s\n' "$EXISTING_TAGS" \
+            | sed -n 's/^v1\.0\.\([0-9][0-9]*\)-.*$/\1/p' \
+            | sort -nr | head -n 1 || true)
+          if [ -n "${EXISTING_MAX:-}" ] && [ "$EXISTING_MAX" -gt "$GITHUB_RUN_NUMBER" ]; then
+            IS_NEWEST="false"
+          fi
+
+          LATEST_FLAG="--latest"
+          if [ "$IS_NEWEST" != "true" ]; then
+            LATEST_FLAG="--latest=false"
+          fi
+
+          PREV_TAG=$(printf '%s\n' "$EXISTING_TAGS" \
+            | awk -F'[.-]' -v cur="$GITHUB_RUN_NUMBER" 'NF >= 3 && $3 < cur { print $3, $0 }' \
+            | sort -nr | head -n 1 | awk '{print $2}' || true)
+
+          NOTES=$(printf 'Verified Android debug APK automatically built and tested on green `main` commit `%s`.\n\n- **Version:** `%s` (`versionCode=%s`)\n- **Build & unit tests:** passed\n- **Android Emulator E2E tests:** passed\n- **CI run:** https://github.com/%s/actions/runs/%s\n\n### Install on Android\n1. Download `AgentsTerm-debug.apk` directly on your Android phone (always-latest link: https://github.com/%s/releases/latest/download/AgentsTerm-debug.apk).\n2. Open the downloaded APK and allow installing from your browser/files app if prompted.\n' \
+            "$SHORT_SHA" "$VERSION" "$GITHUB_RUN_NUMBER" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY")
+
+          if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$STABLE_APK" "$VERSIONED_APK" --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release edit "$TAG" \
+              --title "AgentsTerm ${TAG}" \
               --notes "$NOTES" \
+              "$LATEST_FLAG" \
               --repo "${GITHUB_REPOSITORY}"
           else
-            gh release create latest dist/AgentsTerm-debug.apk \
-              --target main \
-              --title "AgentsTerm Latest Verified Build (${SHORT_SHA})" \
-              --notes "$NOTES" \
+            NOTES_ARGS=(--generate-notes --notes "$NOTES")
+            if [ -n "${PREV_TAG:-}" ]; then
+              NOTES_ARGS+=(--notes-start-tag "$PREV_TAG")
+            fi
+            gh release create "$TAG" "$STABLE_APK" "$VERSIONED_APK" \
+              --target "$GITHUB_SHA" \
+              --title "AgentsTerm ${TAG}" \
+              "${NOTES_ARGS[@]}" \
+              "$LATEST_FLAG" \
               --repo "${GITHUB_REPOSITORY}"
+          fi
+
+          # Keep the rolling `latest` tag & release asset in sync for /releases/download/latest/AgentsTerm-debug.apk links
+          if [ "$IS_NEWEST" = "true" ]; then
+            if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/latest" >/dev/null 2>&1; then
+              gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" -X PATCH \
+                -f sha="${GITHUB_SHA}" -F force=true >/dev/null
+            fi
+            if gh release view latest --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              ROLLING_NOTES=$(printf 'Rolling alias pointing to verified release [`%s`](https://github.com/%s/releases/tag/%s).\n\n%s\n' \
+                "$TAG" "$GITHUB_REPOSITORY" "$TAG" "$NOTES")
+              gh release upload latest "$STABLE_APK" --clobber --repo "${GITHUB_REPOSITORY}"
+              gh release edit latest \
+                --title "AgentsTerm Rolling Latest (${TAG})" \
+                --notes "$ROLLING_NOTES" \
+                --latest=false \
+                --repo "${GITHUB_REPOSITORY}"
+            fi
           fi

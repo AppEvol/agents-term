@@ -8,6 +8,13 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
+val ciVersionCode = providers.gradleProperty("appVersionCode").orNull?.toIntOrNull()
+  ?: providers.environmentVariable("APP_VERSION_CODE").orNull?.toIntOrNull()
+  ?: 1
+val ciVersionName = providers.gradleProperty("appVersionName").orNull?.takeIf { it.isNotBlank() }
+  ?: providers.environmentVariable("APP_VERSION_NAME").orNull?.takeIf { it.isNotBlank() }
+  ?: "1.0"
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -16,8 +23,8 @@ android {
     applicationId = "com.aistudio.herdrmobile.k7x2qp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = ciVersionCode
+    versionName = ciVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
