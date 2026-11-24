@@ -103,7 +103,14 @@ class FakeAgentsTermDaemon(
     private val server = MockWebServer().apply {
         dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-                return handleRequest(request)
+                return try {
+                    val resp = handleRequest(request)
+                    recordedRequests.add("  -> ${resp.status}")
+                    resp
+                } catch (t: Throwable) {
+                    recordedRequests.add("  -> EXCEPTION: $t")
+                    throw t
+                }
             }
         }
     }

@@ -87,7 +87,7 @@ class AgentsTermE2ETest {
             }
         } catch (e: Throwable) {
             val reqs = daemon?.recordedRequests?.joinToString("\n  ") ?: "(no daemon)"
-            val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString() }
+            val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString(maxDepth = Int.MAX_VALUE) }
                 .getOrElse { it.toString() }
             throw AssertionError(
                 "Timed out waiting for text='$text' (substring=$substring).\n" +
@@ -107,7 +107,7 @@ class AgentsTermE2ETest {
             }
         } catch (e: Throwable) {
             val reqs = daemon?.recordedRequests?.joinToString("\n  ") ?: "(no daemon)"
-            val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString() }
+            val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString(maxDepth = Int.MAX_VALUE) }
                 .getOrElse { it.toString() }
             throw AssertionError(
                 "Timed out waiting for tag='$tag'.\n" +
