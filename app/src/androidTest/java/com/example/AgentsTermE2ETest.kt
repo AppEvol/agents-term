@@ -1014,8 +1014,10 @@ class AgentsTermE2ETest {
 
         // Select remaining active tab, trigger a turn that finishes its task, verify Done appears, then mark active
         composeRule.onNodeWithTag("drawer_tab_tab_active").performClick()
+        composeRule.waitForIdle()
         waitForTag("composer_input")
         composeRule.onNodeWithTag("composer_input").performTextInput("finish_task ship update")
+        Espresso.closeSoftKeyboard()
         composeRule.onNodeWithTag("send_button").performClick()
 
         waitForTag("topbar_done_badge")
