@@ -94,11 +94,11 @@ fun HerdrApp(viewModel: MainViewModel) {
     val sshProfile by viewModel.sshProfile.collectAsStateWithLifecycle()
     val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle()
     val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
-    val debugUploadState by viewModel.debugUploadState.collectAsStateWithLifecycle()
-    val debugEventCount by viewModel.debugEventCount.collectAsStateWithLifecycle()
-    val hasLastCrash by viewModel.hasLastCrash.collectAsStateWithLifecycle()
 
     if (showSettings) {
+        val debugUploadState by viewModel.debugUploadState.collectAsStateWithLifecycle()
+        val debugEventCount by viewModel.debugEventCount.collectAsStateWithLifecycle()
+        val hasLastCrash by viewModel.hasLastCrash.collectAsStateWithLifecycle()
         SettingsScreen(
             workspaceState = state,
             debugSettings = debugSettings,
@@ -354,6 +354,9 @@ fun HerdrApp(viewModel: MainViewModel) {
     }
 
     if (showQuickDebugDialog) {
+        val debugUploadState by viewModel.debugUploadState.collectAsStateWithLifecycle()
+        val debugEventCount by viewModel.debugEventCount.collectAsStateWithLifecycle()
+        val hasLastCrash by viewModel.hasLastCrash.collectAsStateWithLifecycle()
         var noteInput by remember { mutableStateOf("") }
         val isConnected = state.connectionState == ConnectionState.CONNECTED && state.config.isValid
         AlertDialog(

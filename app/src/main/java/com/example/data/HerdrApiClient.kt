@@ -32,10 +32,10 @@ class HerdrApiClient(
         return this
     }
 
-    private suspend inline fun <reified T> executeJson(
+    private suspend fun executeRawJson(
         request: Request,
         logPayload: Boolean = true,
-    ): T =
+    ): String =
         withContext(Dispatchers.IO) {
             val startMs = System.currentTimeMillis()
             val endpoint = "${request.method} ${request.url.encodedPath}"
@@ -61,7 +61,7 @@ class HerdrApiClient(
                         event = "http_ok",
                         detail = "$endpoint -> ${resp.code} (${durationMs}ms, ${bodyStr.length}B)",
                     )
-                    decodeHerdrJson<T>(bodyStr)
+                    bodyStr
                 }
             } catch (err: Throwable) {
                 val durationMs = System.currentTimeMillis() - startMs
@@ -75,6 +75,14 @@ class HerdrApiClient(
                 throw err
             }
         }
+
+    private suspend inline fun <reified T> executeJson(
+        request: Request,
+        logPayload: Boolean = true,
+    ): T {
+        val bodyStr = executeRawJson(request, logPayload)
+        return decodeHerdrJson(bodyStr)
+    }
 
     suspend fun getInfo(config: ConnectionConfig): ServerInfo {
         val req = Request.Builder()

@@ -86,8 +86,12 @@ fun NewTabSheet(
     var fsListing by remember { mutableStateOf<FsListResponse?>(null) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
-        onLoadDirectories(defaultCwd).onSuccess {
+    LaunchedEffect(defaultCwd) {
+        var result = onLoadDirectories(defaultCwd)
+        if (result.isFailure) {
+            result = onLoadDirectories(defaultCwd)
+        }
+        result.onSuccess {
             fsListing = it
             cwd = it.path
         }

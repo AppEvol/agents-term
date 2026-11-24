@@ -428,6 +428,13 @@ class HerdrRepository(
     suspend fun listDirectories(path: String?): Result<FsListResponse> {
         val cfg = _state.value.config
         return runCatching { api.listDirectories(cfg, path) }
+            .onFailure { err ->
+                debugRecorder?.record(
+                    "error",
+                    "list_directories_failed",
+                    "listDirectories(${path ?: "default"}) failed: ${err.message ?: err::class.java.simpleName}",
+                )
+            }
     }
 
     suspend fun uploadDebugDump(request: DebugDumpUploadRequest): Result<DebugDumpUploadResponse> {
