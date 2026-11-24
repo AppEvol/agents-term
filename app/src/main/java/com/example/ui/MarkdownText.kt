@@ -28,11 +28,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -143,9 +150,18 @@ private fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
     return blocks
 }
 
-private fun parseInlineStyles(
+internal const val INLINE_CODE_TAG = "inline-code"
+
+/**
+ * Inline code is marked with an [INLINE_CODE_TAG] annotation (not `SpanStyle.background`), and
+ * [InlineMarkdownText] draws its background as a rounded chip per line.
+ *
+ * A background span fills the full line height, so code on consecutive lines fused into one solid
+ * slab. Plain text with code to its left, above and below then looked like it sat in a dark
+ * cut-out box.
+ */
+internal fun parseInlineStyles(
     text: String,
-    inlineCodeBg: Color,
     inlineCodeFg: Color,
 ): AnnotatedString {
     return buildAnnotatedString {
@@ -156,16 +172,18 @@ private fun parseInlineStyles(
             if (text[idx] == '`') {
                 val end = text.indexOf('`', idx + 1)
                 if (end > idx) {
+                    pushStringAnnotation(INLINE_CODE_TAG, "")
                     withStyle(
                         SpanStyle(
                             fontFamily = MonoFontFamily,
-                            background = inlineCodeBg,
                             color = inlineCodeFg,
                             fontSize = 13.sp,
                         )
                     ) {
+                        // The surrounding spaces are the chip's inner padding.
                         append(" ${text.substring(idx + 1, end)} ")
                     }
+                    pop()
                     idx = end + 1
                     continue
                 }
@@ -198,6 +216,69 @@ private fun parseInlineStyles(
     }
 }
 
+/**
+ * One rectangle per visual line of each inline-code range, in the text's local coordinates.
+ * Ranges come from the layout's own text, so a layout that is one frame behind the latest
+ * streamed text can never be indexed out of bounds.
+ */
+internal fun inlineCodeLineRects(layout: TextLayoutResult): List<Rect> {
+    val text = layout.layoutInput.text
+    val rects = mutableListOf<Rect>()
+    for (range in text.getStringAnnotations(INLINE_CODE_TAG, 0, text.length)) {
+        if (range.end <= range.start) continue
+        val firstLine = layout.getLineForOffset(range.start)
+        val lastLine = layout.getLineForOffset(range.end - 1)
+        for (line in firstLine..lastLine) {
+            val from = maxOf(range.start, layout.getLineStart(line))
+            val to = minOf(range.end, layout.getLineEnd(line, visibleEnd = true))
+            if (to <= from) continue
+            val first = layout.getBoundingBox(from)
+            val last = layout.getBoundingBox(to - 1)
+            rects.add(
+                Rect(
+                    left = minOf(first.left, last.left),
+                    top = layout.getLineTop(line),
+                    right = maxOf(first.right, last.right),
+                    bottom = layout.getLineBottom(line),
+                )
+            )
+        }
+    }
+    return rects
+}
+
+/** Text with rounded "chip" backgrounds behind inline code. */
+@Composable
+private fun InlineMarkdownText(
+    text: AnnotatedString,
+    style: TextStyle,
+    color: Color,
+    codeBackground: Color,
+    modifier: Modifier = Modifier,
+) {
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    Text(
+        text = text,
+        style = style,
+        color = color,
+        onTextLayout = { layout = it },
+        modifier = modifier.drawBehind {
+            val result = layout ?: return@drawBehind
+            val padX = 1.dp.toPx()
+            val insetY = 2.dp.toPx()
+            val radius = CornerRadius(4.dp.toPx())
+            for (rect in inlineCodeLineRects(result)) {
+                drawRoundRect(
+                    color = codeBackground,
+                    topLeft = Offset(rect.left - padX, rect.top + insetY),
+                    size = Size(rect.width + 2 * padX, (rect.height - 2 * insetY).coerceAtLeast(0f)),
+                    cornerRadius = radius,
+                )
+            }
+        },
+    )
+}
+
 @Composable
 fun MarkdownText(
     markdown: String,
@@ -221,18 +302,20 @@ fun MarkdownText(
                             2 -> MaterialTheme.typography.titleMedium
                             else -> MaterialTheme.typography.titleSmall
                         }
-                        Text(
-                            text = parseInlineStyles(block.text, codeBg, codeFg),
+                        InlineMarkdownText(
+                            text = parseInlineStyles(block.text, codeFg),
                             style = style.copy(fontWeight = FontWeight.SemiBold),
                             color = textColor,
+                            codeBackground = codeBg,
                         )
                     }
 
                     is MarkdownBlock.Paragraph -> {
-                        Text(
-                            text = parseInlineStyles(block.lines.joinToString("\n"), codeBg, codeFg),
+                        InlineMarkdownText(
+                            text = parseInlineStyles(block.lines.joinToString("\n"), codeFg),
                             style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 23.sp),
                             color = textColor,
+                            codeBackground = codeBg,
                         )
                     }
 
@@ -248,10 +331,11 @@ fun MarkdownText(
                                         style = MaterialTheme.typography.bodyLarge,
                                         color = MaterialTheme.colorScheme.primary,
                                     )
-                                    Text(
-                                        text = parseInlineStyles(item, codeBg, codeFg),
+                                    InlineMarkdownText(
+                                        text = parseInlineStyles(item, codeFg),
                                         style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
                                         color = textColor,
+                                        codeBackground = codeBg,
                                         modifier = Modifier.weight(1f),
                                     )
                                 }
@@ -272,10 +356,11 @@ fun MarkdownText(
                                         fontFamily = MonoFontFamily,
                                         color = MaterialTheme.colorScheme.primary,
                                     )
-                                    Text(
-                                        text = parseInlineStyles(item, codeBg, codeFg),
+                                    InlineMarkdownText(
+                                        text = parseInlineStyles(item, codeFg),
                                         style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
                                         color = textColor,
+                                        codeBackground = codeBg,
                                         modifier = Modifier.weight(1f),
                                     )
                                 }
