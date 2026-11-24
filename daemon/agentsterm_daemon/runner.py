@@ -196,7 +196,10 @@ class AgentRunner:
         run_cwd = tab.get("cwd") if tab.get("cwd") and os.path.exists(tab["cwd"]) else (os.environ.get("HOME") or "/")
         agent = tab.get("agent")
         # Snapshot before any streaming mutates the message (the caller serializes this).
-        result = {"userMessage": dict(user_message), "assistantMessage": dict(assistant_message)}
+        result = {
+            "userMessage": self._snapshot_message(user_message),
+            "assistantMessage": self._snapshot_message(assistant_message),
+        }
         if agent == "shell":
             self._run_shell_turn(tab, assistant_message, prompt_text, run_cwd)
         elif agent == "agy":
@@ -264,12 +267,21 @@ class AgentRunner:
             "text": text,
             "thinking": None,
             "toolCalls": [],
+            "segments": [],
             "deniedActions": [],
             "status": status,
             "error": None,
             "usage": None,
             "createdAt": ts,
             "updatedAt": ts,
+        }
+
+    @staticmethod
+    def _snapshot_message(msg: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            **msg,
+            "toolCalls": list(msg.get("toolCalls") or []),
+            "segments": [dict(s) for s in (msg.get("segments") or [])],
         }
 
     def _handle_model_command(
@@ -296,7 +308,13 @@ class AgentRunner:
                  "lastMessagePreview": f"Model: {arg}", "unread": False},
             )
             reply = f"Model switched to `{arg}` for this tab. Subsequent messages will use this model."
-        complete_msg = {**assistant_message, "text": reply, "status": "complete", "updatedAt": now_ms()}
+        complete_msg = {
+            **self._snapshot_message(assistant_message),
+            "text": reply,
+            "segments": [{"type": "text", "text": reply}],
+            "status": "complete",
+            "updatedAt": now_ms(),
+        }
         self.store.replace_message(tab["id"], complete_msg)
         self.store.save_now()
         self.broadcast({"type": "message_created", "tabId": tab["id"], "message": user_message})
@@ -314,10 +332,17 @@ class AgentRunner:
     ) -> None:
         if text_delta:
             msg["text"] += text_delta
+            segments = msg.setdefault("segments", [])
+            if segments and segments[-1].get("type") == "text":
+                segments[-1]["text"] += text_delta
+            else:
+                chunk = text_delta.lstrip("\r\n") if segments else text_delta
+                if chunk:
+                    segments.append({"type": "text", "text": chunk})
         if thinking_delta:
             msg["thinking"] = (msg["thinking"] or "") + thinking_delta
         msg["updatedAt"] = now_ms()
-        self.store.replace_message(tab_id, dict(msg))
+        self.store.replace_message(tab_id, self._snapshot_message(msg))
         env: Dict[str, Any] = {"type": "message_delta", "tabId": tab_id, "messageId": msg["id"]}
         if text_delta:
             env["textDelta"] = text_delta
@@ -333,8 +358,11 @@ class AgentRunner:
                 break
         else:
             calls.append(tool_call)
+        segments = msg.setdefault("segments", [])
+        if not any(s.get("type") == "tool" and s.get("toolCallId") == tool_call["id"] for s in segments):
+            segments.append({"type": "tool", "toolCallId": tool_call["id"]})
         msg["updatedAt"] = now_ms()
-        self.store.replace_message(tab_id, {**msg, "toolCalls": list(calls)})
+        self.store.replace_message(tab_id, self._snapshot_message(msg))
         self.broadcast({"type": "tool_update", "tabId": tab_id, "messageId": msg["id"], "toolCall": tool_call})
 
     @staticmethod
@@ -398,8 +426,14 @@ class AgentRunner:
         elif failed and stderr_text.strip():
             final_error = f"Exited with code {exit_code}: {truncate(stderr_text.strip(), 240)}"
 
-        final_msg = {**msg, "deniedActions": denied, "status": final_status, "error": final_error,
-                     "usage": final_usage, "updatedAt": now_ms()}
+        final_msg = {
+            **self._snapshot_message(msg),
+            "deniedActions": denied,
+            "status": final_status,
+            "error": final_error,
+            "usage": final_usage,
+            "updatedAt": now_ms(),
+        }
         self.store.replace_message(tab_id, final_msg)
 
         patch: Dict[str, Any] = {"status": tab_status, "statusDetail": status_detail, "unread": True}
@@ -1111,16 +1145,17 @@ class AgentRunner:
                     self._emit_delta(tab_id, msg, text_delta=("\n\n" if msg["text"] else "") + item["text"])
                 elif item_type == "command_execution":
                     cmd = js_str(first_not_none(item.get("command"), "command"))
+                    cmd_summary = summarize_tool_input({"command": cmd})
                     if ev_type == "item.started":
                         tool_starts[item_id] = now_ms()
-                        self._set_status_detail(tab_id, f"$ {truncate(cmd, 50)}")
+                        self._set_status_detail(tab_id, f"$ {truncate(cmd_summary, 50)}")
                     started = tool_starts.get(item_id)
                     exit_code = item.get("exit_code") if is_number(item.get("exit_code")) else None
                     agg = item.get("aggregated_output")
                     self._upsert_tool_call(tab_id, msg, {
                         "id": item_id,
                         "name": "Bash",
-                        "inputSummary": truncate(cmd, 120),
+                        "inputSummary": cmd_summary,
                         "inputJson": json_pretty({"command": cmd}),
                         "output": agg[:MAX_TOOL_OUTPUT] if isinstance(agg, str) else None,
                         "status": ("error" if exit_code and exit_code != 0 else "done") if completed else "running",

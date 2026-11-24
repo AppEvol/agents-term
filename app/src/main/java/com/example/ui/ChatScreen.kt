@@ -47,6 +47,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -78,11 +79,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.AssistantDisplayBlock
 import com.example.data.ChatMessage
 import com.example.data.DeniedAction
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
 import com.example.data.UsageStats
+import com.example.data.buildAssistantDisplayBlocks
+import com.example.data.formatToolCallSummary
+import com.example.data.formatToolRunSummary
 import com.example.ui.theme.HerdrAmber
 import com.example.ui.theme.HerdrBlue
 import com.example.ui.theme.HerdrEmerald
@@ -387,25 +392,39 @@ private fun AssistantMessageItem(
             )
         }
 
-        // Collapsible Tool Calls
-        if (message.toolCalls.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (tc in message.toolCalls) {
-                    ToolCallCard(toolCall = tc)
+        // Ordered text and grouped tool-call runs
+        val displayBlocks = remember(message.segments, message.toolCalls, message.text) {
+            buildAssistantDisplayBlocks(message)
+        }
+        if (displayBlocks.isNotEmpty()) {
+            for (block in displayBlocks) {
+                when (block) {
+                    is AssistantDisplayBlock.TextBlock -> {
+                        MarkdownText(
+                            markdown = block.text,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+
+                    is AssistantDisplayBlock.ToolRunBlock -> {
+                        if (block.toolCalls.size == 1) {
+                            ToolCallCard(
+                                toolCall = block.toolCalls.first(),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            ToolCallRunGroupCard(
+                                groupKey = "${message.id}:${block.toolCalls.first().id}",
+                                toolCalls = block.toolCalls,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
                 }
             }
-        }
-
-        // Main response Markdown body
-        if (message.text.isNotBlank()) {
-            MarkdownText(
-                markdown = message.text,
-                modifier = Modifier.fillMaxWidth(),
-            )
         } else if (
             message.status == "complete" &&
             message.error.isNullOrBlank() &&
-            message.toolCalls.isEmpty() &&
             message.deniedActions.isEmpty() &&
             message.thinking.isNullOrBlank()
         ) {
@@ -552,137 +571,316 @@ private fun ThinkingAccordionCard(
 }
 
 @Composable
-private fun ToolCallCard(toolCall: ToolCallItem) {
-    var expanded by remember(toolCall.id) { mutableStateOf(false) }
+private fun ToolCallRunGroupCard(
+    groupKey: String,
+    toolCalls: List<ToolCallItem>,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember(groupKey) { mutableStateOf(false) }
+    val runningCalls = remember(toolCalls) { toolCalls.filter { it.status == "running" } }
+    val hasRunning = runningCalls.isNotEmpty()
+    val hasError = remember(toolCalls) { toolCalls.any { it.status == "error" } }
+    val hasDenied = remember(toolCalls) { toolCalls.any { it.status == "denied" } }
+    val summaryText = remember(toolCalls) { formatToolRunSummary(toolCalls) }
+    val totalDurationMs = remember(toolCalls) {
+        toolCalls.mapNotNull { it.durationMs }.filter { it > 0L }.sum().takeIf { it > 0L }
+    }
+
+    val containerColor = when {
+        hasRunning -> MaterialTheme.colorScheme.surfaceContainer
+        hasError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+        else -> MaterialTheme.colorScheme.surfaceContainerLow
+    }
+    val borderColor = when {
+        hasRunning -> HerdrBlue.copy(alpha = 0.45f)
+        hasError -> HerdrRed.copy(alpha = 0.4f)
+        hasDenied -> HerdrAmber.copy(alpha = 0.45f)
+        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+    }
 
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth(),
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor),
+        modifier = modifier.testTag("tool_run_group"),
     ) {
         Column {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { expanded = !expanded }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .testTag("tool_run_header"),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                when (toolCall.status) {
-                    "running" -> CircularProgressIndicator(
-                        modifier = Modifier.size(15.dp),
-                        strokeWidth = 2.dp,
+                when {
+                    hasRunning -> CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 1.8.dp,
                         color = HerdrBlue,
                     )
 
-                    "done" -> Icon(
-                        imageVector = Icons.Rounded.CheckCircle,
-                        contentDescription = null,
-                        tint = HerdrEmerald,
-                        modifier = Modifier.size(16.dp),
-                    )
-
-                    "denied" -> Icon(
-                        imageVector = Icons.Rounded.Shield,
-                        contentDescription = null,
-                        tint = HerdrAmber,
-                        modifier = Modifier.size(16.dp),
-                    )
-
-                    "error" -> Icon(
+                    hasError -> Icon(
                         imageVector = Icons.Rounded.ErrorOutline,
                         contentDescription = null,
                         tint = HerdrRed,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(15.dp),
+                    )
+
+                    hasDenied -> Icon(
+                        imageVector = Icons.Rounded.Shield,
+                        contentDescription = null,
+                        tint = HerdrAmber,
+                        modifier = Modifier.size(15.dp),
                     )
 
                     else -> Icon(
-                        imageVector = Icons.Rounded.Build,
+                        imageVector = Icons.Rounded.CheckCircle,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
+                        tint = HerdrEmerald.copy(alpha = 0.78f),
+                        modifier = Modifier.size(15.dp),
                     )
                 }
 
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = toolCall.name,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontFamily = MonoFontFamily,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (toolCall.inputSummary.isNotBlank()) {
-                        Text(
-                            text = toolCall.inputSummary,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = MonoFontFamily,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                Text(
+                    text = summaryText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (hasRunning) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (hasRunning) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
 
-                if (toolCall.durationMs != null && toolCall.durationMs > 0) {
+                if (!hasRunning && totalDurationMs != null) {
                     Text(
-                        text = formatDuration(toolCall.durationMs),
+                        text = formatDuration(totalDurationMs),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = MonoFontFamily,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                     )
                 }
 
                 Icon(
                     imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                     modifier = Modifier.size(18.dp),
                 )
             }
 
+            if (!expanded && hasRunning) {
+                for (tc in runningCalls) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    )
+                    ToolCallRow(
+                        toolCall = tc,
+                        emphasized = true,
+                        modifier = Modifier.testTag("tool_run_active_call"),
+                    )
+                }
+            }
+
             AnimatedVisibility(visible = expanded) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (!toolCall.inputJson.isNullOrBlank()) {
-                        Text(
-                            text = stringResource(R.string.tool_input_label),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
+                Column {
+                    for (tc in toolCalls) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
                         )
-                        Text(
-                            text = toolCall.inputJson,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = MonoFontFamily,
-                                fontSize = 11.5.sp,
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        val emphasized = tc.status == "running" || tc.status == "error" || tc.status == "denied"
+                        ToolCallRow(
+                            toolCall = tc,
+                            emphasized = emphasized,
                         )
                     }
-                    if (!toolCall.output.isNullOrBlank()) {
-                        Text(
-                            text = stringResource(R.string.tool_output_label),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            text = toolCall.output,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = MonoFontFamily,
-                                fontSize = 11.5.sp,
-                            ),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        )
-                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolCallCard(
+    toolCall: ToolCallItem,
+    modifier: Modifier = Modifier,
+) {
+    val isRunning = toolCall.status == "running"
+    val isError = toolCall.status == "error"
+    val isDenied = toolCall.status == "denied"
+    val emphasized = isRunning || isError || isDenied
+
+    val containerColor = when {
+        isRunning -> MaterialTheme.colorScheme.surfaceContainer
+        isError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+        else -> MaterialTheme.colorScheme.surfaceContainerLow
+    }
+    val borderColor = when {
+        isRunning -> HerdrBlue.copy(alpha = 0.45f)
+        isError -> HerdrRed.copy(alpha = 0.4f)
+        isDenied -> HerdrAmber.copy(alpha = 0.45f)
+        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+    }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor),
+        modifier = modifier,
+    ) {
+        ToolCallRow(
+            toolCall = toolCall,
+            emphasized = emphasized,
+        )
+    }
+}
+
+@Composable
+private fun ToolCallRow(
+    toolCall: ToolCallItem,
+    emphasized: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember(toolCall.id) { mutableStateOf(false) }
+    val displaySummary = remember(toolCall.inputSummary, toolCall.inputJson) {
+        formatToolCallSummary(toolCall)
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = if (emphasized) 9.dp else 7.dp)
+                .testTag("tool_call_card_${toolCall.id}"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            when (toolCall.status) {
+                "running" -> CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 1.8.dp,
+                    color = HerdrBlue,
+                )
+
+                "done" -> Icon(
+                    imageVector = Icons.Rounded.CheckCircle,
+                    contentDescription = null,
+                    tint = HerdrEmerald.copy(alpha = if (emphasized) 1f else 0.72f),
+                    modifier = Modifier.size(15.dp),
+                )
+
+                "denied" -> Icon(
+                    imageVector = Icons.Rounded.Shield,
+                    contentDescription = null,
+                    tint = HerdrAmber,
+                    modifier = Modifier.size(15.dp),
+                )
+
+                "error" -> Icon(
+                    imageVector = Icons.Rounded.ErrorOutline,
+                    contentDescription = null,
+                    tint = HerdrRed,
+                    modifier = Modifier.size(15.dp),
+                )
+
+                else -> Icon(
+                    imageVector = Icons.Rounded.Build,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = toolCall.name,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = MonoFontFamily,
+                    fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (emphasized) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (displaySummary.isNotBlank()) {
+                    Text(
+                        text = displaySummary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (emphasized) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            if (toolCall.durationMs != null && toolCall.durationMs > 0) {
+                Text(
+                    text = formatDuration(toolCall.durationMs),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = MonoFontFamily,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                )
+            }
+
+            Icon(
+                imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (!toolCall.inputJson.isNullOrBlank()) {
+                    Text(
+                        text = stringResource(R.string.tool_input_label),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = toolCall.inputJson,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = MonoFontFamily,
+                            fontSize = 11.5.sp,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    )
+                }
+                if (!toolCall.output.isNullOrBlank()) {
+                    Text(
+                        text = stringResource(R.string.tool_output_label),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = toolCall.output,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = MonoFontFamily,
+                            fontSize = 11.5.sp,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    )
                 }
             }
         }

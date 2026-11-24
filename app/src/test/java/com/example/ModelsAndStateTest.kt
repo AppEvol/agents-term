@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.AgentModelOption
+import com.example.data.AssistantDisplayBlock
 import com.example.data.AvailableAgentInfo
 import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
@@ -8,6 +9,7 @@ import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DebugRecorder
 import com.example.data.FsListResponse
+import com.example.data.MessageSegment
 import com.example.data.ModelSlashCommand
 import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
@@ -18,12 +20,15 @@ import com.example.data.UpdateTabRequest
 import com.example.data.WorkspaceState
 import com.example.data.WsServerEnvelope
 import com.example.data.buildAgyBootstrapCommand
+import com.example.data.buildAssistantDisplayBlocks
 import com.example.data.buildSanitizedWorkspaceJson
 import com.example.data.decodeHerdrJson
 import com.example.data.encodeBase64Utf8
 import com.example.data.encodeHerdrJson
 import com.example.data.extractPairingUriFromOutput
 import com.example.data.formatModelChipLabel
+import com.example.data.formatToolCallSummary
+import com.example.data.formatToolRunSummary
 import com.example.data.normalizeFsPath
 import com.example.data.parseAgyStreamJsonLine
 import com.example.data.parseModelSlashCommand
@@ -34,6 +39,7 @@ import com.example.data.resolveAgentModelCatalog
 import com.example.data.resolveModelIdFromQuery
 import com.example.data.resolvePreferredNewTabCwd
 import com.example.data.sanitizeDebugText
+import com.example.data.summarizeCommandForDisplay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -553,5 +559,176 @@ class ModelsAndStateTest {
             """{"path":"/home/ned/gone","parent":"/home/ned","directories":[],"exists":false}"""
         )
         assertEquals(false, explicitFs.exists)
+    }
+
+    @Test
+    fun toolCallSummariesPreferDescriptionAndStripLeadingCd() {
+        assertEquals(
+            "Run unit tests",
+            formatToolCallSummary(
+                ToolCallItem(
+                    id = "t1",
+                    name = "Bash",
+                    inputSummary = "cd ~/projects/agents-term-app-state && ./gradlew test",
+                    inputJson = """{"command":"cd ~/projects/agents-term-app-state && ./gradlew test","description":"Run unit tests"}""",
+                    status = "done",
+                ),
+            ),
+        )
+        assertEquals(
+            "Check git status",
+            formatToolCallSummary(
+                ToolCallItem(
+                    id = "t2",
+                    name = "run_command",
+                    inputSummary = "cd ~/projects/app && git status",
+                    inputJson = """{"CommandLine":"cd ~/projects/app && git status","toolSummary":"Check git status"}""",
+                    status = "done",
+                ),
+            ),
+        )
+        assertEquals(
+            "git diff --stat",
+            formatToolCallSummary(
+                ToolCallItem(
+                    id = "t3",
+                    name = "Bash",
+                    inputSummary = "cd ~/projects/agents-term-app-state && git diff --stat",
+                    inputJson = """{"command":"cd ~/projects/agents-term-app-state && git diff --stat"}""",
+                    status = "done",
+                ),
+            ),
+        )
+        assertEquals("pytest -q", summarizeCommandForDisplay("""cd "/tmp/my app" && cd sub && pytest -q"""))
+        assertEquals("git log -n 5", summarizeCommandForDisplay("cd ~/projects/app\ngit log -n 5"))
+        assertEquals("cd ~/projects/app", summarizeCommandForDisplay("cd ~/projects/app"))
+        assertEquals("ls -la", summarizeCommandForDisplay("/bin/bash -lc 'cd /work/repo && ls -la'"))
+    }
+
+    @Test
+    fun toolRunSummaryAndDisplayBlocksGroupAndInterleaveCalls() {
+        val t1 = ToolCallItem("t1", "Bash", "git status", status = "done", durationMs = 100L)
+        val t2 = ToolCallItem("t2", "Bash", "git diff", status = "done", durationMs = 150L)
+        val t3 = ToolCallItem("t3", "Bash", "pytest", status = "running")
+        val t4 = ToolCallItem("t4", "Bash", "lint", status = "error")
+        val t5 = ToolCallItem("t5", "Write", "/etc/hosts", status = "denied")
+
+        assertEquals("3 tool calls · 2 done · 1 running", formatToolRunSummary(listOf(t1, t2, t3)))
+        assertEquals("2 tool calls · 2 done", formatToolRunSummary(listOf(t1, t2)))
+        assertEquals(
+            "4 tool calls · 1 done · 1 running · 1 failed · 1 blocked",
+            formatToolRunSummary(listOf(t1, t3, t4, t5)),
+        )
+
+        val interleaved = ChatMessage(
+            id = "m1",
+            tabId = "tab_1",
+            role = "assistant",
+            text = "Step 1\n\nStep 2\n\nDone.",
+            toolCalls = listOf(t1, t2, t3),
+            segments = listOf(
+                MessageSegment(type = "text", text = "Step 1"),
+                MessageSegment(type = "tool", toolCallId = "t1"),
+                MessageSegment(type = "text", text = "   "), // blank text must not split run
+                MessageSegment(type = "tool", toolCallId = "t2"),
+                MessageSegment(type = "text", text = "Step 2"),
+                MessageSegment(type = "tool", toolCallId = "t3"),
+                MessageSegment(type = "text", text = "Done."),
+            ),
+        )
+        val blocks = buildAssistantDisplayBlocks(interleaved)
+        assertEquals(
+            listOf(
+                AssistantDisplayBlock.TextBlock("Step 1"),
+                AssistantDisplayBlock.ToolRunBlock(listOf(t1, t2)),
+                AssistantDisplayBlock.TextBlock("Step 2"),
+                AssistantDisplayBlock.ToolRunBlock(listOf(t3)),
+                AssistantDisplayBlock.TextBlock("Done."),
+            ),
+            blocks,
+        )
+
+        // Legacy message without segments falls back to tool run then text
+        val legacy = ChatMessage(
+            id = "m_old",
+            tabId = "tab_1",
+            role = "assistant",
+            text = "Final answer",
+            toolCalls = listOf(t1, t2),
+            segments = emptyList(),
+        )
+        assertEquals(
+            listOf(
+                AssistantDisplayBlock.ToolRunBlock(listOf(t1, t2)),
+                AssistantDisplayBlock.TextBlock("Final answer"),
+            ),
+            buildAssistantDisplayBlocks(legacy),
+        )
+    }
+
+    @Test
+    fun reduceWorkspaceEventBuildsSegmentsLiveAndPreservesAcrossLegacyUpdate() {
+        val tab = TabRecord("tab_1", "Claude · app", "claude", "/home/ned/app", status = "working")
+        var state = reduceWorkspaceEvent(
+            WorkspaceState(),
+            WsServerEnvelope(type = "snapshot", tabs = listOf(tab), activeTabId = "tab_1"),
+        )
+        val msg = ChatMessage(id = "msg_1", tabId = "tab_1", role = "assistant", text = "", status = "streaming")
+        state = reduceWorkspaceEvent(state, WsServerEnvelope(type = "message_created", tabId = "tab_1", message = msg))
+        state = reduceWorkspaceEvent(
+            state,
+            WsServerEnvelope(type = "message_delta", tabId = "tab_1", messageId = "msg_1", textDelta = "Checking now."),
+        )
+        state = reduceWorkspaceEvent(
+            state,
+            WsServerEnvelope(
+                type = "tool_update",
+                tabId = "tab_1",
+                messageId = "msg_1",
+                toolCall = ToolCallItem("t1", "Bash", "git status", status = "running"),
+            ),
+        )
+        state = reduceWorkspaceEvent(
+            state,
+            WsServerEnvelope(
+                type = "tool_update",
+                tabId = "tab_1",
+                messageId = "msg_1",
+                toolCall = ToolCallItem("t1", "Bash", "git status", output = "clean", status = "done"),
+            ),
+        )
+        state = reduceWorkspaceEvent(
+            state,
+            WsServerEnvelope(type = "message_delta", tabId = "tab_1", messageId = "msg_1", textDelta = "\n\nAll done."),
+        )
+
+        val streamed = state.activeMessages.single()
+        assertEquals("Checking now.\n\nAll done.", streamed.text)
+        assertEquals(
+            listOf(
+                MessageSegment(type = "text", text = "Checking now."),
+                MessageSegment(type = "tool", toolCallId = "t1"),
+                MessageSegment(type = "text", text = "All done."),
+            ),
+            streamed.segments,
+        )
+
+        // Legacy daemon sends message_updated without segments: streamed segments should be preserved
+        val legacyFinal = streamed.copy(status = "complete", segments = emptyList())
+        val afterLegacyUpdate = reduceWorkspaceEvent(
+            state,
+            WsServerEnvelope(type = "message_updated", tabId = "tab_1", message = legacyFinal),
+        )
+        assertEquals(streamed.segments, afterLegacyUpdate.activeMessages.single().segments)
+
+        // JSON backward compatibility: decodes with and without segments
+        val withoutSegments = decodeHerdrJson<ChatMessage>(
+            """{"id":"m1","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[]}"""
+        )
+        assertTrue(withoutSegments.segments.isEmpty())
+        val withSegments = decodeHerdrJson<ChatMessage>(
+            """{"id":"m2","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[],"segments":[{"type":"text","text":"Hi"}]}"""
+        )
+        assertEquals(listOf(MessageSegment(type = "text", text = "Hi")), withSegments.segments)
     }
 }

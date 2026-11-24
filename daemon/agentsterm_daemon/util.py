@@ -14,6 +14,13 @@ import time
 from typing import Any, Optional
 
 _WS_RE = re.compile(r"\s+")
+_LEADING_CD_RE = re.compile(
+    r"""^\s*cd(?:\s+(?:-[LP]|--))?\s+(?:"[^"]*"|'[^']*'|(?:\\.|[^\s;&|\n])+)\s*(?:&&|;|\r?\n)\s*"""
+)
+_SHELL_WRAPPER_RE = re.compile(
+    r"""^\s*(?:/(?:usr/)?bin/)?(?:ba|z)?sh\s+-[a-z]*c\s+(["'])(.*)\1\s*$""",
+    re.S,
+)
 
 
 def now_ms() -> int:
@@ -97,16 +104,45 @@ def truncate(s: str, max_len: int = 180) -> str:
     return single[: max_len - 1] + "…" if len(single) > max_len else single
 
 
+def summarize_command(command: str) -> str:
+    """Return a concise summary of a shell command, stripping leading `cd <dir> &&` prefixes."""
+    s = command.strip()
+    if not s:
+        return ""
+    m = _SHELL_WRAPPER_RE.match(s)
+    if m:
+        quote, inner = m.group(1), m.group(2).strip()
+        if inner and quote not in inner:
+            s = inner
+    while True:
+        match = _LEADING_CD_RE.match(s)
+        if not match:
+            break
+        rest = s[match.end():].strip()
+        if not rest:
+            break
+        s = rest
+    return truncate(s, 120)
+
+
 def summarize_tool_input(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
-        return truncate(value, 120)
+        return summarize_command(value)
     if isinstance(value, (dict, list)):
         if isinstance(value, dict):
-            for key in ("command", "CommandLine", "path", "Path", "file_path", "pattern", "query", "url", "toolSummary"):
+            for key in ("description", "toolSummary", "summary", "title"):
                 v = value.get(key)
-                if isinstance(v, str) and v:
+                if isinstance(v, str) and v.strip():
+                    return truncate(v, 120)
+            for key in ("command", "CommandLine"):
+                v = value.get(key)
+                if isinstance(v, str) and v.strip():
+                    return summarize_command(v)
+            for key in ("file_path", "path", "Path", "pattern", "query", "url"):
+                v = value.get(key)
+                if isinstance(v, str) and v.strip():
                     return truncate(v, 120)
         try:
             return truncate(json_compact(value), 120)

@@ -824,4 +824,41 @@ class AgentsTermE2ETest {
         waitForText("projects")
         waitForText("scripts")
     }
+
+    @Test
+    fun multiToolTurnGroupsCallsAndExpandsDetailsOnTap() {
+        val seedTab = TabRecord(
+            id = "tab_tools",
+            title = "Claude · agents-term",
+            agent = "claude",
+            cwd = "/home/ci/projects/agents-term",
+            permissionMode = "full-access",
+            status = "idle",
+        )
+        val activeDaemon = startDaemon(initialTabs = listOf(seedTab))
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForTag("composer_input")
+
+        composeRule.onNodeWithTag("composer_input").performTextInput("multi_tool_turn check repo")
+        composeRule.onNodeWithTag("send_button").performClick()
+
+        waitForText("Checking repository state first.")
+        waitForText("3 tool calls · 3 done")
+        waitForText("All repository checks passed.")
+
+        // Individual completed calls stay collapsed until the summary row is tapped
+        assertTrue(composeRule.onAllNodesWithText("Check git status").fetchSemanticsNodes().isEmpty())
+
+        composeRule.onNodeWithTag("tool_run_header").performClick()
+        waitForText("Check git status")
+        waitForText("git diff --stat")
+        waitForText("Run unit tests")
+
+        composeRule.onNodeWithText("Run unit tests").performClick()
+        waitForText("28 passed")
+    }
 }
