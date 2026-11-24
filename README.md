@@ -75,96 +75,40 @@ Every push to `main` that passes both `Build APK & Unit Tests` and `End-to-End A
 
 ## 2. Agent Guide: Setting Up the VM Space for AgentsTerm
 
-Follow these steps when executing directly on the target Linux VM (for example, when invoked via `agy --dangerously-skip-permissions` during AgentsTerm's first-run SSH bootstrap) so the VM is ready for the mobile app to connect.
+The VM daemon is the Python 3 program in [`daemon/`](daemon/) (standard library only, no build step). The app's first-run SSH bootstrap installs it automatically: it SSHes into the VM and runs `agy --dangerously-skip-permissions` with a prompt that tells Antigravity to run `daemon/install.sh` and fix whatever that script reports. You can also run the same steps by hand.
 
 ### Prerequisites on the VM
-1. **Tailscale active**: The VM must be connected to the same tailnet as the Android device.
-   ```bash
-   tailscale ip -4
-   ```
-   Confirm this returns a `100.x.y.z` Tailscale IPv4 address.
-2. **SSH access (for zero-touch mobile bootstrap)**:
-   - Recommended: enable Tailscale SSH (`sudo tailscale set --ssh`) so AgentsTerm can connect passwordlessly over WireGuard.
-   - Alternative: standard OpenSSH (`sshd` on port `22`) with key or password authentication.
-3. **Runtime & CLI tools**:
-   - `git`
-   - `node` (>= 20) and `npm`
-   - Coding agent CLIs you intend to control installed on `PATH` and authenticated (e.g., `agy`, `claude`, `codex`).
-   - Note: Non-interactive SSH shells do not load `.bashrc`. Ensure `agy` and `node` live in a standard location (`~/.local/bin`, `~/.npm-global/bin`, `/usr/local/bin`, or `~/.nvm/versions/node/*/bin`) or are exported in `~/.profile`.
+1. **Tailscale active** on the same tailnet as the phone: `tailscale ip -4` must print a `100.x.y.z` address.
+2. **SSH access** for the zero-touch bootstrap: Tailscale SSH (`sudo tailscale set --ssh`, recommended) or OpenSSH with a key or password.
+3. **Tools:** `python3` (>= 3.8), `git`, and the agent CLIs you want to control (`agy`, `claude`, `codex`) on `PATH` and authenticated. Non-interactive SSH shells don't load `.bashrc`, so put them in `~/.local/bin` or `/usr/local/bin`, or export them in `~/.profile`.
 
-### Step 1: Check Whether the Daemon Is Already Running
-Before reinstalling, check if the AgentsTerm / `agent-terminal` daemon is already listening on port `7501` (or your configured port):
-
+### Install or update (idempotent)
 ```bash
-TS_IP=$(tailscale ip -4 | head -n 1)
-ss -tlnp 2>/dev/null | grep ":7501" || true
+DIR="$HOME/.local/share/agentsterm/agents-term"
+if [ -d "$DIR/.git" ]; then bash "$DIR/daemon/install.sh" --port 7501
+else git clone --depth 1 https://github.com/nedn/agents-term.git "$DIR" && bash "$DIR/daemon/install.sh" --port 7501; fi
 ```
 
-If it is already running and healthy, jump straight to **Step 5** to verify `/api/info` and print the pairing URI.
+`install.sh` does the following:
+- Updates the checkout (`--ref <branch>`, default `main`; `--no-update` skips this step).
+- Installs `~/.config/systemd/user/herdr-mobile.service` and enables linger. Without `systemd --user` it starts a detached process logging to `~/.config/herdr-mobile/daemon.log`.
+- Replaces the legacy Node daemon (`~/agent-terminal`) if one is running. Config, token, and tab history in `~/.config/herdr-mobile/` are reused as-is.
+- Health-checks `http://<tailscale-ip>:<port>/api/info` and prints the `herdr://connect?...` pairing URI.
 
-### Step 2: Clone or Update the Daemon Repository
-Install the server from [`nedn/agent-terminal`](https://github.com/nedn/agent-terminal) into `~/agent-terminal`:
+Exit codes: `3` means a prerequisite is missing (python3, git, or Tailscale), and `4` means the daemon started but failed its health check (see `systemctl --user status herdr-mobile.service` or the log).
 
+> **Don't run `install.sh` from an AgentsTerm agent tab.** Agent sessions are child processes of the daemon, so restarting the daemon ends them, including the session running the script. Run it over SSH instead.
+
+### Day-to-day
 ```bash
-if [ -d "$HOME/agent-terminal/.git" ]; then
-  git -C "$HOME/agent-terminal" pull --ff-only
-else
-  git clone https://github.com/nedn/agent-terminal.git "$HOME/agent-terminal"
-fi
+D="$HOME/.local/share/agentsterm/agents-term/daemon/agentsterm-daemon"
+python3 "$D" pairing --port 7501      # print host, port, token and the pairing URI
+python3 "$D" rotate-token             # new bearer token (restart the daemon to apply)
+systemctl --user restart herdr-mobile.service
+python3 -m unittest discover -s daemon/tests   # daemon tests (from a repo checkout)
 ```
 
-### Step 3: Install Dependencies and Build the Server
-```bash
-cd "$HOME/agent-terminal/server"
-npm install
-npm run build
-```
-
-Confirm `~/agent-terminal/server/dist/index.js` was generated.
-
-### Step 4: Start the Daemon Persistently on the Tailscale Interface
-Bind the daemon to the VM's Tailscale IPv4 address on port `7501` so agent sessions survive phone disconnects, app restarts, and SSH exit.
-
-#### Option A: `systemd --user` (Preferred on Linux VMs)
-```bash
-mkdir -p "$HOME/.config/systemd/user"
-cp "$HOME/agent-terminal/server/systemd/herdr-mobile.service" "$HOME/.config/systemd/user/"
-systemctl --user daemon-reload
-systemctl --user enable --now herdr-mobile.service
-loginctl enable-linger "$USER" || true
-systemctl --user status herdr-mobile.service --no-pager
-```
-
-> If `herdr-mobile.service` needs a custom Node path, port, or working directory, edit `~/.config/systemd/user/herdr-mobile.service` (e.g., `ExecStart=/path/to/node /home/<user>/agent-terminal/server/dist/index.js --port 7501`) and run `systemctl --user daemon-reload && systemctl --user restart herdr-mobile.service`.
-
-#### Option B: Detached Background Process (Fallback if `systemd --user` is unavailable)
-```bash
-mkdir -p "$HOME/.config/herdr-mobile"
-nohup node "$HOME/agent-terminal/server/dist/index.js" --port 7501 \
-  > "$HOME/.config/herdr-mobile/daemon.log" 2>&1 < /dev/null &
-sleep 2
-```
-
-### Step 5: Verify Health and Emit the Pairing URI
-1. Retrieve the pairing details (this prints the Tailscale host, port, bearer token, and pairing URI):
-   ```bash
-   node "$HOME/agent-terminal/server/dist/index.js" pairing --port 7501
-   ```
-2. Verify the HTTP API responds cleanly on the Tailscale IP:
-   ```bash
-   TS_IP=$(tailscale ip -4 | head -n 1)
-   TOKEN=$(node -e "const fs=require('fs'),p=require('os').homedir()+'/.config/herdr-mobile/config.json'; if(fs.existsSync(p)) console.log(JSON.parse(fs.readFileSync(p,'utf8')).token||'');")
-   if [ -n "$TOKEN" ]; then
-     curl -fsS -H "Authorization: Bearer $TOKEN" "http://${TS_IP}:7501/api/info"
-   else
-     curl -fsS "http://${TS_IP}:7501/api/info"
-   fi
-   ```
-3. **Print the exact pairing URI on its own line** in the final output:
-   ```text
-   herdr://connect?host=<TAILSCALE_IP>&port=7501&token=<TOKEN>
-   ```
-   *(AgentsTerm accepts both `agentsterm://connect?...` and `herdr://connect?...` schemes. When invoked via the app's SSH + `agy` bootstrapper, AgentsTerm automatically scans the output for this URI, tests `/api/info`, opens the WebSocket stream, and launches the workspace.)*
+*(AgentsTerm accepts both `agentsterm://connect?...` and `herdr://connect?...`. The SSH bootstrapper scans the agy output for this URI, tests `/api/info`, opens the WebSocket stream, and launches the workspace.)*
 
 ---
 
@@ -198,4 +142,4 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 - **`'agy' was not found in PATH` during SSH bootstrap**: Symlink `agy` into `~/.local/bin/agy` or `/usr/local/bin/agy`, or export its directory in `~/.profile`.
 - **Phone cannot reach `http://<tailscale-ip>:7501`**: Confirm Tailscale is connected on both phone and VM, the daemon is bound to the Tailscale IPv4 (not `127.0.0.1`), and any host firewall (`ufw`/`iptables`) allows TCP `7501` on the `tailscale0` interface.
 - **Host key mismatch warning in AgentsTerm**: If the VM was rebuilt and generated a new SSH host key, tap **Trust New Host Key & Retry** in the bootstrap console to update the pinned SHA-256 fingerprint.
-- **Rotate bearer token**: Run `node ~/agent-terminal/server/dist/index.js rotate-token` on the VM and paste the new pairing URI into **VM Connection Settings**.
+- **Rotate bearer token**: Run `python3 ~/.local/share/agentsterm/agents-term/daemon/agentsterm-daemon rotate-token` on the VM, restart the daemon, and paste the new pairing URI into **VM Connection Settings**.

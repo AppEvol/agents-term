@@ -21,3 +21,9 @@
 - Run `status` first. Exit code 3 means the app is not connected or the user has not enabled **Settings > Debug sharing > Allow VM agents to inspect the app**; ask the user to do that rather than retrying.
 - The CLI is read-only. Screenshots need the app in the foreground and show the user a toast.
 
+## VM Daemon (`daemon/`)
+
+- The VM daemon is Python 3, standard library only. Run its tests with `python3 -m unittest discover -s daemon/tests`.
+- Agent sessions started from the app are child processes of the running daemon. Never restart the daemon or `herdr-mobile.service`, and never run `daemon/install.sh`, from inside such a session: it ends your own session. Test on a scratch port with a temporary `HOME` instead (`python3 daemon/agentsterm-daemon --host 127.0.0.1 --port 7599`).
+- Keep the REST/WebSocket contract backward compatible with released app builds.
+
