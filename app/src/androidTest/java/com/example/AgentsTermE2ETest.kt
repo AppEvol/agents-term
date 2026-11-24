@@ -613,7 +613,12 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("debug_remote_inspection_switch").performScrollTo().performClick()
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("enabled") == true }
         assertEquals(false, activeDaemon.latestAppHello()!!["controlEnabled"])
-        assertTrue(nodes().any { it["tag"] == "debug_remote_control_switch" && it["toggle"] == "off" })
+        composeRule.onNodeWithTag("debug_remote_control_switch").performScrollTo()
+        assertEquals(
+            "on screen: ${nodes()}",
+            "off",
+            nodes("""{"tag":"debug_remote_control_switch"}""").singleOrNull()?.get("toggle"),
+        )
         val refused = activeDaemon.requestAppState("key", """{"key":"back"}""")
         assertEquals(false, refused["ok"])
         assertTrue((refused["error"] as String).contains("Remote control is disabled"))
@@ -622,6 +627,7 @@ class AgentsTermE2ETest {
         // The user allows control too.
         composeRule.onNodeWithTag("debug_remote_control_switch").performScrollTo().performClick()
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("controlEnabled") == true }
+        assertEquals("on", nodes("""{"tag":"debug_remote_control_switch"}""").single()["toggle"])
         assertTrue(
             (activeDaemon.latestAppHello()!!["commands"] as List<String>)
                 .containsAll(listOf("ui", "tap", "long_press", "swipe", "scroll", "type", "key"))

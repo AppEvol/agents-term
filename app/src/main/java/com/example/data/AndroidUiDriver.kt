@@ -71,8 +71,13 @@ class AndroidUiDriver(
         val decorView: View = activity.window.decorView
         val origin = IntArray(2).also { decorView.getLocationOnScreen(it) }
         val scale = screenshotScale(decorView.width)
-        val width = (decorView.width * scale).toInt()
-        val height = (decorView.height * scale).toInt()
+        // Same arithmetic as the screenshot's downscaling, so both agree to the pixel.
+        val width = minOf(decorView.width, SCREENSHOT_MAX_WIDTH)
+        val height = if (decorView.width > SCREENSHOT_MAX_WIDTH) {
+            (decorView.height.toFloat() * SCREENSHOT_MAX_WIDTH / decorView.width).toInt().coerceAtLeast(1)
+        } else {
+            decorView.height
+        }
         val roots: List<View> = appWindowRoots(activity)
 
         fun toShotX(screenX: Float): Int = ((screenX - origin[0]) * scale).roundToInt()
