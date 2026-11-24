@@ -558,6 +558,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         permissionMode: String,
         title: String?,
         model: String? = null,
+        systemPrompt: String? = null,
         onCreated: () -> Unit = {},
     ) {
         viewModelScope.launch {
@@ -568,6 +569,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     cwd = cwd?.takeIf { it.isNotBlank() },
                     permissionMode = permissionMode,
                     model = model?.trim()?.takeIf { it.isNotEmpty() },
+                    systemPrompt = if (agent == "shell") null else systemPrompt?.trim().orEmpty(),
                 )
             )
             if (res.isSuccess) {
@@ -595,6 +597,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             val res = repo.updateTabModel(tabId, model)
+            res.onSuccess { updated ->
+                onUpdated?.invoke(updated)
+            }
+        }
+    }
+
+    fun updateTabSystemPrompt(
+        tabId: String,
+        systemPrompt: String?,
+        onUpdated: ((com.example.data.TabRecord) -> Unit)? = null,
+    ) {
+        viewModelScope.launch {
+            val res = repo.updateTabSystemPrompt(tabId, systemPrompt)
             res.onSuccess { updated ->
                 onUpdated?.invoke(updated)
             }

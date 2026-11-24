@@ -150,15 +150,29 @@ class _ActiveTurn:
         self.kill_handles.clear()
 
 
+def _tab_system_prompt(tab: Dict[str, Any]) -> Optional[str]:
+    raw = tab.get("systemPrompt")
+    return raw.strip() if isinstance(raw, str) and raw.strip() else None
+
+
+def _toml_basic_string(value: str) -> str:
+    # JSON string escaping (\", \\, \b, \f, \n, \r, \t, \u00xx) is valid TOML basic string syntax.
+    return json.dumps(value, ensure_ascii=False)
+
+
 class AgentRunner:
     def __init__(self, store: StateStore, broadcast: Broadcast) -> None:
         self.store = store
         self.broadcast = broadcast
         self._active: Dict[str, _ActiveTurn] = {}
         self._tasks: set = set()
+        self._agy_prompt_dirty: set = set()
 
     def is_running(self, tab_id: str) -> bool:
         return tab_id in self._active
+
+    def mark_system_prompt_updated(self, tab_id: str) -> None:
+        self._agy_prompt_dirty.add(tab_id)
 
     # ---------------------------------------------------------------- public API
 
@@ -241,6 +255,7 @@ class AgentRunner:
         return True
 
     def kill_if_running(self, tab_id: str) -> None:
+        self._agy_prompt_dirty.discard(tab_id)
         active = self._active.pop(tab_id, None)
         if not active:
             return
@@ -649,11 +664,19 @@ class AgentRunner:
         else:
             args += ["--mode", "auto"]
         session = tab.get("sessionRef")
-        if isinstance(session, dict) and session.get("kind") == "agy" and session.get("value"):
+        is_resume = isinstance(session, dict) and session.get("kind") == "agy" and bool(session.get("value"))
+        if is_resume:
             args += ["--conversation", session["value"]]
         if tab.get("model"):
             args += ["--model", tab["model"]]
-        args.append(f"--print={prompt}")
+        system_prompt = _tab_system_prompt(tab)
+        prompt_dirty = tab_id in self._agy_prompt_dirty
+        self._agy_prompt_dirty.discard(tab_id)
+        if system_prompt and (not is_resume or prompt_dirty):
+            effective_prompt = f"<system_instructions>\n{system_prompt}\n</system_instructions>\n\n{prompt}"
+        else:
+            effective_prompt = prompt
+        args.append(f"--print={effective_prompt}")
 
         self._set_status_detail(tab_id, "Antigravity is thinking…")
 
@@ -994,6 +1017,9 @@ class AgentRunner:
             args += ["--resume", session["value"]]
         if tab.get("model"):
             args += ["--model", tab["model"]]
+        system_prompt = _tab_system_prompt(tab)
+        if system_prompt:
+            args += ["--append-system-prompt", system_prompt]
 
         self._set_status_detail(tab_id, "Claude is thinking…")
 
@@ -1111,6 +1137,9 @@ class AgentRunner:
             args += ["-s", "read-only"] if permission_mode == "plan" else ["-s", "workspace-write"]
         if tab.get("model"):
             args += ["-m", tab["model"]]
+        system_prompt = _tab_system_prompt(tab)
+        if system_prompt:
+            args += ["-c", f"developer_instructions={_toml_basic_string(system_prompt)}"]
         if is_resume:
             args += [session["value"], prompt]
         else:

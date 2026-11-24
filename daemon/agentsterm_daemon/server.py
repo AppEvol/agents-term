@@ -345,7 +345,8 @@ class Daemon:
             if not agent or not isinstance(agent, str):
                 return Response.json(400, {"error": "Missing required field: agent"})
             tab = self.store.create_tab(agent, title=body.get("title"), cwd=body.get("cwd"),
-                                        permission_mode=body.get("permissionMode"), model=body.get("model"))
+                                        permission_mode=body.get("permissionMode"), model=body.get("model"),
+                                        system_prompt=body.get("systemPrompt"))
             self.broadcast({"type": "tab_created", "tab": tab})
             return Response.json(200, {"tab": tab})
 
@@ -361,7 +362,8 @@ class Daemon:
             if method == "PATCH":
                 body = await req.json()
                 body = body if isinstance(body, dict) else {}
-                if not self.store.get_tab(tab_id):
+                existing = self.store.get_tab(tab_id)
+                if not existing:
                     return Response.json(404, {"error": "Tab not found"})
                 patch: Dict[str, Any] = {}
                 if body.get("title") is not None:
@@ -373,8 +375,18 @@ class Daemon:
                 if "model" in body:
                     model = body["model"]
                     patch["model"] = model.strip() if isinstance(model, str) and model.strip() else None
+                system_prompt_changed = False
+                if "systemPrompt" in body:
+                    sp = body["systemPrompt"]
+                    new_sp = None if existing.get("agent") == "shell" else (
+                        sp.strip() if isinstance(sp, str) and sp.strip() else None
+                    )
+                    patch["systemPrompt"] = new_sp
+                    system_prompt_changed = new_sp != existing.get("systemPrompt")
                 updated = self.store.update_tab(tab_id, patch)
                 if updated:
+                    if system_prompt_changed:
+                        self.runner.mark_system_prompt_updated(tab_id)
                     self.broadcast({"type": "tab_updated", "tab": updated})
                     return Response.json(200, {"tab": updated})
                 return Response.json(404, {"error": "Tab not found"})

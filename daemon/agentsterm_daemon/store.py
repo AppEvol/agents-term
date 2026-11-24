@@ -120,6 +120,7 @@ class StateStore:
         cwd: Any = None,
         permission_mode: Any = None,
         model: Any = None,
+        system_prompt: Any = None,
     ) -> Dict[str, Any]:
         now = now_ms()
         tab_id = f"tab_{rand_hex(6)}"
@@ -133,6 +134,7 @@ class StateStore:
             "cwd": resolved_cwd,
             "permissionMode": _strip_or_none(permission_mode) or "full-access",
             "model": _strip_or_none(model),
+            "systemPrompt": None if agent == "shell" else _strip_or_none(system_prompt),
             "status": "idle",
             "statusDetail": None,
             "sessionRef": None,

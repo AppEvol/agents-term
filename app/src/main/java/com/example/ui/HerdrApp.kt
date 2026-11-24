@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BugReport
@@ -45,6 +46,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -80,6 +82,7 @@ import com.example.data.captureWindowScreenshotBase64
 import com.example.data.formatModelChipLabel
 import com.example.data.parseModelSlashCommand
 import com.example.data.resolveAgentModelCatalog
+import com.example.data.resolveDefaultSystemPrompt
 import com.example.data.resolveModelIdFromQuery
 import com.example.data.resolvePreferredNewTabCwd
 import com.example.data.shareDebugBundleFile
@@ -161,9 +164,13 @@ fun HerdrApp(viewModel: MainViewModel) {
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showPermissionDialog by remember { mutableStateOf(false) }
+    var showSystemPromptDialog by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showQuickDebugDialog by remember { mutableStateOf(false) }
     var pendingScreenshotBase64 by remember { mutableStateOf<String?>(null) }
+    val defaultSystemPrompt = remember(state.serverInfo?.defaultSystemPrompt) {
+        resolveDefaultSystemPrompt(state.serverInfo)
+    }
 
     fun openModelPickerForActiveTab() {
         val current = state.activeTab ?: return
@@ -211,7 +218,9 @@ fun HerdrApp(viewModel: MainViewModel) {
                 onSelectTab = { viewModel.selectTab(it) },
                 onRenameTab = { showRenameDialog = true },
                 onChangePermission = { showPermissionDialog = true },
+                onChangeSystemPrompt = { showSystemPromptDialog = true },
                 onChangeModel = { openModelPickerForActiveTab() },
+                defaultSystemPrompt = defaultSystemPrompt,
                 onDeleteTab = { viewModel.deleteTab(it) },
                 onOpenSettings = { viewModel.openConnectionSettings() },
                 onOpenAppSettings = { viewModel.openAppSettings() },
@@ -322,16 +331,18 @@ fun HerdrApp(viewModel: MainViewModel) {
                 activeTabCwd = state.activeTab?.cwd,
                 homeCwd = state.serverInfo?.defaultCwd,
             ),
+            defaultSystemPrompt = defaultSystemPrompt,
             onLoadInitialDirectories = { path -> viewModel.loadInitialDirectories(path) },
             onLoadDirectories = { path -> viewModel.loadDirectories(path) },
             onDismiss = { showNewTabSheet = false },
-            onCreate = { agent, cwd, permMode, title, model ->
+            onCreate = { agent, cwd, permMode, title, model, systemPrompt ->
                 viewModel.createTab(
                     agent = agent,
                     cwd = cwd,
                     permissionMode = permMode,
                     title = title,
                     model = model,
+                    systemPrompt = systemPrompt,
                     onCreated = { showNewTabSheet = false },
                 )
             },
@@ -438,6 +449,102 @@ fun HerdrApp(viewModel: MainViewModel) {
             confirmButton = {
                 TextButton(onClick = { showPermissionDialog = false }) {
                     Text(stringResource(R.string.action_close))
+                }
+            },
+        )
+    }
+
+    if (showSystemPromptDialog && state.activeTab != null && state.activeTab!!.agent != "shell") {
+        val current = state.activeTab!!
+        var includePrompt by remember(current.id, current.systemPrompt) {
+            mutableStateOf(!current.systemPrompt.isNullOrBlank())
+        }
+        var promptInput by remember(current.id, current.systemPrompt) {
+            mutableStateOf(current.systemPrompt.orEmpty())
+        }
+        AlertDialog(
+            onDismissRequest = { showSystemPromptDialog = false },
+            title = { Text(stringResource(R.string.dialog_system_prompt_title)) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.dialog_system_prompt_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.dialog_system_prompt_include_label),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Switch(
+                            checked = includePrompt,
+                            onCheckedChange = { checked ->
+                                includePrompt = checked
+                                if (checked && promptInput.isBlank()) {
+                                    promptInput = defaultSystemPrompt
+                                }
+                            },
+                            modifier = Modifier.testTag("edit_tab_system_prompt_switch"),
+                        )
+                    }
+                    if (includePrompt) {
+                        OutlinedTextField(
+                            value = promptInput,
+                            onValueChange = { promptInput = it },
+                            placeholder = {
+                                Text(stringResource(R.string.new_tab_system_prompt_placeholder))
+                            },
+                            minLines = 4,
+                            maxLines = 8,
+                            shape = RoundedCornerShape(12.dp),
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("edit_tab_system_prompt_input"),
+                        )
+                        if (promptInput.trim() != defaultSystemPrompt.trim()) {
+                            TextButton(
+                                onClick = { promptInput = defaultSystemPrompt },
+                                modifier = Modifier.testTag("edit_tab_system_prompt_reset"),
+                            ) {
+                                Text(stringResource(R.string.new_tab_system_prompt_reset))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val effective = if (includePrompt) promptInput.trim() else ""
+                        showSystemPromptDialog = false
+                        viewModel.updateTabSystemPrompt(current.id, effective) {
+                            scope.launch {
+                                snackbarHostState.showSnackbar(
+                                    if (effective.isEmpty()) "System prompt cleared" else "System prompt updated"
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("edit_tab_system_prompt_save"),
+                ) {
+                    Text(stringResource(R.string.action_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSystemPromptDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
                 }
             },
         )
@@ -560,7 +667,9 @@ private fun WorkspaceScaffold(
     onSelectTab: (String) -> Unit,
     onRenameTab: () -> Unit,
     onChangePermission: () -> Unit,
+    onChangeSystemPrompt: () -> Unit,
     onChangeModel: () -> Unit,
+    defaultSystemPrompt: String,
     onDeleteTab: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAppSettings: () -> Unit,
@@ -702,6 +811,19 @@ private fun WorkspaceScaffold(
                                                 onToggleOverflow(false)
                                                 onChangePermission()
                                             },
+                                        )
+                                        val systemPromptStatus = when {
+                                            activeTab.systemPrompt.isNullOrBlank() -> "Empty"
+                                            activeTab.systemPrompt.trim() == defaultSystemPrompt.trim() -> "Default"
+                                            else -> "Custom"
+                                        }
+                                        DropdownMenuItem(
+                                            text = { Text("System prompt ($systemPromptStatus)") },
+                                            onClick = {
+                                                onToggleOverflow(false)
+                                                onChangeSystemPrompt()
+                                            },
+                                            modifier = Modifier.testTag("menu_system_prompt"),
                                         )
                                     }
                                     DropdownMenuItem(

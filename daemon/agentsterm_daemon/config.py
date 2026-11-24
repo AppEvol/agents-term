@@ -24,6 +24,26 @@ _tailscale_cache: Dict[str, Any] = {"at": 0.0, "ip": None}
 _commit_cache: Dict[str, Optional[str]] = {}
 
 
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def live_debugging_doc_path() -> Path:
+    return repo_root() / "docs" / "live-debugging.md"
+
+
+def default_system_prompt() -> str:
+    """Default system prompt offered for new coding-agent tabs."""
+    doc_path = live_debugging_doc_path()
+    return (
+        "You are responding inside AgentsTerm, a mobile app terminal/chat view on a phone or tablet. "
+        "Keep formatting mobile-friendly (concise paragraphs, short lists, avoid overly wide tables or ASCII art).\n\n"
+        "Live app debugging: when troubleshooting AgentsTerm itself, you can inspect the live phone app "
+        "(state, logs, logcat, crash traces, screenshots) via `app_state_cli` or check uploaded dumps in "
+        f"`~/.config/herdr-mobile/debug-dumps/latest/`. For commands, prerequisites, and rules, read `{doc_path}`."
+    )
+
+
 def daemon_commit() -> Optional[str]:
     """Git commit of the checkout this daemon process was started from (resolved once).
 
@@ -32,7 +52,7 @@ def daemon_commit() -> Optional[str]:
     HEAD to decide whether a restart is needed, and to verify the restart took effect.
     """
     if "value" not in _commit_cache:
-        _commit_cache["value"] = _read_git_commit(Path(__file__).resolve().parent.parent.parent)
+        _commit_cache["value"] = _read_git_commit(repo_root())
     return _commit_cache["value"]
 
 
@@ -226,5 +246,6 @@ def build_server_info(bind_host: Optional[str] = None) -> Dict[str, Any]:
         "hostname": socket.gethostname(),
         "tailscaleIp": tailscale_ip,
         "defaultCwd": str(home_dir()),
+        "defaultSystemPrompt": default_system_prompt(),
         "agents": detect_available_agents(),
     }

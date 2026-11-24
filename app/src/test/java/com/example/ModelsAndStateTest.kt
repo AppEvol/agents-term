@@ -5,12 +5,15 @@ import com.example.data.AssistantDisplayBlock
 import com.example.data.AvailableAgentInfo
 import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
+import com.example.data.CreateTabRequest
+import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
 import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DebugRecorder
 import com.example.data.FsListResponse
 import com.example.data.MessageSegment
 import com.example.data.ModelSlashCommand
+import com.example.data.ServerInfo
 import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
@@ -36,6 +39,7 @@ import com.example.data.parseSshSetupInput
 import com.example.data.parseSshSetupUri
 import com.example.data.reduceWorkspaceEvent
 import com.example.data.resolveAgentModelCatalog
+import com.example.data.resolveDefaultSystemPrompt
 import com.example.data.resolveModelIdFromQuery
 import com.example.data.resolvePreferredNewTabCwd
 import com.example.data.sanitizeDebugText
@@ -730,5 +734,51 @@ class ModelsAndStateTest {
             """{"id":"m2","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[],"segments":[{"type":"text","text":"Hi"}]}"""
         )
         assertEquals(listOf(MessageSegment(type = "text", text = "Hi")), withSegments.segments)
+    }
+
+    @Test
+    fun systemPromptDefaultsResolutionAndSerializationWork() {
+        assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("mobile", ignoreCase = true))
+        assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("app_state_cli"))
+        assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("docs/live-debugging.md"))
+
+        assertEquals(DEFAULT_AGENT_SYSTEM_PROMPT, resolveDefaultSystemPrompt(null))
+        assertEquals(DEFAULT_AGENT_SYSTEM_PROMPT, resolveDefaultSystemPrompt(ServerInfo(defaultSystemPrompt = "   ")))
+        assertEquals(
+            "Daemon custom default",
+            resolveDefaultSystemPrompt(ServerInfo(defaultSystemPrompt = "  Daemon custom default  ")),
+        )
+
+        val snapshotWithPrompt = decodeHerdrJson<WsServerEnvelope>(
+            """
+            {
+              "type": "snapshot",
+              "server": {
+                "version": "0.2.0",
+                "hostname": "vm",
+                "defaultSystemPrompt": "From daemon"
+              },
+              "tabs": [
+                {
+                  "id": "tab_1",
+                  "title": "Agy",
+                  "agent": "agy",
+                  "cwd": "/home/ned",
+                  "systemPrompt": "Per-tab prompt"
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+        assertEquals("From daemon", snapshotWithPrompt.server?.defaultSystemPrompt)
+        assertEquals("Per-tab prompt", snapshotWithPrompt.tabs?.single()?.systemPrompt)
+
+        val createEmptyJson = encodeHerdrJson(CreateTabRequest(agent = "claude", systemPrompt = ""))
+        assertTrue(createEmptyJson.contains("\"systemPrompt\":\"\""))
+
+        val clearJson = encodeHerdrJson(UpdateTabRequest(systemPrompt = ""))
+        assertTrue(clearJson.contains("\"systemPrompt\":\"\""))
+        val titleOnlyJson = encodeHerdrJson(UpdateTabRequest(title = "Renamed"))
+        assertFalse(titleOnlyJson.contains("\"systemPrompt\""))
     }
 }
