@@ -5,6 +5,8 @@ import com.example.data.AgentModelsResponse
 import com.example.data.AvailableAgentInfo
 import com.example.data.ChatMessage
 import com.example.data.CreateTabRequest
+import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
+import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DeniedAction
@@ -113,6 +115,8 @@ class FakeAgentsTermDaemon(
         hostname = hostname,
         tailscaleIp = "127.0.0.1",
         defaultCwd = "/home/ci",
+        defaultSystemPrompt = DEFAULT_AGENT_SYSTEM_PROMPT,
+        defaultSystemPromptFullAccess = DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT,
         agents = listOf(
             AvailableAgentInfo(
                 type = "agy",
@@ -158,6 +162,10 @@ class FakeAgentsTermDaemon(
 
     fun tabModel(tabId: String): String? = synchronized(lock) {
         tabs.firstOrNull { it.id == tabId }?.model
+    }
+
+    fun tabSystemPrompt(tabId: String): String? = synchronized(lock) {
+        tabs.firstOrNull { it.id == tabId }?.systemPrompt
     }
 
     private val fsListings = mutableMapOf(
@@ -316,6 +324,7 @@ class FakeAgentsTermDaemon(
                 cwd = cwd,
                 permissionMode = req.permissionMode,
                 model = req.model?.trim()?.ifEmpty { null },
+                systemPrompt = if (req.agent == "shell") null else req.systemPrompt?.trim()?.ifEmpty { null },
                 status = "idle",
                 createdAt = now,
                 updatedAt = now,
@@ -413,11 +422,17 @@ class FakeAgentsTermDaemon(
             } else {
                 cur.model
             }
+            val nextSystemPrompt = if (req.systemPrompt != null) {
+                if (cur.agent == "shell") null else req.systemPrompt.trim().ifEmpty { null }
+            } else {
+                cur.systemPrompt
+            }
             val next = cur.copy(
                 title = req.title ?: cur.title,
                 cwd = req.cwd ?: cur.cwd,
                 permissionMode = req.permissionMode ?: cur.permissionMode,
                 model = nextModel,
+                systemPrompt = nextSystemPrompt,
                 updatedAt = System.currentTimeMillis(),
             )
             tabs[idx] = next

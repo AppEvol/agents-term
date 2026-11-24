@@ -173,12 +173,50 @@ fun formatModelChipLabel(
     return availableModels.firstOrNull { it.id == trimmed }?.name ?: trimmed
 }
 
+const val DEFAULT_LIVE_DEBUGGING_DOC_PATH =
+    "~/.local/share/agentsterm/agents-term/docs/live-debugging.md"
+
+const val FULL_ACCESS_SYSTEM_PROMPT_ADDENDUM =
+    "When the user asks you to accomplish a task in this tab, once the task is complete " +
+        "clearly let them know it is finished and that they can close this tab."
+
+const val DEFAULT_AGENT_SYSTEM_PROMPT =
+    "You are responding inside AgentsTerm, a mobile app terminal/chat view on a phone or tablet. " +
+        "Keep formatting mobile-friendly (concise paragraphs, short lists, avoid overly wide tables or ASCII art).\n\n" +
+        "Live app debugging: when troubleshooting AgentsTerm itself, you can inspect the live phone app " +
+        "(state, logs, logcat, crash traces, screenshots) via `app_state_cli` or check uploaded dumps in " +
+        "`~/.config/herdr-mobile/debug-dumps/latest/`. For commands, prerequisites, and rules, read " +
+        "`$DEFAULT_LIVE_DEBUGGING_DOC_PATH`."
+
+const val DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT =
+    "$DEFAULT_AGENT_SYSTEM_PROMPT\n\n$FULL_ACCESS_SYSTEM_PROMPT_ADDENDUM"
+
+fun resolveDefaultSystemPrompt(
+    serverInfo: ServerInfo?,
+    permissionMode: String = "default",
+): String {
+    if (permissionMode == "full-access") {
+        serverInfo?.defaultSystemPromptFullAccess?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        val base = serverInfo?.defaultSystemPrompt?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
+        return if (base.contains(FULL_ACCESS_SYSTEM_PROMPT_ADDENDUM)) {
+            base
+        } else {
+            "$base\n\n$FULL_ACCESS_SYSTEM_PROMPT_ADDENDUM"
+        }
+    }
+    return serverInfo?.defaultSystemPrompt?.trim()?.takeIf { it.isNotEmpty() }
+        ?: DEFAULT_AGENT_SYSTEM_PROMPT
+}
+
 @JsonClass(generateAdapter = true)
 data class ServerInfo(
     val version: String = "",
     val hostname: String = "",
     val tailscaleIp: String? = null,
     val defaultCwd: String = "/home",
+    val defaultSystemPrompt: String? = null,
+    val defaultSystemPromptFullAccess: String? = null,
     val agents: List<AvailableAgentInfo> = emptyList(),
 )
 
@@ -196,6 +234,7 @@ data class TabRecord(
     val cwd: String,
     val permissionMode: String = "full-access",
     val model: String? = null,
+    val systemPrompt: String? = null,
     val status: String = "idle",
     val statusDetail: String? = null,
     val sessionRef: AgentSessionRef? = null,
@@ -325,6 +364,7 @@ data class CreateTabRequest(
     val cwd: String? = null,
     val permissionMode: String = "full-access",
     val model: String? = null,
+    val systemPrompt: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -333,6 +373,7 @@ data class UpdateTabRequest(
     val cwd: String? = null,
     val permissionMode: String? = null,
     val model: String? = null,
+    val systemPrompt: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

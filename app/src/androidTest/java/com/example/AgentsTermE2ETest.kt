@@ -29,6 +29,7 @@ import com.example.data.ChatMessage
 import com.example.data.TabRecord
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -860,5 +861,99 @@ class AgentsTermE2ETest {
 
         composeRule.onNodeWithText("Run unit tests").performClick()
         waitForText("28 passed")
+    }
+
+    @Test
+    fun systemPromptDefaultsOnNewTabCanBeEditedOrLeftEmptyEndToEnd() {
+        val activeDaemon = startDaemon()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForText("Connected to ci-test-vm")
+
+        // 1) Default new coding-agent tab includes the default mobile + live-debugging system prompt
+        composeRule.onNodeWithTag("empty_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        composeRule.onNodeWithTag("agent_option_claude").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Default Prompt Tab")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+
+        waitForText("Default Prompt Tab")
+        val defaultSaved = activeDaemon.tabSystemPrompt("tab_1")
+        assertTrue(
+            "Expected default full-access system prompt to mention docs/live-debugging.md and closing the tab, got: $defaultSaved",
+            defaultSaved != null &&
+                defaultSaved.contains("docs/live-debugging.md") &&
+                defaultSaved.contains("close this tab", ignoreCase = true),
+        )
+
+        // 2) Edit the tab's system prompt via overflow menu -> custom, then clear to empty
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        waitForTag("menu_system_prompt")
+        composeRule.onNodeWithTag("menu_system_prompt").assertTextContains("Default", substring = true)
+        composeRule.onNodeWithTag("menu_system_prompt").performClick()
+        waitForTag("edit_tab_system_prompt_input")
+        composeRule.onNodeWithTag("edit_tab_system_prompt_input")
+            .performTextReplacement("Respond in short bullet points only.")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("edit_tab_system_prompt_save").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            activeDaemon.tabSystemPrompt("tab_1") == "Respond in short bullet points only."
+        }
+
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        waitForTag("menu_system_prompt")
+        composeRule.onNodeWithTag("menu_system_prompt").assertTextContains("Custom", substring = true)
+        composeRule.onNodeWithTag("menu_system_prompt").performClick()
+        waitForTag("edit_tab_system_prompt_switch")
+        composeRule.onNodeWithTag("edit_tab_system_prompt_switch").performClick()
+        composeRule.onNodeWithTag("edit_tab_system_prompt_save").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            activeDaemon.tabSystemPrompt("tab_1") == null
+        }
+
+        // 3) Create a Plan Only tab and verify default prompt omits the full-access close-tab line
+        composeRule.onNodeWithTag("top_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        composeRule.onNodeWithTag("agent_option_claude").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_permission_plan").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Plan Prompt Tab")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+
+        waitForText("Plan Prompt Tab")
+        val planSaved = activeDaemon.tabSystemPrompt("tab_2")
+        assertTrue(
+            "Expected plan-mode default prompt to keep docs/live-debugging.md without close-tab notice, got: $planSaved",
+            planSaved != null &&
+                planSaved.contains("docs/live-debugging.md") &&
+                !planSaved.contains("close this tab", ignoreCase = true),
+        )
+
+        // 4) Create a coding-agent tab with system prompt toggled OFF (empty)
+        composeRule.onNodeWithTag("top_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        composeRule.onNodeWithTag("agent_option_agy").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_system_prompt_switch").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Empty Prompt Tab")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+
+        waitForText("Empty Prompt Tab")
+        assertNull(activeDaemon.tabSystemPrompt("tab_3"))
+
+        // 5) Shell tab does not show system prompt controls
+        composeRule.onNodeWithTag("top_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        composeRule.onNodeWithTag("agent_option_shell").performScrollTo().performClick()
+        assertTrue(
+            "Shell tab should not show system prompt toggle",
+            composeRule.onAllNodesWithTag("new_tab_system_prompt_switch").fetchSemanticsNodes().isEmpty(),
+        )
     }
 }

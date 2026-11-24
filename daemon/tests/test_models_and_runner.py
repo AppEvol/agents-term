@@ -8,6 +8,7 @@ from pathlib import Path
 
 from helpers import FIXTURES_DIR, TempHomeTestCase, run_async
 
+from agentsterm_daemon.config import default_system_prompt, live_debugging_doc_path
 from agentsterm_daemon.models import (
     clear_models_cache_for_tests,
     parse_agy_models_output,
@@ -462,6 +463,86 @@ class RunnerTest(TempHomeTestCase):
         reloaded = StateStore()
         self.assertEqual(reloaded.get_tab(tab["id"])["status"], "error")
         self.assertEqual(len(reloaded.get_messages(tab["id"])), 2)
+
+    def test_default_system_prompt_references_embedded_live_debugging_doc(self):
+        doc_path = live_debugging_doc_path()
+        self.assertTrue(doc_path.is_file(), f"Missing live debugging doc: {doc_path}")
+        prompt = default_system_prompt("default")
+        self.assertIn("mobile", prompt.lower())
+        self.assertIn("app_state_cli", prompt)
+        self.assertIn(str(doc_path), prompt)
+        self.assertNotIn("close this tab", prompt.lower())
+
+        full_access_prompt = default_system_prompt("full-access")
+        self.assertTrue(full_access_prompt.startswith(prompt))
+        self.assertIn("close this tab", full_access_prompt.lower())
+
+    def test_system_prompt_passed_to_claude_codex_agy_and_supports_empty(self):
+        import tomllib
+
+        # 1) Claude: --append-system-prompt when set, omitted when empty
+        claude_args = self.tmp / "claude_args.log"
+        self.fake_binary("claude", self.emit_lines_script([
+            {"type": "system", "session_id": "cl-1"},
+            {"type": "result", "result": "ok"},
+        ], claude_args))
+        store, runner = self.make()
+        cl_with = store.create_tab("claude", cwd=str(self.tmp), system_prompt="Be concise for mobile.")
+        cl_empty = store.create_tab("claude", cwd=str(self.tmp), system_prompt="   ")
+        self.assertIsNone(cl_empty["systemPrompt"])
+        self.run_turn(runner, store, cl_with, "hi")
+        self.run_turn(runner, store, cl_empty, "hi")
+        c1, c2 = [json.loads(line) for line in claude_args.read_text().splitlines()]
+        self.assertEqual(c1[c1.index("--append-system-prompt") + 1], "Be concise for mobile.")
+        self.assertNotIn("--append-system-prompt", c2)
+
+        # 2) Codex: -c developer_instructions=<toml string> on exec & resume, omitted when empty
+        codex_args = self.tmp / "codex_args.log"
+        self.fake_binary("codex", self.emit_lines_script([
+            {"type": "thread.started", "thread_id": "th-sp"},
+            {"type": "item.completed", "item": {"id": "m1", "type": "agent_message", "text": "ok"}},
+        ], codex_args))
+        tricky = 'Mobile view.\nUse "app_state_cli" in C:\\tmp.'
+        cx_with = store.create_tab("codex", cwd=str(self.tmp), system_prompt=tricky)
+        cx_empty = store.create_tab("codex", cwd=str(self.tmp), system_prompt="")
+        self.run_turn(runner, store, cx_with, "turn 1")
+        self.run_turn(runner, store, store.get_tab(cx_with["id"]), "turn 2")
+        self.run_turn(runner, store, cx_empty, "turn 3")
+        x1, x2, x3 = [json.loads(line) for line in codex_args.read_text().splitlines()]
+        for argv in (x1, x2):
+            cfg_val = argv[argv.index("-c") + 1]
+            self.assertEqual(tomllib.loads(cfg_val)["developer_instructions"], tricky)
+        self.assertNotIn("-c", x3)
+
+        # 3) Agy: injected once on turn 1, omitted on turn 2, re-injected once when updated, clean user message
+        agy_args = self.tmp / "agy_args.log"
+        self.fake_binary("agy", self.emit_lines_script([
+            {"event": "init", "conversation_id": "conv-sp"},
+            {"event": "result", "result": {"conversation_id": "conv-sp", "status": "SUCCESS", "response": "ok"}},
+        ], agy_args))
+        agy_tab = store.create_tab("agy", cwd=str(self.tmp), system_prompt="Initial mobile prompt.")
+        self.run_turn(runner, store, agy_tab, "First question")
+        stored_user_msg = store.get_messages(agy_tab["id"])[0]
+        self.assertEqual(stored_user_msg["text"], "First question")
+        self.run_turn(runner, store, store.get_tab(agy_tab["id"]), "Second question")
+        store.update_tab(agy_tab["id"], {"systemPrompt": "Updated mobile prompt."})
+        runner.mark_system_prompt_updated(agy_tab["id"])
+        self.run_turn(runner, store, store.get_tab(agy_tab["id"]), "Third question")
+        self.run_turn(runner, store, store.get_tab(agy_tab["id"]), "Fourth question")
+        agy_empty = store.create_tab("agy", cwd=str(self.tmp), system_prompt=None)
+        self.run_turn(runner, store, agy_empty, "Plain prompt")
+        a1, a2, a3, a4, a5 = [json.loads(line) for line in agy_args.read_text().splitlines()]
+        self.assertIn("<system_instructions>\nInitial mobile prompt.\n</system_instructions>", a1[-1])
+        self.assertTrue(a1[-1].endswith("First question"))
+        self.assertEqual(a2[-1], "--print=Second question")
+        self.assertIn("<system_instructions>\nUpdated mobile prompt.\n</system_instructions>", a3[-1])
+        self.assertTrue(a3[-1].endswith("Third question"))
+        self.assertEqual(a4[-1], "--print=Fourth question")
+        self.assertEqual(a5[-1], "--print=Plain prompt")
+
+        # 4) Shell tabs never store a systemPrompt
+        sh = store.create_tab("shell", cwd=str(self.tmp), system_prompt="Should be ignored")
+        self.assertIsNone(sh["systemPrompt"])
 
 
 if __name__ == "__main__":

@@ -133,6 +133,9 @@ class DaemonE2ETest(unittest.TestCase):
         self.assertEqual(d.api("GET", "/api/tabs", token="wrong")[0], 401)
         status, info = d.api("GET", "/api/info")
         self.assertEqual((status, info["version"]), (200, "0.2.0"))
+        self.assertIn("docs/live-debugging.md", info["defaultSystemPrompt"])
+        self.assertNotIn("close this tab", info["defaultSystemPrompt"].lower())
+        self.assertIn("close this tab", info["defaultSystemPromptFullAccess"].lower())
         self.assertEqual({a["type"] for a in info["agents"]}, {"agy", "claude", "codex", "shell"})
         self.assertEqual(d.api("POST", "/api/tabs", {})[1], {"error": "Missing required field: agent"})
 
@@ -176,6 +179,35 @@ class DaemonE2ETest(unittest.TestCase):
         self.assertEqual(d.api("DELETE", f"/api/tabs/{tab['id']}")[1], {"ok": True})
         self.assertEqual(d.api("GET", f"/api/tabs/{tab['id']}/messages")[0], 404)
         self.assertEqual(d.api("GET", "/api/nope")[1], {"error": "Unknown endpoint GET /api/nope"})
+
+    def test_tab_system_prompt_create_patch_and_clear_via_rest(self):
+        d = self.daemon
+        status, body = d.api("POST", "/api/tabs", {
+            "agent": "claude",
+            "cwd": str(self.home),
+            "systemPrompt": "  Stay concise for mobile.  ",
+        })
+        self.assertEqual(status, 200)
+        tab = body["tab"]
+        self.assertEqual(tab["systemPrompt"], "Stay concise for mobile.")
+
+        # Title-only PATCH preserves systemPrompt
+        status, body = d.api("PATCH", f"/api/tabs/{tab['id']}", {"title": "Mobile Claude"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["tab"]["title"], "Mobile Claude")
+        self.assertEqual(body["tab"]["systemPrompt"], "Stay concise for mobile.")
+
+        # Explicit PATCH updates systemPrompt; empty string clears it
+        status, body = d.api("PATCH", f"/api/tabs/{tab['id']}", {"systemPrompt": "Custom prompt"})
+        self.assertEqual((status, body["tab"]["systemPrompt"]), (200, "Custom prompt"))
+        status, body = d.api("PATCH", f"/api/tabs/{tab['id']}", {"systemPrompt": ""})
+        self.assertEqual((status, body["tab"]["systemPrompt"]), (200, None))
+
+        # Creating a tab with empty systemPrompt or shell tab leaves it None
+        status, body = d.api("POST", "/api/tabs", {"agent": "agy", "systemPrompt": ""})
+        self.assertEqual((status, body["tab"]["systemPrompt"]), (200, None))
+        status, body = d.api("POST", "/api/tabs", {"agent": "shell", "systemPrompt": "ignored"})
+        self.assertEqual((status, body["tab"]["systemPrompt"]), (200, None))
 
     def test_claude_turn_streams_separated_text_blocks_end_to_end(self):
         """Real captured claude stream through a real daemon: WS deltas == stored message text."""

@@ -581,7 +581,8 @@ class HerdrRepository(
         debugRecorder?.record(
             "ui",
             "create_tab",
-            "Creating tab agent=${request.agent} cwd=${request.cwd} mode=${request.permissionMode}",
+            "Creating tab agent=${request.agent} cwd=${request.cwd} mode=${request.permissionMode} " +
+                "hasSystemPrompt=${!request.systemPrompt.isNullOrBlank()}",
         )
         return runCatching {
             val tab = api.createTab(cfg, request)
@@ -636,6 +637,16 @@ class HerdrRepository(
             "Updating tab=$tabId model=${normalized.ifEmpty { "(default)" }}",
         )
         return updateTab(tabId, UpdateTabRequest(model = normalized))
+    }
+
+    suspend fun updateTabSystemPrompt(tabId: String, systemPrompt: String?): Result<TabRecord> {
+        val normalized = systemPrompt?.trim().orEmpty()
+        debugRecorder?.record(
+            "ui",
+            "update_tab_system_prompt",
+            "Updating tab=$tabId systemPrompt=${if (normalized.isEmpty()) "(empty)" else "len=${normalized.length}"}",
+        )
+        return updateTab(tabId, UpdateTabRequest(systemPrompt = normalized))
     }
 
     suspend fun refreshAgentModels(

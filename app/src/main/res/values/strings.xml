@@ -151,4 +151,15 @@
     <string name="model_picker_no_matches">No models match \"%1$s\"</string>
     <string name="model_picker_custom_label">Custom model ID or alias</string>
     <string name="model_picker_custom_placeholder">e.g. opus, gemini-4-neon-high, gpt-6.2-sol</string>
+    <string name="new_tab_system_prompt_label">System Prompt</string>
+    <string name="new_tab_system_prompt_default_hint">Default mobile &amp; live-debugging prompt</string>
+    <string name="new_tab_system_prompt_custom_hint">Custom system prompt</string>
+    <string name="new_tab_system_prompt_empty_hint">Empty — no system prompt sent</string>
+    <string name="new_tab_system_prompt_edit">Edit prompt</string>
+    <string name="new_tab_system_prompt_hide">Hide editor</string>
+    <string name="new_tab_system_prompt_reset">Reset default</string>
+    <string name="new_tab_system_prompt_placeholder">Instructions passed to the agent harness…</string>
+    <string name="dialog_system_prompt_title">Tab System Prompt</string>
+    <string name="dialog_system_prompt_include_label">Include system prompt</string>
+    <string name="dialog_system_prompt_note">Applies to this tab\'s agent harness on subsequent turns. Turn off or leave empty to send no custom system prompt.</string>
 </resources>

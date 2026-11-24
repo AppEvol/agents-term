@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -22,6 +23,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.AssistChip
@@ -34,7 +37,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +57,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.AvailableAgentInfo
+import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
+import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.FsListResponse
 import com.example.data.resolveAgentModelCatalog
 import com.example.ui.theme.MonoFontFamily
@@ -62,9 +69,19 @@ import kotlinx.coroutines.launch
 fun NewTabSheet(
     agents: List<AvailableAgentInfo>,
     defaultCwd: String,
+    defaultSystemPromptForMode: (String) -> String = { mode ->
+        if (mode == "full-access") DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT else DEFAULT_AGENT_SYSTEM_PROMPT
+    },
     onLoadDirectories: suspend (String?) -> Result<FsListResponse>,
     onDismiss: () -> Unit,
-    onCreate: (agent: String, cwd: String, permissionMode: String, title: String, model: String?) -> Unit,
+    onCreate: (
+        agent: String,
+        cwd: String,
+        permissionMode: String,
+        title: String,
+        model: String?,
+        systemPrompt: String?,
+    ) -> Unit,
     onLoadInitialDirectories: (suspend (String?) -> Result<FsListResponse>)? = null,
 ) {
     val effectiveAgents = remember(agents) {
@@ -95,6 +112,9 @@ fun NewTabSheet(
         var cwd by remember { mutableStateOf(initialCwd) }
         var permissionMode by remember { mutableStateOf("full-access") }
         var customTitle by remember { mutableStateOf("") }
+        var includeSystemPrompt by remember { mutableStateOf(true) }
+        var systemPromptText by remember { mutableStateOf(defaultSystemPromptForMode("full-access")) }
+        var showSystemPromptEditor by remember { mutableStateOf(false) }
         var fsListing by remember { mutableStateOf<FsListResponse?>(null) }
         var fsError by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
@@ -345,9 +365,129 @@ fun NewTabSheet(
                         for ((value, label) in modes) {
                             FilterChip(
                                 selected = permissionMode == value,
-                                onClick = { permissionMode = value },
+                                onClick = {
+                                    if (permissionMode != value) {
+                                        val prevDefault = defaultSystemPromptForMode(permissionMode).trim()
+                                        permissionMode = value
+                                        if (systemPromptText.trim() == prevDefault) {
+                                            systemPromptText = defaultSystemPromptForMode(value)
+                                        }
+                                    }
+                                },
                                 label = { Text(label) },
+                                modifier = Modifier.testTag("new_tab_permission_$value"),
                             )
+                        }
+                    }
+                }
+            }
+
+            // System prompt (coding agents only)
+            if (selectedAgent != "shell") {
+                val activeDefaultSystemPrompt = defaultSystemPromptForMode(permissionMode)
+                val trimmedPrompt = systemPromptText.trim()
+                val isEmptyEffective = !includeSystemPrompt || trimmedPrompt.isEmpty()
+                val isDefaultPrompt = includeSystemPrompt && trimmedPrompt == activeDefaultSystemPrompt.trim()
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.new_tab_system_prompt_label),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = when {
+                                        isEmptyEffective -> stringResource(R.string.new_tab_system_prompt_empty_hint)
+                                        isDefaultPrompt -> stringResource(R.string.new_tab_system_prompt_default_hint)
+                                        else -> stringResource(R.string.new_tab_system_prompt_custom_hint)
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = includeSystemPrompt,
+                                onCheckedChange = { checked ->
+                                    includeSystemPrompt = checked
+                                    if (checked && systemPromptText.isBlank()) {
+                                        systemPromptText = activeDefaultSystemPrompt
+                                    }
+                                    if (!checked) {
+                                        showSystemPromptEditor = false
+                                    }
+                                },
+                                modifier = Modifier.testTag("new_tab_system_prompt_switch"),
+                            )
+                        }
+
+                        if (includeSystemPrompt) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                TextButton(
+                                    onClick = { showSystemPromptEditor = !showSystemPromptEditor },
+                                    modifier = Modifier.testTag("new_tab_system_prompt_toggle_editor"),
+                                ) {
+                                    Text(
+                                        text = if (showSystemPromptEditor) {
+                                            stringResource(R.string.new_tab_system_prompt_hide)
+                                        } else {
+                                            stringResource(R.string.new_tab_system_prompt_edit)
+                                        },
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = if (showSystemPromptEditor) {
+                                            Icons.Rounded.ExpandLess
+                                        } else {
+                                            Icons.Rounded.ExpandMore
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                                if (!isDefaultPrompt) {
+                                    TextButton(
+                                        onClick = { systemPromptText = activeDefaultSystemPrompt },
+                                        modifier = Modifier.testTag("new_tab_system_prompt_reset"),
+                                    ) {
+                                        Text(stringResource(R.string.new_tab_system_prompt_reset))
+                                    }
+                                }
+                            }
+
+                            AnimatedVisibility(visible = showSystemPromptEditor) {
+                                OutlinedTextField(
+                                    value = systemPromptText,
+                                    onValueChange = { systemPromptText = it },
+                                    placeholder = {
+                                        Text(stringResource(R.string.new_tab_system_prompt_placeholder))
+                                    },
+                                    minLines = 3,
+                                    maxLines = 7,
+                                    shape = RoundedCornerShape(12.dp),
+                                    textStyle = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("new_tab_system_prompt_input"),
+                                )
+                            }
                         }
                     }
                 }
@@ -367,12 +507,20 @@ fun NewTabSheet(
 
             Button(
                 onClick = {
+                    val effectiveSystemPrompt = if (selectedAgent == "shell") {
+                        null
+                    } else if (includeSystemPrompt) {
+                        systemPromptText.trim()
+                    } else {
+                        ""
+                    }
                     onCreate(
                         selectedAgent,
                         cwd.trim(),
                         permissionMode,
                         customTitle.trim(),
                         if (selectedAgent == "shell") null else selectedModel,
+                        effectiveSystemPrompt,
                     )
                 },
                 modifier = Modifier
