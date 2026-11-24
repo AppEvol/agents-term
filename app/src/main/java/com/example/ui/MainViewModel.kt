@@ -518,6 +518,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> {
+        return repo.loadInitialDirectories(preferredPath)
+    }
+
     suspend fun loadDirectories(path: String?): Result<FsListResponse> {
         return repo.listDirectories(path)
     }

@@ -21,6 +21,7 @@ data class WorkspaceState(
     val serverInfo: ServerInfo? = null,
     val tabs: List<TabRecord> = emptyList(),
     val selectedTabId: String? = null,
+    val lastCwd: String? = null,
     val messagesByTab: Map<String, List<ChatMessage>> = emptyMap(),
     val loadingTabIds: Set<String> = emptySet(),
     val bannerMessage: String? = null,
@@ -162,6 +163,86 @@ fun reduceWorkspaceEvent(
     }
 }
 
+data class ResolvedDirectoryListing(
+    val listing: FsListResponse,
+    val fellBackToHome: Boolean,
+)
+
+/**
+ * Loads the preferred initial folder for a new agent tab, falling back to the VM user's home
+ * directory when the preferred folder has been deleted or is no longer a valid directory.
+ *
+ * Works with both daemons that expose `exists: false` / HTTP errors and older daemons that return
+ * HTTP 200 with an empty directory list for missing paths (verified via the parent directory).
+ */
+suspend fun resolveInitialDirectoryListing(
+    preferredPath: String?,
+    homeCwd: String?,
+    listDirectories: suspend (String?) -> Result<FsListResponse>,
+): Result<ResolvedDirectoryListing> {
+    val normalizedHome = homeCwd?.trim()?.takeIf { it.isNotEmpty() }?.let(::normalizeFsPath)
+    val candidate = preferredPath?.trim()?.takeIf { it.isNotEmpty() } ?: normalizedHome
+    val normalizedCandidate = candidate?.let(::normalizeFsPath)
+
+    suspend fun loadWithRetry(path: String?): Result<FsListResponse> {
+        var result = listDirectories(path)
+        if (result.isFailure) {
+            result = listDirectories(path)
+        }
+        return result
+    }
+
+    suspend fun loadHomeFallback(): Result<ResolvedDirectoryListing> {
+        return loadWithRetry(normalizedHome).map { homeListing ->
+            ResolvedDirectoryListing(listing = homeListing, fellBackToHome = true)
+        }
+    }
+
+    val initialResult = loadWithRetry(candidate)
+    if (initialResult.isFailure) {
+        if (normalizedCandidate != null && normalizedCandidate != normalizedHome) {
+            return loadHomeFallback()
+        }
+        return initialResult.map { ResolvedDirectoryListing(it, fellBackToHome = false) }
+    }
+
+    val listing = initialResult.getOrThrow()
+    val resolvedPath = normalizeFsPath(listing.path)
+    if (normalizedHome != null && resolvedPath == normalizedHome) {
+        return Result.success(ResolvedDirectoryListing(listing, fellBackToHome = false))
+    }
+
+    when (listing.exists) {
+        false -> return loadHomeFallback()
+        true -> return Result.success(ResolvedDirectoryListing(listing, fellBackToHome = false))
+        null -> Unit
+    }
+
+    if (listing.directories.isNotEmpty() || listing.parent == null) {
+        return Result.success(ResolvedDirectoryListing(listing, fellBackToHome = false))
+    }
+
+    val baseName = resolvedPath.substringAfterLast('/')
+    if (baseName.isEmpty() || baseName.startsWith(".")) {
+        // Daemons omit hidden entries from parent directory listings, so do not falsely treat
+        // a hidden directory as deleted when the daemon does not report `exists`.
+        return Result.success(ResolvedDirectoryListing(listing, fellBackToHome = false))
+    }
+
+    val parentResult = listDirectories(listing.parent)
+    if (parentResult.isSuccess) {
+        val parentListing = parentResult.getOrThrow()
+        val existsInParent = parentListing.directories.any { entry ->
+            normalizeFsPath(entry.path) == resolvedPath || entry.name == baseName
+        }
+        if (!existsInParent) {
+            return loadHomeFallback()
+        }
+    }
+
+    return Result.success(ResolvedDirectoryListing(listing, fellBackToHome = false))
+}
+
 class HerdrRepository(
     private val api: HerdrApiClient,
     private val settings: ConnectionSettings,
@@ -175,7 +256,12 @@ class HerdrRepository(
     private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
 
     private val _state = MutableStateFlow(
-        WorkspaceState(config = settings.loadConnection())
+        settings.loadConnection().let { cfg ->
+            WorkspaceState(
+                config = cfg,
+                lastCwd = settings.loadLastCwd(cfg.host),
+            )
+        }
     )
     val state: StateFlow<WorkspaceState> = _state.asStateFlow()
 
@@ -189,7 +275,12 @@ class HerdrRepository(
 
     fun initializeAutoConnect() {
         val cfg = settings.loadConnection()
-        _state.update { it.copy(config = cfg) }
+        _state.update {
+            it.copy(
+                config = cfg,
+                lastCwd = settings.loadLastCwd(cfg.host),
+            )
+        }
         if (cfg.isValid) {
             connect(cfg)
         }
@@ -199,10 +290,12 @@ class HerdrRepository(
         return runCatching {
             val info = api.getInfo(config)
             settings.saveConnection(config)
+            val savedLastCwd = settings.loadLastCwd(config.host)
             _state.update {
                 it.copy(
                     config = config,
                     serverInfo = info,
+                    lastCwd = savedLastCwd,
                     connectionError = null,
                 )
             }
@@ -283,6 +376,7 @@ class HerdrRepository(
             _state.update {
                 it.copy(
                     config = config,
+                    lastCwd = if (it.config.host == config.host) it.lastCwd else settings.loadLastCwd(config.host),
                     connectionState = ConnectionState.CONNECTING,
                     connectionError = null,
                 )
@@ -440,11 +534,16 @@ class HerdrRepository(
         return runCatching {
             val tab = api.createTab(cfg, request)
             settings.saveLastTabId(tab.id)
+            val resolvedCwd = tab.cwd.trim().takeIf { it.isNotEmpty() }
+            if (resolvedCwd != null) {
+                settings.saveLastCwd(cfg.host, resolvedCwd)
+            }
             _state.update { cur ->
                 val updated = if (cur.tabs.any { it.id == tab.id }) cur.tabs else cur.tabs + tab
                 cur.copy(
                     tabs = updated,
                     selectedTabId = tab.id,
+                    lastCwd = resolvedCwd ?: cur.lastCwd,
                     messagesByTab = cur.messagesByTab + (tab.id to emptyList()),
                 )
             }
@@ -458,8 +557,18 @@ class HerdrRepository(
         val cfg = _state.value.config
         return runCatching {
             val tab = api.updateTab(cfg, tabId, request)
+            val updatedLastCwd = if (!request.cwd.isNullOrBlank()) {
+                tab.cwd.trim().takeIf { it.isNotEmpty() }?.also {
+                    settings.saveLastCwd(cfg.host, it)
+                }
+            } else {
+                null
+            }
             _state.update { cur ->
-                cur.copy(tabs = cur.tabs.map { if (it.id == tab.id) tab else it })
+                cur.copy(
+                    tabs = cur.tabs.map { if (it.id == tab.id) tab else it },
+                    lastCwd = updatedLastCwd ?: cur.lastCwd,
+                )
             }
             tab
         }.onFailure { err ->
@@ -550,6 +659,28 @@ class HerdrRepository(
         debugRecorder?.record("ui", "interrupt_tab", "Interrupting tab=$tabId")
         runCatching { api.interruptTab(cfg, tabId) }
             .onFailure { err -> showBanner(err.message ?: "Failed to interrupt") }
+    }
+
+    suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> {
+        val cfg = _state.value.config
+        val homeCwd = _state.value.serverInfo?.defaultCwd
+        val outcome = resolveInitialDirectoryListing(
+            preferredPath = preferredPath,
+            homeCwd = homeCwd,
+            listDirectories = { path -> listDirectories(path) },
+        )
+        outcome.onSuccess { resolved ->
+            if (resolved.fellBackToHome && resolved.listing.path.isNotBlank()) {
+                debugRecorder?.record(
+                    "state",
+                    "cwd_fallback_home",
+                    "Preferred folder '${preferredPath ?: "default"}' missing/deleted; fell back to '${resolved.listing.path}'",
+                )
+                settings.saveLastCwd(cfg.host, resolved.listing.path)
+                _state.update { it.copy(lastCwd = resolved.listing.path) }
+            }
+        }
+        return outcome.map { it.listing }
     }
 
     suspend fun listDirectories(path: String?): Result<FsListResponse> {

@@ -288,7 +288,27 @@ data class FsListResponse(
     val path: String,
     val parent: String? = null,
     val directories: List<FsDirectoryEntry> = emptyList(),
+    val exists: Boolean? = null,
 )
+
+fun normalizeFsPath(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return ""
+    if (trimmed == "/") return "/"
+    val stripped = trimmed.trimEnd('/')
+    return if (stripped.isEmpty() && trimmed.startsWith("/")) "/" else stripped
+}
+
+fun resolvePreferredNewTabCwd(
+    lastCwd: String?,
+    activeTabCwd: String?,
+    homeCwd: String?,
+): String {
+    return lastCwd?.trim()?.takeIf { it.isNotEmpty() }
+        ?: activeTabCwd?.trim()?.takeIf { it.isNotEmpty() }
+        ?: homeCwd?.trim()?.takeIf { it.isNotEmpty() }
+        ?: "/home"
+}
 
 @JsonClass(generateAdapter = true)
 data class CreateTabRequest(

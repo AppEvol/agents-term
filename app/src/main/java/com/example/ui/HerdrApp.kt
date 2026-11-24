@@ -81,6 +81,7 @@ import com.example.data.formatModelChipLabel
 import com.example.data.parseModelSlashCommand
 import com.example.data.resolveAgentModelCatalog
 import com.example.data.resolveModelIdFromQuery
+import com.example.data.resolvePreferredNewTabCwd
 import com.example.data.shareDebugBundleFile
 import com.example.ui.theme.HerdrAmber
 import com.example.ui.theme.HerdrEmerald
@@ -316,7 +317,12 @@ fun HerdrApp(viewModel: MainViewModel) {
     if (showNewTabSheet) {
         NewTabSheet(
             agents = state.serverInfo?.agents.orEmpty(),
-            defaultCwd = state.activeTab?.cwd ?: state.serverInfo?.defaultCwd ?: "/home",
+            defaultCwd = resolvePreferredNewTabCwd(
+                lastCwd = state.lastCwd,
+                activeTabCwd = state.activeTab?.cwd,
+                homeCwd = state.serverInfo?.defaultCwd,
+            ),
+            onLoadInitialDirectories = { path -> viewModel.loadInitialDirectories(path) },
             onLoadDirectories = { path -> viewModel.loadDirectories(path) },
             onDismiss = { showNewTabSheet = false },
             onCreate = { agent, cwd, permMode, title, model ->
