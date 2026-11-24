@@ -31,7 +31,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -57,8 +59,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,15 +73,19 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import java.util.Locale
 import com.example.R
 import com.example.data.BootstrapPhase
 import com.example.data.BootstrapUiState
@@ -118,6 +126,18 @@ fun ConnectScreen(
 ) {
     if (canCancel) {
         BackHandler(onBack = onCancel)
+    }
+
+    // Keep the screen awake during SSH bootstrap so Android does not suspend the SSH socket.
+    val view = LocalView.current
+    DisposableEffect(view, bootstrapState.isRunning) {
+        val prevKeepScreenOn = view.keepScreenOn
+        if (bootstrapState.isRunning) {
+            view.keepScreenOn = true
+        }
+        onDispose {
+            view.keepScreenOn = prevKeepScreenOn
+        }
     }
 
     var mode by remember {
@@ -920,8 +940,29 @@ private fun BootstrapConsoleCard(
     onTrustNewKeyAndRetry: () -> Unit,
 ) {
     val logScrollState = rememberScrollState()
+    val clipboard = LocalClipboardManager.current
+    var copiedLogs by remember { mutableStateOf(false) }
+    var elapsedSeconds by remember { mutableIntStateOf(0) }
+
     LaunchedEffect(state.logs.size) {
         logScrollState.animateScrollTo(logScrollState.maxValue)
+    }
+
+    LaunchedEffect(state.isRunning) {
+        if (state.isRunning) {
+            elapsedSeconds = 0
+            while (true) {
+                delay(1_000)
+                elapsedSeconds++
+            }
+        }
+    }
+
+    LaunchedEffect(copiedLogs) {
+        if (copiedLogs) {
+            delay(1_800)
+            copiedLogs = false
+        }
     }
 
     val phaseText = when (state.phase) {
@@ -968,6 +1009,40 @@ private fun BootstrapConsoleCard(
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.weight(1f),
                 )
+                if (state.isRunning) {
+                    val mins = elapsedSeconds / 60
+                    val secs = elapsedSeconds % 60
+                    Text(
+                        text = String.format(Locale.US, "%d:%02d", mins, secs),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = MonoFontFamily,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (state.logs.isNotEmpty() || !state.errorMessage.isNullOrBlank()) {
+                    IconButton(
+                        onClick = {
+                            val dump = buildString {
+                                if (!state.errorMessage.isNullOrBlank()) {
+                                    appendLine("ERROR: ${state.errorMessage}")
+                                }
+                                state.logs.forEach { appendLine(it) }
+                            }.trim()
+                            clipboard.setText(AnnotatedString(dump))
+                            copiedLogs = true
+                        },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("copy_bootstrap_logs_button"),
+                    ) {
+                        Icon(
+                            imageVector = if (copiedLogs) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                            contentDescription = stringResource(R.string.ssh_copy_logs),
+                            tint = if (copiedLogs) HerdrEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
             }
 
             if (phaseText.isNotBlank()) {
@@ -982,11 +1057,19 @@ private fun BootstrapConsoleCard(
                 )
             }
 
+            if (state.isRunning) {
+                Text(
+                    text = stringResource(R.string.ssh_keep_screen_on_hint),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             if (state.logs.isNotEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 220.dp)
+                        .heightIn(max = 280.dp)
                         .verticalScroll(logScrollState)
                         .background(
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -1003,10 +1086,12 @@ private fun BootstrapConsoleCard(
                                 fontSize = 11.5.sp,
                                 lineHeight = 16.sp,
                             ),
-                            color = if (line.startsWith("[stderr]")) {
-                                HerdrAmber
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
+                            color = when {
+                                line.startsWith("[stderr]") -> HerdrAmber
+                                line.startsWith("[tool done]") -> HerdrEmerald
+                                line.startsWith("[tool]") -> HerdrBlue
+                                line.startsWith(">>>") -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurface
                             },
                         )
                     }

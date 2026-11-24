@@ -20,7 +20,8 @@ import java.util.Properties
 
 /**
  * Connects to a Tailscale VM over SSH and invokes `agy --dangerously-skip-permissions`
- * so the VM's Antigravity agent bootstraps the Herdr daemon environment autonomously.
+ * so the VM's Antigravity agent bootstraps the AgentsTerm daemon environment autonomously,
+ * streaming live tool and response progress back to the mobile UI.
  */
 class SshBootstrapClient(
     private val settings: SettingsStore,
@@ -112,12 +113,13 @@ class SshBootstrapClient(
                     SshAuthMethod.PASSWORD -> "password,keyboard-interactive,publickey,none"
                 }
                 setConfig(props)
-                serverAliveInterval = 15_000
-                serverAliveCountMax = 6
+                // Keep SSH alive across multi-minute agent runs and brief mobile network blips
+                serverAliveInterval = 10_000
+                serverAliveCountMax = 18
             }
 
             try {
-                session.connect(15_000)
+                session.connect(20_000)
             } catch (e: JSchException) {
                 hostKeyMismatch?.let { throw it }
                 throw e
@@ -141,9 +143,34 @@ class SshBootstrapClient(
 
             val stdout = channel.inputStream
             val stderr = channel.errStream
-            channel.connect(10_000)
+            channel.connect(15_000)
 
             val fullOutput = StringBuilder()
+            val pendingResponseBuffer = StringBuilder()
+            var agyConversationId: String? = null
+
+            fun flushResponseLines(flushAll: Boolean) {
+                if (flushAll) {
+                    val remaining = pendingResponseBuffer.toString().trim()
+                    pendingResponseBuffer.clear()
+                    if (remaining.isNotBlank()) {
+                        onLog(remaining)
+                        synchronized(fullOutput) { fullOutput.appendLine(remaining) }
+                    }
+                    return
+                }
+                var nlIdx = pendingResponseBuffer.indexOf('\n')
+                while (nlIdx >= 0) {
+                    val completeLine = pendingResponseBuffer.substring(0, nlIdx).trimEnd('\r')
+                    pendingResponseBuffer.delete(0, nlIdx + 1)
+                    if (completeLine.isNotBlank()) {
+                        onLog(completeLine)
+                        synchronized(fullOutput) { fullOutput.appendLine(completeLine) }
+                    }
+                    nlIdx = pendingResponseBuffer.indexOf('\n')
+                }
+            }
+
             val stdoutReader = BufferedReader(InputStreamReader(stdout, Charsets.UTF_8))
             val stderrReader = BufferedReader(InputStreamReader(stderr, Charsets.UTF_8))
 
@@ -166,14 +193,39 @@ class SshBootstrapClient(
             var line = stdoutReader.readLine()
             while (line != null && currentCoroutineContext().isActive) {
                 val cleaned = stripAnsiCodes(line)
-                synchronized(fullOutput) {
-                    fullOutput.appendLine(cleaned)
-                }
-                if (cleaned.isNotBlank()) {
-                    onLog(cleaned)
+                val parsed = parseAgyStreamJsonLine(cleaned)
+                if (parsed != null) {
+                    if (!parsed.conversationId.isNullOrBlank()) {
+                        agyConversationId = parsed.conversationId
+                    }
+                    if (!parsed.textDelta.isNullOrEmpty()) {
+                        pendingResponseBuffer.append(parsed.textDelta)
+                        flushResponseLines(flushAll = false)
+                    }
+                    if (!parsed.pairingSourceText.isNullOrBlank()) {
+                        synchronized(fullOutput) {
+                            fullOutput.appendLine(parsed.pairingSourceText)
+                        }
+                    }
+                    if (parsed.isResult) {
+                        flushResponseLines(flushAll = true)
+                    }
+                    for (displayLine in parsed.displayLines) {
+                        if (displayLine.isNotBlank()) {
+                            onLog(displayLine)
+                        }
+                    }
+                } else {
+                    synchronized(fullOutput) {
+                        fullOutput.appendLine(cleaned)
+                    }
+                    if (cleaned.isNotBlank()) {
+                        onLog(cleaned)
+                    }
                 }
                 line = stdoutReader.readLine()
             }
+            flushResponseLines(flushAll = true)
 
             while (!channel.isClosed && currentCoroutineContext().isActive) {
                 delay(150)
@@ -196,8 +248,21 @@ class SshBootstrapClient(
                 )
             }
 
+            if (exitCode == -1) {
+                val debugHint = agyConversationId?.let {
+                    " VM session log: ~/.gemini/antigravity-cli/brain/$it/"
+                } ?: " Check ~/.gemini/antigravity-cli/log/ on the VM."
+                throw IOException(
+                    "SSH connection dropped before bootstrap finished (remote agy may still be running on $host). " +
+                        "Keep the screen awake and tap Retry to connect once the daemon is up.$debugHint"
+                )
+            }
+
             if (exitCode != 0) {
-                throw IOException("Bootstrap exited with code $exitCode. Check the live output above for details.")
+                val debugHint = agyConversationId?.let {
+                    " (VM session: ~/.gemini/antigravity-cli/brain/$it/)"
+                }.orEmpty()
+                throw IOException("Bootstrap exited with code $exitCode. Check the live output above for details.$debugHint")
             }
 
             // Fallback if agy started daemon with --no-auth and did not print a herdr:// URI

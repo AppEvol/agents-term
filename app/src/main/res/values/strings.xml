@@ -84,6 +84,8 @@
     <string name="ssh_bootstrap_running">Bootstrapping VM with agy…</string>
     <string name="ssh_bootstrap_cancel">Cancel</string>
     <string name="ssh_console_title">LIVE VM BOOTSTRAP OUTPUT</string>
+    <string name="ssh_copy_logs">Copy bootstrap logs</string>
+    <string name="ssh_keep_screen_on_hint">Keeping screen awake while bootstrapping…</string>
     <string name="ssh_trust_new_key">Trust New Host Key &amp; Retry</string>
     <string name="ssh_phase_connecting">Connecting to VM over Tailscale SSH…</string>
     <string name="ssh_phase_running_agy">Running agy --dangerously-skip-permissions on VM…</string>

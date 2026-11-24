@@ -1,5 +1,7 @@
 package com.example.data
 
+import java.util.Locale
+
 enum class SshAuthMethod(val storageKey: String) {
     TAILSCALE_SSH("tailscale_ssh"),
     PRIVATE_KEY("private_key"),
@@ -81,6 +83,15 @@ data class SshBootstrapResult(
     val hostFingerprint: String,
 )
 
+data class ParsedAgyStreamLine(
+    val displayLines: List<String> = emptyList(),
+    val pairingSourceText: String? = null,
+    val textDelta: String? = null,
+    val conversationId: String? = null,
+    val isResult: Boolean = false,
+    val resultStatus: String? = null,
+)
+
 private val hostAllowedRegex = Regex("^[A-Za-z0-9._:\\-]+$")
 private val usernameAllowedRegex = Regex("^[A-Za-z0-9._\\-]+$")
 private val ansiEscapeRegex = Regex("\u001B\\[[0-9;?]*[ -/]*[@-~]")
@@ -110,13 +121,13 @@ fun defaultAgyBootstrapPrompt(
 ): String {
     return buildString {
         appendLine("Bootstrap this VM environment so the AgentsTerm Android client can connect over Tailscale:")
-        appendLine("1. Check if the AgentsTerm / agent-terminal daemon (from $repoUrl) is already running and reachable on port $daemonPort.")
-        appendLine("2. If it is not installed or running yet:")
-        appendLine("   - Clone $repoUrl into ~/agent-terminal (or update the existing checkout if present).")
-        appendLine("   - Ensure Node.js (>= 20) and npm are available, then run `npm install && npm run build` inside ~/agent-terminal/server.")
-        appendLine("   - Start the daemon bound to this VM's Tailscale IPv4 on port $daemonPort persistently (preferring `systemd --user` with herdr-mobile.service and `loginctl enable-linger`, or falling back to a detached background process if systemd user sessions are unavailable).")
-        appendLine("3. Verify that the daemon responds on http://<tailscale-ip>:$daemonPort/api/info.")
-        appendLine("4. Run `node ~/agent-terminal/server/dist/index.js pairing` and print the exact `herdr://connect?host=...&port=$daemonPort&token=...` URI on its own line in your final response.")
+        appendLine("1. First check if the AgentsTerm daemon is already running and responding on http://<tailscale-ip>:$daemonPort/api/info. If it is already healthy, skip installation and go directly to step 4.")
+        appendLine("2. If ~/agent-terminal/server/dist/index.js is not installed yet:")
+        appendLine("   - Ensure Node.js (>= 20) and npm are available.")
+        appendLine("   - If $repoUrl is accessible, clone it into ~/agent-terminal and run `npm install && npm run build` inside ~/agent-terminal/server.")
+        appendLine("   - Otherwise, implement and build a lightweight Node.js daemon in ~/agent-terminal/server/dist/index.js matching the AgentsTerm HTTP + WebSocket API contract (refer to ~/projects/agents-term/README.md if present).")
+        appendLine("3. Start the daemon persistently bound to this VM's Tailscale IPv4 on port $daemonPort (preferring `systemd --user` with herdr-mobile.service and `loginctl enable-linger`, or falling back to a fully detached process using `nohup node ~/agent-terminal/server/dist/index.js --port $daemonPort > ~/.config/herdr-mobile/daemon.log 2>&1 < /dev/null &` so stdout/stderr are not held open).")
+        appendLine("4. Verify http://<tailscale-ip>:$daemonPort/api/info responds cleanly, run `node ~/agent-terminal/server/dist/index.js pairing --port $daemonPort`, and print the exact `herdr://connect?host=...&port=$daemonPort&token=...` URI on its own line in your final response.")
     }.trim()
 }
 
@@ -143,10 +154,135 @@ fun encodeBase64Utf8(input: String): String {
 }
 
 /**
- * Constructs a safe remote shell command that loads login PATH, verifies `agy`,
- * decodes the base64-encoded bootstrap prompt without shell injection risk,
- * invokes `agy --dangerously-skip-permissions --print=...`, and ensures the
- * pairing URI is printed when done.
+ * Parses a single NDJSON line emitted by `agy --output-format stream-json`.
+ * Returns `null` when the line is plain text rather than an Antigravity stream-json event.
+ */
+@Suppress("UNCHECKED_CAST")
+fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine? {
+    val trimmed = rawLine.trim()
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
+
+    val root = runCatching {
+        HerdrMoshi.adapter(Map::class.java).lenient().fromJson(trimmed) as? Map<String, Any?>
+    }.getOrNull() ?: return null
+
+    val event = root["event"] as? String ?: return null
+    val topConvId = root["conversation_id"] as? String
+
+    return when (event) {
+        "init" -> {
+            val initObj = root["init"] as? Map<String, Any?>
+            val cwd = initObj?.get("cwd") as? String
+            val shortId = topConvId?.take(8)
+            val label = buildString {
+                append(">>> Antigravity session")
+                if (!shortId.isNullOrBlank()) append(" $shortId")
+                append(" started")
+                if (!cwd.isNullOrBlank()) append(" ($cwd)")
+            }
+            ParsedAgyStreamLine(
+                displayLines = listOf(label),
+                conversationId = topConvId,
+            )
+        }
+
+        "step_update" -> {
+            val step = root["step_update"] as? Map<String, Any?> ?: return ParsedAgyStreamLine(conversationId = topConvId)
+            val convId = (step["conversation_id"] as? String) ?: topConvId
+            val stepType = step["step_type"] as? String
+            val state = step["state"] as? String
+
+            when (stepType) {
+                "tool" -> {
+                    val toolName = (step["tool_name"] as? String)
+                        ?: ((step["tool_info"] as? Map<String, Any?>)?.get("name") as? String)
+                        ?: "tool"
+                    val toolInfo = step["tool_info"] as? Map<String, Any?>
+                    val params = toolInfo?.get("parameters") as? Map<String, Any?>
+                    val output = toolInfo?.get("output") as? String
+
+                    if (state == "ACTIVE") {
+                        val detail = extractToolSummary(params)
+                        val msg = if (!detail.isNullOrBlank()) {
+                            "[tool] $toolName: $detail"
+                        } else {
+                            "[tool] $toolName"
+                        }
+                        ParsedAgyStreamLine(displayLines = listOf(msg), conversationId = convId)
+                    } else if (state == "DONE") {
+                        val dur = (step["duration_seconds"] as? Number)?.toDouble()
+                        val durText = dur?.let { String.format(Locale.US, " (%.1fs)", it) }.orEmpty()
+                        ParsedAgyStreamLine(
+                            displayLines = listOf("[tool done] $toolName$durText"),
+                            pairingSourceText = output,
+                            conversationId = convId,
+                        )
+                    } else {
+                        ParsedAgyStreamLine(conversationId = convId)
+                    }
+                }
+
+                "agent_response" -> {
+                    val delta = step["text_delta"] as? String
+                    ParsedAgyStreamLine(
+                        textDelta = delta,
+                        conversationId = convId,
+                    )
+                }
+
+                else -> ParsedAgyStreamLine(conversationId = convId)
+            }
+        }
+
+        "result" -> {
+            val res = root["result"] as? Map<String, Any?> ?: return ParsedAgyStreamLine(
+                isResult = true,
+                conversationId = topConvId,
+            )
+            val convId = (res["conversation_id"] as? String) ?: topConvId
+            val status = (res["status"] as? String) ?: "DONE"
+            val response = res["response"] as? String
+            val dur = (res["duration_seconds"] as? Number)?.toDouble()
+            val turns = (res["num_turns"] as? Number)?.toInt()
+            val summary = buildString {
+                append(">>> Antigravity finished ($status")
+                if (dur != null) append(String.format(Locale.US, " in %.1fs", dur))
+                if (turns != null) append(", $turns turn${if (turns == 1) "" else "s"}")
+                append(")")
+            }
+            ParsedAgyStreamLine(
+                displayLines = listOf(summary),
+                pairingSourceText = response,
+                conversationId = convId,
+                isResult = true,
+                resultStatus = status,
+            )
+        }
+
+        else -> ParsedAgyStreamLine(conversationId = topConvId)
+    }
+}
+
+private fun extractToolSummary(params: Map<String, Any?>?): String? {
+    if (params == null) return null
+    val candidates = listOf("toolSummary", "CommandLine", "Path", "TargetFile", "Query", "SearchPath")
+    for (key in candidates) {
+        val raw = params[key] as? String ?: continue
+        val singleLine = raw.trim().lineSequence().firstOrNull()?.trim().orEmpty()
+        if (singleLine.isNotBlank()) {
+            return if (singleLine.length > 96) singleLine.take(93) + "…" else singleLine
+        }
+    }
+    return null
+}
+
+/**
+ * Constructs a safe remote shell command that:
+ * 1. Loads login PATH and checks if the AgentsTerm daemon is already running and healthy on [daemonPort]
+ *    (returning its pairing URI immediately in <1s if already ready).
+ * 2. Otherwise verifies `agy`, decodes the base64-encoded bootstrap prompt without shell injection risk,
+ *    invokes `agy --dangerously-skip-permissions --print=... --output-format stream-json` for live progress,
+ *    and prints the pairing URI when done.
  */
 fun buildAgyBootstrapCommand(prompt: String, daemonPort: Int = 7501): String {
     require(daemonPort in 1..65535) { "Invalid daemon port: $daemonPort" }
@@ -160,6 +296,22 @@ fun buildAgyBootstrapCommand(prompt: String, daemonPort: Int = 7501): String {
           [ -n "${'$'}NVM_LATEST" ] && export PATH="${'$'}HOME/.nvm/versions/node/${'$'}NVM_LATEST/bin:${'$'}PATH"
         fi
         export FORCE_COLOR=0
+        if [ -f "${'$'}HOME/agent-terminal/server/dist/index.js" ] && command -v node >/dev/null 2>&1; then
+          TS_IP=${'$'}(tailscale ip -4 2>/dev/null | head -n 1 || true)
+          if [ -n "${'$'}TS_IP" ] && command -v curl >/dev/null 2>&1; then
+            HERDR_TOKEN=${'$'}(node -e "const fs=require('fs'),p=require('os').homedir()+'/.config/herdr-mobile/config.json'; if(fs.existsSync(p)) { const c=JSON.parse(fs.readFileSync(p,'utf8')); if(c.token) process.stdout.write(c.token); }" 2>/dev/null || true)
+            if [ -n "${'$'}HERDR_TOKEN" ]; then
+              DAEMON_OK=${'$'}(curl -fsS --max-time 3 -H "Authorization: Bearer ${'$'}HERDR_TOKEN" "http://${'$'}{TS_IP}:$daemonPort/api/info" >/dev/null 2>&1 && echo yes || echo no)
+            else
+              DAEMON_OK=${'$'}(curl -fsS --max-time 3 "http://${'$'}{TS_IP}:$daemonPort/api/info" >/dev/null 2>&1 && echo yes || echo no)
+            fi
+            if [ "${'$'}DAEMON_OK" = "yes" ]; then
+              echo ">>> AgentsTerm daemon is already running on ${'$'}{TS_IP}:$daemonPort."
+              node "${'$'}HOME/agent-terminal/server/dist/index.js" pairing --port $daemonPort
+              exit 0
+            fi
+          fi
+        fi
         if ! command -v agy >/dev/null 2>&1; then
           echo "ERROR: 'agy' (Antigravity CLI) was not found in PATH on this VM." >&2
           echo "Checked PATH: ${'$'}PATH" >&2
@@ -167,7 +319,11 @@ fun buildAgyBootstrapCommand(prompt: String, daemonPort: Int = 7501): String {
         fi
         HERDR_PROMPT=${'$'}(printf '%s' '$promptB64' | base64 -d)
         echo ">>> Invoking Antigravity (agy --dangerously-skip-permissions) on ${'$'}(hostname)..."
-        agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT"
+        if agy --help 2>&1 | grep -q -- '--output-format'; then
+          agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT" --output-format stream-json
+        else
+          agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT"
+        fi
         if [ -f "${'$'}HOME/agent-terminal/server/dist/index.js" ]; then
           echo ">>> Checking AgentsTerm pairing URI..."
           node "${'$'}HOME/agent-terminal/server/dist/index.js" pairing --port $daemonPort || true

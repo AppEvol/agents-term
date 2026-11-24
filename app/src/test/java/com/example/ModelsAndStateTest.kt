@@ -11,6 +11,7 @@ import com.example.data.buildAgyBootstrapCommand
 import com.example.data.decodeHerdrJson
 import com.example.data.encodeBase64Utf8
 import com.example.data.extractPairingUriFromOutput
+import com.example.data.parseAgyStreamJsonLine
 import com.example.data.reduceWorkspaceEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -177,8 +178,50 @@ class ModelsAndStateTest {
         val b64Payload = cmd.removePrefix("printf '%s' '").removeSuffix("' | base64 -d | bash -s")
         val decodedScript = String(Base64.getDecoder().decode(b64Payload), Charsets.UTF_8)
         assertTrue(decodedScript.contains("agy --dangerously-skip-permissions --print="))
+        assertTrue(decodedScript.contains("--output-format stream-json"))
         assertTrue(decodedScript.contains(encodeBase64Utf8(trickyPrompt)))
         assertTrue(decodedScript.contains("pairing --port 7501"))
+        assertTrue(decodedScript.contains("DAEMON_OK"))
+    }
+
+    @Test
+    fun parseAgyStreamJsonLineHandlesInitToolsDeltasAndResult() {
+        assertNull(parseAgyStreamJsonLine(">>> plain shell output"))
+
+        val initEvent = parseAgyStreamJsonLine(
+            """{"event":"init","conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","init":{"cwd":"/home/ned"}}"""
+        )
+        assertNotNull(initEvent)
+        assertEquals("9fedea5e-6c97-4678-b333-f40fa796d7ed", initEvent!!.conversationId)
+        assertTrue(initEvent.displayLines.single().contains("9fedea5e"))
+
+        val activeTool = parseAgyStreamJsonLine(
+            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"npm run build","toolSummary":"Build server"}}}}"""
+        )
+        assertNotNull(activeTool)
+        assertEquals("[tool] run_command: Build server", activeTool!!.displayLines.single())
+
+        val doneTool = parseAgyStreamJsonLine(
+            """{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":1.25,"tool_info":{"output":"herdr://connect?host=100.71.219.26&port=7501&token=abc"}}}"""
+        )
+        assertNotNull(doneTool)
+        assertEquals("[tool done] run_command (1.3s)", doneTool!!.displayLines.single())
+        assertNotNull(extractPairingUriFromOutput(doneTool.pairingSourceText!!))
+
+        val delta = parseAgyStreamJsonLine(
+            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"Setup done\n"}}"""
+        )
+        assertNotNull(delta)
+        assertEquals("Setup done\n", delta!!.textDelta)
+
+        val result = parseAgyStreamJsonLine(
+            """{"event":"result","result":{"conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","status":"SUCCESS","response":"herdr://connect?host=100.71.219.26&port=7501&token=tok123\n","duration_seconds":5.3,"num_turns":2}}"""
+        )
+        assertNotNull(result)
+        assertTrue(result!!.isResult)
+        assertEquals("SUCCESS", result.resultStatus)
+        assertTrue(result.displayLines.single().contains("5.3s"))
+        assertEquals("tok123", extractPairingUriFromOutput(result.pairingSourceText!!)!!.second.token)
     }
 
     @Test
