@@ -33,17 +33,53 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestRule
 import org.junit.runner.RunWith
+import org.junit.runners.model.Statement
 
 @RunWith(AndroidJUnit4::class)
 class AgentsTermE2ETest {
 
-    @get:Rule
+    /**
+     * On failure, appends which window holds input focus. A system dialog on a CI emulator (for
+     * example "System UI isn't responding") makes every later Espresso call fail with
+     * RootViewWithoutFocusException, and the stack trace alone does not show what is on top.
+     */
+    @get:Rule(order = 0)
+    val windowFocusDiagnostics = TestRule { base, _ ->
+        object : Statement() {
+            override fun evaluate() {
+                try {
+                    base.evaluate()
+                } catch (t: Throwable) {
+                    val focus = runCatching {
+                        shell("dumpsys window windows").lineSequence()
+                            .filter { "mCurrentFocus" in it || "mFocusedApp" in it || "mObscuringWindow" in it }
+                            .joinToString(" | ") { it.trim() }
+                    }.getOrElse { "unavailable: $it" }
+                    throw AssertionError("${t.message}\n[window focus at failure] $focus", t)
+                }
+            }
+        }
+    }
+
+    @get:Rule(order = 1)
     val composeRule = createEmptyComposeRule()
+
+    private fun shell(command: String): String {
+        val fd = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+        return android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).bufferedReader().use { it.readText() }
+    }
 
     private var scenario: ActivityScenario<MainActivity>? = null
     private var daemon: FakeAgentsTermDaemon? = null
     private var sshServer: FakeSshVmServer? = null
+
+    @Before
+    fun dismissSystemDialogs() {
+        // A leftover system dialog would keep window focus away from the app for the whole run.
+        shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
+    }
 
     @Before
     fun clearAppPreferences() {
