@@ -135,6 +135,36 @@ fun ChatWorkspace(
                 .weight(1f)
                 .fillMaxWidth(),
         ) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                items(messages, key = { it.id }) { msg ->
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .widthIn(max = 760.dp)
+                        ) {
+                            if (msg.role == "user") {
+                                UserMessageBubble(msg)
+                            } else {
+                                AssistantMessageItem(
+                                    tab = tab,
+                                    message = msg,
+                                    onRetryFullAccess = onRetryFullAccess,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             if (isLoading && messages.isEmpty()) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
             } else if (messages.isEmpty()) {
@@ -148,36 +178,6 @@ fun ChatWorkspace(
                         }
                     },
                 )
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    items(messages, key = { it.id }) { msg ->
-                        Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .widthIn(max = 760.dp)
-                            ) {
-                                if (msg.role == "user") {
-                                    UserMessageBubble(msg)
-                                } else {
-                                    AssistantMessageItem(
-                                        tab = tab,
-                                        message = msg,
-                                        onRetryFullAccess = onRetryFullAccess,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             if (showScrollToBottom) {
