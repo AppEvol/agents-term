@@ -16,6 +16,7 @@ from agentsterm_daemon.models import (
 )
 from agentsterm_daemon.runner import AgentRunner, block_separator
 from agentsterm_daemon.store import StateStore
+from agentsterm_daemon.util import summarize_command, summarize_tool_input
 
 
 class ModelsTest(TempHomeTestCase):
@@ -120,7 +121,11 @@ class RunnerTest(TempHomeTestCase):
         self.assertEqual((tool["id"], tool["name"], tool["status"], tool["durationMs"]),
                          ("agy_step_1", "run_command", "done", 420))
         self.assertIn("On branch main", tool["output"])
-        self.assertEqual(tool["inputSummary"], "git status")
+        self.assertEqual(tool["inputSummary"], "Check git status")
+        self.assertEqual(msg["segments"], [
+            {"type": "tool", "toolCallId": "agy_step_1"},
+            {"type": "text", "text": "Loud and clear! AgentsTerm is working.\n"},
+        ])
         self.assertEqual((msg["usage"]["inputTokens"], msg["usage"]["outputTokens"], msg["usage"]["thinkingTokens"],
                           msg["usage"]["durationMs"]), (9127, 73, 14, 1950))
         self.assertEqual(store.get_tab(tab["id"])["sessionRef"], {"kind": "agy", "value": "conv-agy-e2e-99"})
@@ -264,7 +269,12 @@ class RunnerTest(TempHomeTestCase):
         # Was "Starting now.All done." before the fix.
         self.assertEqual(msg["text"], "Starting now.\n\nAll done.")
         self.assertEqual([(t["name"], t["status"], t["output"]) for t in msg["toolCalls"]], [("Bash", "done", "hi")])
-        self.assertEqual(msg["toolCalls"][0]["inputSummary"], "echo hi")
+        self.assertEqual(msg["toolCalls"][0]["inputSummary"], "Print hi")
+        self.assertEqual(msg["segments"], [
+            {"type": "text", "text": "Starting now."},
+            {"type": "tool", "toolCallId": "toolu_fixture_1"},
+            {"type": "text", "text": "All done."},
+        ])
         self.assertEqual(msg["status"], "complete")
         self.assertEqual(store.get_tab(tab["id"])["sessionRef"], {"kind": "claude", "value": "sess-fixture-1"})
         # Streamed deltas must add up to exactly the stored text (the app applies deltas).
@@ -323,6 +333,97 @@ class RunnerTest(TempHomeTestCase):
         _, msg = self.run_turn(runner, store, tab, "go")
         self.assertEqual(msg["text"], "Let me check.\n\nAll good.")
         self.assertEqual(msg["thinking"], "think 1\n\nthink 2")
+        self.assertEqual(msg["segments"], [
+            {"type": "text", "text": "Let me check."},
+            {"type": "tool", "toolCallId": "agy_step_2"},
+            {"type": "text", "text": "All good."},
+        ])
+
+    def test_summarize_tool_input_prefers_description_and_strips_leading_cd(self):
+        self.assertEqual(
+            summarize_tool_input({"command": "cd ~/projects/app && git status", "description": "Check git status"}),
+            "Check git status",
+        )
+        self.assertEqual(
+            summarize_tool_input({"CommandLine": "cd ~/projects/app && ./gradlew test", "toolSummary": "Run unit tests"}),
+            "Run unit tests",
+        )
+        self.assertEqual(
+            summarize_tool_input({"command": "cd ~/projects/app && git diff --stat", "description": "   "}),
+            "git diff --stat",
+        )
+        self.assertEqual(
+            summarize_command("cd ~/projects/agents-term-app-state && cd daemon && python3 -m unittest"),
+            "python3 -m unittest",
+        )
+        self.assertEqual(summarize_command('cd "/tmp/my dir" && pytest -q'), "pytest -q")
+        self.assertEqual(summarize_command("cd ~/projects/app; git log -n 5"), "git log -n 5")
+        self.assertEqual(summarize_command("cd ~/projects/app\ngit status"), "git status")
+        self.assertEqual(summarize_command("cd ~/projects/app"), "cd ~/projects/app")
+        self.assertEqual(summarize_command("/bin/bash -lc 'cd /work/repo && ls -la'"), "ls -la")
+        self.assertEqual(summarize_command("bash -lc 'a' && bash -lc 'b'"), "bash -lc 'a' && bash -lc 'b'")
+        self.assertEqual(summarize_tool_input({"file_path": "/home/ned/app/ChatScreen.kt"}), "/home/ned/app/ChatScreen.kt")
+
+    def test_claude_interleaved_text_and_multiple_tools_keep_order_in_segments(self):
+        def start(kind):
+            return {"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": kind}}}
+
+        def delta(text):
+            return {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}}}
+
+        self.fake_binary("claude", self.emit_lines_script([
+            start("text"), delta("Step 1: inspect."),
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "cd ~/projects/app && git status", "description": "Check status"}},
+                {"type": "tool_use", "id": "t2", "name": "Bash",
+                 "input": {"command": "cd ~/projects/app && git diff --stat"}},
+            ]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "clean"},
+                {"type": "tool_result", "tool_use_id": "t2", "content": "0 files"},
+            ]}},
+            start("text"), delta("Step 2: verify."),
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "t3", "name": "Bash",
+                 "input": {"command": "cd ~/projects/app && pytest"}},
+            ]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t3", "content": "ok"},
+            ]}},
+            start("text"), delta("All green."),
+        ]))
+        store, runner = self.make()
+        tab = store.create_tab("claude", cwd=str(self.tmp))
+        _, msg = self.run_turn(runner, store, tab, "go")
+        self.assertEqual(msg["text"], "Step 1: inspect.\n\nStep 2: verify.\n\nAll green.")
+        self.assertEqual([t["inputSummary"] for t in msg["toolCalls"]], ["Check status", "git diff --stat", "pytest"])
+        self.assertEqual(msg["segments"], [
+            {"type": "text", "text": "Step 1: inspect."},
+            {"type": "tool", "toolCallId": "t1"},
+            {"type": "tool", "toolCallId": "t2"},
+            {"type": "text", "text": "Step 2: verify."},
+            {"type": "tool", "toolCallId": "t3"},
+            {"type": "text", "text": "All green."},
+        ])
+
+    def test_codex_command_summary_strips_leading_cd_and_keeps_segments(self):
+        self.fake_binary("codex", self.emit_lines_script([
+            {"type": "item.started", "item": {"id": "c1", "type": "command_execution",
+                                              "command": "/bin/bash -lc 'cd /home/ned/app && git status'"}},
+            {"type": "item.completed", "item": {"id": "c1", "type": "command_execution",
+                                                "command": "/bin/bash -lc 'cd /home/ned/app && git status'",
+                                                "aggregated_output": "clean", "exit_code": 0}},
+            {"type": "item.completed", "item": {"id": "m1", "type": "agent_message", "text": "Clean repo."}},
+        ]))
+        store, runner = self.make()
+        tab = store.create_tab("codex", cwd=str(self.tmp))
+        _, msg = self.run_turn(runner, store, tab, "check")
+        self.assertEqual(msg["toolCalls"][0]["inputSummary"], "git status")
+        self.assertEqual(msg["segments"], [
+            {"type": "tool", "toolCallId": "c1"},
+            {"type": "text", "text": "Clean repo."},
+        ])
 
     def test_interrupt_stops_turn_and_marks_message_interrupted(self):
         self.fake_binary("agy", "sys.stdout.write(json.dumps({'event':'step_update','step_update':"

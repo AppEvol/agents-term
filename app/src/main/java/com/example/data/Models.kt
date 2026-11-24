@@ -245,6 +245,13 @@ data class UsageStats(
 )
 
 @JsonClass(generateAdapter = true)
+data class MessageSegment(
+    val type: String,
+    val text: String? = null,
+    val toolCallId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
 data class ChatMessage(
     val id: String,
     val tabId: String,
@@ -252,6 +259,7 @@ data class ChatMessage(
     val text: String = "",
     val thinking: String? = null,
     val toolCalls: List<ToolCallItem> = emptyList(),
+    val segments: List<MessageSegment> = emptyList(),
     val deniedActions: List<DeniedAction> = emptyList(),
     val status: String = "complete",
     val error: String? = null,

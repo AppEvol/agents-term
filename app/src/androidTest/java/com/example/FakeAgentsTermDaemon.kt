@@ -11,6 +11,7 @@ import com.example.data.DeniedAction
 import com.example.data.FsDirectoryEntry
 import com.example.data.FsListResponse
 import com.example.data.HerdrMoshi
+import com.example.data.MessageSegment
 import com.example.data.SendMessageRequest
 import com.example.data.SendMessageResponse
 import com.example.data.ServerInfo
@@ -527,6 +528,93 @@ class FakeAgentsTermDaemon(
             replaceMessage(tab.id, emptyComplete)
             val idleTab = updateTabState(tab.id, status = "idle", statusDetail = null)
             broadcast(WsServerEnvelope(type = "message_updated", tabId = tab.id, message = emptyComplete))
+            if (idleTab != null) {
+                broadcast(WsServerEnvelope(type = "tab_updated", tab = idleTab))
+            }
+            return
+        }
+
+        if (prompt.contains("multi_tool_turn")) {
+            val step1 = "Checking repository state first."
+            broadcast(
+                WsServerEnvelope(
+                    type = "message_delta",
+                    tabId = tab.id,
+                    messageId = assistantMsg.id,
+                    textDelta = step1,
+                ),
+            )
+            val tool1 = ToolCallItem(
+                id = "tool_${assistantMsg.id}_1",
+                name = "Bash",
+                inputSummary = "Check git status",
+                inputJson = """{"command":"cd ~/projects/agents-term && git status","description":"Check git status"}""",
+                output = "On branch main",
+                status = "done",
+                durationMs = 110L,
+            )
+            val tool2 = ToolCallItem(
+                id = "tool_${assistantMsg.id}_2",
+                name = "Bash",
+                inputSummary = "git diff --stat",
+                inputJson = """{"command":"cd ~/projects/agents-term && git diff --stat"}""",
+                output = "0 files changed",
+                status = "done",
+                durationMs = 140L,
+            )
+            val tool3 = ToolCallItem(
+                id = "tool_${assistantMsg.id}_3",
+                name = "Bash",
+                inputSummary = "Run unit tests",
+                inputJson = """{"command":"cd ~/projects/agents-term && pytest","description":"Run unit tests"}""",
+                output = "28 passed",
+                status = "done",
+                durationMs = 350L,
+            )
+            for (tc in listOf(tool1, tool2, tool3)) {
+                broadcast(
+                    WsServerEnvelope(
+                        type = "tool_update",
+                        tabId = tab.id,
+                        messageId = assistantMsg.id,
+                        toolCall = tc.copy(status = "running", output = null, durationMs = null),
+                    ),
+                )
+                broadcast(
+                    WsServerEnvelope(
+                        type = "tool_update",
+                        tabId = tab.id,
+                        messageId = assistantMsg.id,
+                        toolCall = tc,
+                    ),
+                )
+            }
+            val step2 = "All repository checks passed."
+            broadcast(
+                WsServerEnvelope(
+                    type = "message_delta",
+                    tabId = tab.id,
+                    messageId = assistantMsg.id,
+                    textDelta = "\n\n$step2",
+                ),
+            )
+            val completeMsg = assistantMsg.copy(
+                text = "$step1\n\n$step2",
+                toolCalls = listOf(tool1, tool2, tool3),
+                segments = listOf(
+                    MessageSegment("text", text = step1),
+                    MessageSegment("tool", toolCallId = tool1.id),
+                    MessageSegment("tool", toolCallId = tool2.id),
+                    MessageSegment("tool", toolCallId = tool3.id),
+                    MessageSegment("text", text = step2),
+                ),
+                status = "complete",
+                usage = UsageStats(inputTokens = 210, outputTokens = 64, durationMs = 720L),
+                updatedAt = System.currentTimeMillis(),
+            )
+            replaceMessage(tab.id, completeMsg)
+            val idleTab = updateTabState(tab.id, status = "idle", statusDetail = null)
+            broadcast(WsServerEnvelope(type = "message_updated", tabId = tab.id, message = completeMsg))
             if (idleTab != null) {
                 broadcast(WsServerEnvelope(type = "tab_updated", tab = idleTab))
             }

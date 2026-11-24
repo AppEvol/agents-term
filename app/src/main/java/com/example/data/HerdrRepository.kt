@@ -119,6 +119,11 @@ fun reduceWorkspaceEvent(
                         } else {
                             msg.thinking
                         },
+                        segments = if (event.textDelta != null) {
+                            appendTextDeltaToSegments(msg.segments, event.textDelta)
+                        } else {
+                            msg.segments
+                        },
                     )
                 } else {
                     msg
@@ -139,7 +144,10 @@ fun reduceWorkspaceEvent(
                     } else {
                         msg.toolCalls + tc
                     }
-                    msg.copy(toolCalls = tools)
+                    msg.copy(
+                        toolCalls = tools,
+                        segments = appendToolToSegments(msg.segments, tc.id),
+                    )
                 } else {
                     msg
                 }
@@ -152,7 +160,9 @@ fun reduceWorkspaceEvent(
             val msg = event.message ?: return state
             val existing = state.messagesByTab[tabId].orEmpty()
             val updated = if (existing.any { it.id == msg.id }) {
-                existing.map { if (it.id == msg.id) msg else it }
+                existing.map { cur ->
+                    if (cur.id == msg.id) reconcileUpdatedMessageSegments(cur, msg) else cur
+                }
             } else {
                 existing + msg
             }

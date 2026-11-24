@@ -216,6 +216,12 @@ class DaemonE2ETest(unittest.TestCase):
         stored = d.api("GET", f"/api/tabs/{tab['id']}/messages")[1]["messages"][-1]
         self.assertEqual(stored["text"], final["text"])
         self.assertEqual(stored["usage"]["outputTokens"], 85)
+        self.assertEqual(stored["toolCalls"][0]["inputSummary"], "Print hi")
+        self.assertEqual(stored["segments"], [
+            {"type": "text", "text": "Starting now."},
+            {"type": "tool", "toolCallId": "toolu_fixture_1"},
+            {"type": "text", "text": "All done."},
+        ])
 
     def test_ws_rejects_bad_auth_and_path_and_accepts_query_token(self):
         async def go():
