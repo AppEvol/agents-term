@@ -247,12 +247,14 @@ class ModelsAndStateTest {
 
     @Test
     fun debugRecorderRedactsSecretsEnforcesRingLimitAndSerializesNdjson() {
-        val rawSecret = "Authorization: Bearer super_secret_tok_99 and ws://100.1.2.3:7501/ws?token=abc_secret_2"
+        val rawSecret = "Authorization: Bearer super_secret_tok_99 and ws://100.1.2.3:7501/ws?token=abc_secret_2 and Token: -PpQT9y2xIYJ0u9U"
         val cleaned = sanitizeDebugText(rawSecret)
         assertFalse(cleaned.contains("super_secret_tok_99"))
         assertFalse(cleaned.contains("abc_secret_2"))
+        assertFalse(cleaned.contains("-PpQT9y2xIYJ0u9U"))
         assertTrue(cleaned.contains("Bearer [REDACTED]"))
         assertTrue(cleaned.contains("token=[REDACTED]"))
+        assertTrue(cleaned.contains("Token: [REDACTED]"))
 
         val recorder = DebugRecorder(maxEvents = 3)
         for (i in 1..5) {

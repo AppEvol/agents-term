@@ -396,6 +396,18 @@ private fun AssistantMessageItem(
                 markdown = message.text,
                 modifier = Modifier.fillMaxWidth(),
             )
+        } else if (
+            message.status == "complete" &&
+            message.error.isNullOrBlank() &&
+            message.toolCalls.isEmpty() &&
+            message.deniedActions.isEmpty() &&
+            message.thinking.isNullOrBlank()
+        ) {
+            Text(
+                text = stringResource(R.string.assistant_empty_response),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         // Permission Denied / Blocked inline card

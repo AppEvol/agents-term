@@ -388,6 +388,23 @@ class FakeAgentsTermDaemon(
             return
         }
 
+        if (prompt.contains("simulate_empty_response")) {
+            // Reproduces the dump scenario where a daemon finishes a turn with empty text and no error
+            val emptyComplete = assistantMsg.copy(
+                text = "",
+                status = "complete",
+                usage = UsageStats(durationMs = 320L),
+                updatedAt = System.currentTimeMillis(),
+            )
+            replaceMessage(tab.id, emptyComplete)
+            val idleTab = updateTabState(tab.id, status = "idle", statusDetail = null)
+            broadcast(WsServerEnvelope(type = "message_updated", tabId = tab.id, message = emptyComplete))
+            if (idleTab != null) {
+                broadcast(WsServerEnvelope(type = "tab_updated", tab = idleTab))
+            }
+            return
+        }
+
         if (prompt.contains("needs_permission") && overridePermissionMode != "full-access") {
             val blockedMsg = assistantMsg.copy(
                 text = "I need permission before running the command.",

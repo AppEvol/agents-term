@@ -57,6 +57,7 @@
     <string name="permission_required_body">Agent was blocked waiting for approval: %1$s</string>
     <string name="thinking_label">Reasoning</string>
     <string name="thinking_streaming_label">Reasoning…</string>
+    <string name="assistant_empty_response">No response text was returned by the agent.</string>
     <string name="tool_input_label">Input</string>
     <string name="tool_output_label">Output</string>
     <string name="status_interrupted">Interrupted by user</string>

@@ -443,4 +443,37 @@ class AgentsTermE2ETest {
         waitForText("Diagnose phone glitch")
         waitForText("Repository is clean on main branch.")
     }
+
+    @Test
+    fun emptyAgentCompletionShowsFallbackNoticeAndAllowsSubsequentTurn() {
+        val seedTab = TabRecord(
+            id = "tab_agy_empty",
+            title = "agents-term",
+            agent = "agy",
+            cwd = "/home/ci/projects/agents-term",
+            permissionMode = "full-access",
+            status = "idle",
+        )
+        val activeDaemon = startDaemon(initialTabs = listOf(seedTab))
+
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForTag("composer_input")
+
+        // 1) Reproduce empty completion from debug dump 3445b6c8: should show clear fallback text
+        composeRule.onNodeWithTag("composer_input").performTextInput("simulate_empty_response")
+        composeRule.onNodeWithTag("send_button").performClick()
+
+        waitForText("No response text was returned by the agent.")
+
+        // 2) Subsequent normal prompt on the same agy tab still streams and completes cleanly
+        composeRule.onNodeWithTag("composer_input").performTextInput("Can you say something?")
+        composeRule.onNodeWithTag("send_button").performClick()
+
+        waitForText("Can you say something?")
+        waitForText("Repository is clean on main branch.")
+    }
 }

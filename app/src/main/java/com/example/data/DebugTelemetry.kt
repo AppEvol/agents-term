@@ -24,18 +24,20 @@ data class DebugDumpUploadState(
 
 private val bearerTokenRegex = Regex("""(?i)\bBearer\s+[A-Za-z0-9._\-+/=]+""")
 private val queryTokenRegex = Regex("""(?i)((?:[?&]|\b)token=)[^&\s"'`<>)\]]+""")
+private val labelTokenRegex = Regex("""(?i)(\btoken\s*:\s*)\S+""")
 private val jsonTokenRegex = Regex("""(?i)("token"\s*:\s*")([^"]*)(")""")
 private val privateKeyBlockRegex = Regex(
     """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----"""
 )
 
 /**
- * Strips bearer tokens, query tokens, and PEM private keys before storing or uploading telemetry.
+ * Strips bearer tokens, query tokens, label tokens, and PEM private keys before storing or uploading telemetry.
  */
 fun sanitizeDebugText(raw: String): String {
     var result = privateKeyBlockRegex.replace(raw, "[REDACTED_PRIVATE_KEY]")
     result = bearerTokenRegex.replace(result, "Bearer [REDACTED]")
     result = queryTokenRegex.replace(result, "$1[REDACTED]")
+    result = labelTokenRegex.replace(result, "$1[REDACTED]")
     result = jsonTokenRegex.replace(result, "$1[REDACTED]$3")
     return result
 }
