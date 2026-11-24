@@ -55,6 +55,7 @@ class FakeAgentsTermDaemon(
     val interruptedTabIds = CopyOnWriteArrayList<String>()
     val markedReadTabIds = CopyOnWriteArrayList<String>()
     val receivedOverrideModes = CopyOnWriteArrayList<String>()
+    val recordedRequests = CopyOnWriteArrayList<String>()
 
     private val serverInfo = ServerInfo(
         version = "0.1.0-e2e",
@@ -122,6 +123,7 @@ class FakeAgentsTermDaemon(
     private fun handleRequest(request: RecordedRequest): MockResponse {
         val path = request.requestUrl?.encodedPath.orEmpty()
         val method = request.method.orEmpty().uppercase()
+        recordedRequests.add("$method ${request.path.orEmpty()} (url=${request.requestUrl})")
 
         if (!isAuthorized(request, path)) {
             return jsonResponse(401, """{"error":"Invalid bearer token"}""")

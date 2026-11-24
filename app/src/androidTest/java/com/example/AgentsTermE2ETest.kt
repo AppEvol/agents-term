@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.printToString
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -77,18 +79,42 @@ class AgentsTermE2ETest {
     }
 
     private fun waitForText(text: String, substring: Boolean = false, timeoutMs: Long = 10_000L) {
-        composeRule.waitUntil(timeoutMillis = timeoutMs) {
-            composeRule.onAllNodesWithText(text, substring = substring)
-                .fetchSemanticsNodes()
-                .isNotEmpty()
+        try {
+            composeRule.waitUntil(timeoutMillis = timeoutMs) {
+                composeRule.onAllNodesWithText(text, substring = substring)
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }
+        } catch (e: Throwable) {
+            val reqs = daemon?.recordedRequests?.joinToString("\n  ") ?: "(no daemon)"
+            val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString() }
+                .getOrElse { it.toString() }
+            throw AssertionError(
+                "Timed out waiting for text='$text' (substring=$substring).\n" +
+                    "Daemon requests:\n  $reqs\n" +
+                    "Compose roots:\n$roots",
+                e,
+            )
         }
     }
 
     private fun waitForTag(tag: String, timeoutMs: Long = 10_000L) {
-        composeRule.waitUntil(timeoutMillis = timeoutMs) {
-            composeRule.onAllNodesWithTag(tag)
-                .fetchSemanticsNodes()
-                .isNotEmpty()
+        try {
+            composeRule.waitUntil(timeoutMillis = timeoutMs) {
+                composeRule.onAllNodesWithTag(tag)
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }
+        } catch (e: Throwable) {
+            val reqs = daemon?.recordedRequests?.joinToString("\n  ") ?: "(no daemon)"
+            val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString() }
+                .getOrElse { it.toString() }
+            throw AssertionError(
+                "Timed out waiting for tag='$tag'.\n" +
+                    "Daemon requests:\n  $reqs\n" +
+                    "Compose roots:\n$roots",
+                e,
+            )
         }
     }
 
@@ -180,16 +206,17 @@ class AgentsTermE2ETest {
         waitForText("Summarize the repo")
         waitForText("Repository is clean on main branch.")
 
+        // Verify token usage footer rendered before expanding accordions
+        composeRule.onNodeWithText("120 in · 45 out", substring = true).assertIsDisplayed()
+
         // Expand Reasoning accordion and check reasoning content
         composeRule.onNodeWithText("Reasoning").performClick()
         waitForText("Inspecting repository context for: Summarize the repo")
+        composeRule.onNodeWithText("Reasoning").performClick()
 
         // Expand Tool Call card and check command output
         composeRule.onNodeWithText("Bash").performClick()
         waitForText("On branch main", substring = true)
-
-        // Verify token usage footer rendered
-        composeRule.onNodeWithText("120 in · 45 out", substring = true).assertIsDisplayed()
     }
 
     @Test
