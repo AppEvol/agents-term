@@ -168,11 +168,11 @@ fun defaultAgyBootstrapPrompt(
     val dir = "\$HOME/$AGENTSTERM_INSTALL_SUBDIR"
     val install = "bash \"$dir/daemon/install.sh\" --port $daemonPort --ref $ref"
     return buildString {
-        appendLine("Bootstrap this VM so the AgentsTerm Android app can connect over Tailscale.")
+        appendLine("Repair this VM so the AgentsTerm Android app can connect over Tailscale. The automatic install of the AgentsTerm daemon just failed here, or could not start.")
         appendLine("The VM daemon is the Python 3 program in `daemon/` of $repoUrl, installed by its `daemon/install.sh`. Do not write your own daemon.")
-        appendLine("1. Install or update it by running exactly:")
+        appendLine("1. Run the installer to see the failure:")
         appendLine("   if [ -d \"$dir/.git\" ]; then $install; else git clone --depth 1 --branch $ref $repoUrl \"$dir\" && $install; fi")
-        appendLine("   install.sh is idempotent: it updates the checkout, installs the herdr-mobile.service systemd --user unit (or a detached process), replaces any legacy Node daemon, health-checks http://<tailscale-ip>:$daemonPort/api/info, and prints a herdr://connect pairing URI.")
+        appendLine("   install.sh is idempotent: it updates the checkout to the latest $ref, installs the herdr-mobile.service systemd --user unit (or a detached process), restarts the daemon unless it already runs that commit, replaces any legacy Node daemon, verifies http://<tailscale-ip>:$daemonPort/api/info reports that commit, and prints a herdr://connect pairing URI.")
         appendLine("2. If it exits non-zero, read its ERROR line, fix the root cause, and run step 1 again:")
         appendLine("   - exit 3 (missing prerequisite): install python3 (>= 3.9) or git with the system package manager, or bring Tailscale up (`sudo tailscale up`). If GitHub is unreachable, say so clearly.")
         appendLine("   - exit 4 (daemon unhealthy): inspect `systemctl --user status herdr-mobile.service` or ~/.config/herdr-mobile/daemon.log (for example, another process holding port $daemonPort).")
@@ -326,15 +326,26 @@ private fun extractToolSummary(params: Map<String, Any?>?): String? {
 }
 
 /**
- * Constructs a safe remote shell command that:
- * 1. Loads login PATH and checks if the AgentsTerm Python daemon (installed by `daemon/install.sh`) is
- *    already running and healthy on [daemonPort] (returning its pairing URI immediately if so).
- * 2. Otherwise verifies `agy`, decodes the base64-encoded bootstrap prompt without shell injection risk,
- *    invokes `agy --dangerously-skip-permissions --print=... --output-format stream-json` for live progress,
- *    and prints the pairing URI when done.
+ * Constructs the remote shell command for the SSH bootstrap. Every run ends with the latest daemon
+ * code ([ref] of [repoUrl]) running, or with a non-zero exit code:
+ *
+ * 1. Clones the repo if needed and runs `daemon/install.sh`, which updates the checkout, restarts the
+ *    daemon unless it already runs that exact commit, verifies the commit the daemon reports, and
+ *    prints the pairing URI. On success the script exits here; Antigravity is not involved.
+ * 2. If that fails (missing python3/git, Tailscale down, ...), invokes
+ *    `agy --dangerously-skip-permissions` with the base64-encoded [prompt] (no shell injection risk)
+ *    to repair the VM.
+ * 3. Runs `install.sh` once more as the authoritative check. Its exit code is the script's exit code.
  */
-fun buildAgyBootstrapCommand(prompt: String, daemonPort: Int = 7501): String {
+fun buildAgyBootstrapCommand(
+    prompt: String,
+    daemonPort: Int = 7501,
+    repoUrl: String = AGENTSTERM_REPO_URL,
+    ref: String = AGENTSTERM_DAEMON_REF,
+): String {
     require(daemonPort in 1..65535) { "Invalid daemon port: $daemonPort" }
+    require(shellSafeRegex.matches(repoUrl)) { "Unsafe repository URL: $repoUrl" }
+    require(shellSafeRegex.matches(ref)) { "Unsafe git ref: $ref" }
     val promptB64 = encodeBase64Utf8(prompt)
     val script = """
         set -e
@@ -345,42 +356,61 @@ fun buildAgyBootstrapCommand(prompt: String, daemonPort: Int = 7501): String {
           [ -n "${'$'}NVM_LATEST" ] && export PATH="${'$'}HOME/.nvm/versions/node/${'$'}NVM_LATEST/bin:${'$'}PATH"
         fi
         export FORCE_COLOR=0
-        AGENTSTERM_DAEMON="${'$'}HOME/$AGENTSTERM_INSTALL_SUBDIR/daemon/agentsterm-daemon"
-        if [ -f "${'$'}AGENTSTERM_DAEMON" ] && command -v python3 >/dev/null 2>&1; then
-          TS_IP=${'$'}(tailscale ip -4 2>/dev/null | head -n 1 || true)
-          if [ -n "${'$'}TS_IP" ]; then
-            DAEMON_OK=${'$'}(python3 -c 'import json,os,sys,urllib.request
-p=os.path.expanduser("~/.config/herdr-mobile/config.json")
-t=json.load(open(p)).get("token","") if os.path.exists(p) else ""
-r=urllib.request.Request("http://%s:%s/api/info" % (sys.argv[1], sys.argv[2]), headers={"Authorization": "Bearer " + t})
-urllib.request.urlopen(r, timeout=3).read()' "${'$'}TS_IP" $daemonPort >/dev/null 2>&1 && echo yes || echo no)
-            if [ "${'$'}DAEMON_OK" = "yes" ]; then
-              echo ">>> AgentsTerm daemon is already running on ${'$'}{TS_IP}:$daemonPort."
-              python3 "${'$'}AGENTSTERM_DAEMON" pairing --host "${'$'}TS_IP" --port $daemonPort
-              exit 0
-            fi
+        AGENTSTERM_DIR="${'$'}HOME/$AGENTSTERM_INSTALL_SUBDIR"
+        AGENTSTERM_INSTALL="${'$'}AGENTSTERM_DIR/daemon/install.sh"
+        agentsterm_install() { bash "${'$'}AGENTSTERM_INSTALL" --port $daemonPort --ref $ref; }
+
+        # 1. Install or update to the latest daemon and make sure that exact commit is running.
+        if command -v git >/dev/null 2>&1; then
+          if [ ! -d "${'$'}AGENTSTERM_DIR/.git" ]; then
+            echo ">>> Fetching the AgentsTerm daemon ($ref)..."
+            git clone -q --depth 1 --branch $ref $repoUrl "${'$'}AGENTSTERM_DIR" || true
+          elif [ ! -f "${'$'}AGENTSTERM_INSTALL" ]; then
+            { git -C "${'$'}AGENTSTERM_DIR" fetch -q --depth 1 origin $ref && git -C "${'$'}AGENTSTERM_DIR" checkout -q -B agentsterm-deploy FETCH_HEAD; } || true
           fi
         fi
+        if [ -f "${'$'}AGENTSTERM_INSTALL" ]; then
+          echo ">>> Installing the latest AgentsTerm daemon ($ref)..."
+          if agentsterm_install; then
+            exit 0
+          fi
+          echo ">>> The installer failed (see ERROR above). Asking Antigravity to repair this VM..."
+        fi
+
+        # 2. Something is missing on this VM: let Antigravity repair it.
         if ! command -v agy >/dev/null 2>&1; then
-          echo "ERROR: 'agy' (Antigravity CLI) was not found in PATH on this VM." >&2
+          echo "ERROR: the AgentsTerm daemon could not be installed, and 'agy' (Antigravity CLI) was not found in PATH to repair this VM." >&2
           echo "Checked PATH: ${'$'}PATH" >&2
           exit 127
         fi
         HERDR_PROMPT=${'$'}(printf '%s' '$promptB64' | base64 -d)
         echo ">>> Invoking Antigravity (agy --dangerously-skip-permissions) on ${'$'}(hostname)..."
         if agy --help 2>&1 | grep -q -- '--output-format'; then
-          agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT" --output-format stream-json
+          agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT" --output-format stream-json || true
         else
-          agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT"
+          agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT" || true
         fi
-        if [ -f "${'$'}AGENTSTERM_DAEMON" ] && command -v python3 >/dev/null 2>&1; then
-          echo ">>> Checking AgentsTerm pairing URI..."
-          python3 "${'$'}AGENTSTERM_DAEMON" pairing --port $daemonPort || true
+
+        # 3. Authoritative check: the latest daemon must now be installed, running and verified.
+        if [ ! -f "${'$'}AGENTSTERM_INSTALL" ]; then
+          echo "ERROR: the AgentsTerm daemon is still not installed at ${'$'}AGENTSTERM_DIR." >&2
+          exit 3
         fi
+        echo ">>> Verifying the latest AgentsTerm daemon is running..."
+        agentsterm_install
     """.trimIndent()
     val scriptB64 = encodeBase64Utf8(script)
     return "printf '%s' '$scriptB64' | base64 -d | bash -s"
 }
+
+/**
+ * True when the remote bootstrap script finished with an error. `-1` means the SSH channel closed
+ * without reporting a status (connection dropped), which is handled separately.
+ */
+fun bootstrapExitIsFailure(exitCode: Int): Boolean = exitCode != 0 && exitCode != -1
+
+/** Characters allowed in values interpolated into the bootstrap shell script. */
+private val shellSafeRegex = Regex("^[A-Za-z0-9._:/@+=-]+$")
 
 /**
  * Extracts the latest valid `herdr://connect?...` pairing URI from raw terminal output.

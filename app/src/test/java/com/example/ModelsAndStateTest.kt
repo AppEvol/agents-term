@@ -201,19 +201,23 @@ class ModelsAndStateTest {
         assertTrue(decodedScript.contains("agy --dangerously-skip-permissions --print="))
         assertTrue(decodedScript.contains("--output-format stream-json"))
         assertTrue(decodedScript.contains(encodeBase64Utf8(trickyPrompt)))
-        assertTrue(decodedScript.contains("pairing --port 7501"))
-        assertTrue(decodedScript.contains("DAEMON_OK"))
+        assertTrue(decodedScript.contains("--port 7501 --ref main"))
     }
 
     @Test
-    fun bootstrapTargetsPythonDaemonInstaller() {
+    fun bootstrapAlwaysRunsInstallerAndNeverShortCircuitsOnAHealthyDaemon() {
         val cmd = buildAgyBootstrapCommand(prompt = "p", daemonPort = 7600)
         val script = String(
             Base64.getDecoder().decode(cmd.removePrefix("printf '%s' '").removeSuffix("' | base64 -d | bash -s")),
             Charsets.UTF_8,
         )
-        assertTrue(script.contains("\$HOME/.local/share/agentsterm/agents-term/daemon/agentsterm-daemon"))
-        assertTrue(script.contains("python3 \"\$AGENTSTERM_DAEMON\" pairing --host \"\$TS_IP\" --port 7600"))
+        assertTrue(script.contains("AGENTSTERM_DIR=\"\$HOME/.local/share/agentsterm/agents-term\""))
+        assertTrue(script.contains("git clone -q --depth 1 --branch main https://github.com/nedn/agents-term.git"))
+        assertTrue(script.contains("agentsterm_install() { bash \"\$AGENTSTERM_INSTALL\" --port 7600 --ref main; }"))
+        // No "daemon looks healthy, skip the update" shortcut, and the last command is the verification.
+        assertFalse(script.contains("DAEMON_OK"))
+        assertFalse(script.contains("already running"))
+        assertEquals("agentsterm_install", script.trim().lines().last().trim())
         assertFalse(script.contains("agent-terminal/server"))
         assertFalse(script.contains("node "))
 
@@ -222,6 +226,21 @@ class ModelsAndStateTest {
         assertTrue(prompt.contains("bash \"\$HOME/.local/share/agentsterm/agents-term/daemon/install.sh\" --port 7600 --ref main"))
         assertTrue(prompt.contains("Do not write your own daemon"))
         assertFalse(prompt.contains("Node.js"))
+    }
+
+    @Test
+    fun bootstrapRejectsUnsafeRepoOrRefAndTreatsNonZeroExitAsFailure() {
+        for (bad in listOf("main; rm -rf ~", "\$(whoami)", "a b", "x'y", "")) {
+            assertTrue(runCatching { buildAgyBootstrapCommand("p", ref = bad) }.isFailure)
+            assertTrue(runCatching { buildAgyBootstrapCommand("p", repoUrl = bad) }.isFailure)
+        }
+        buildAgyBootstrapCommand("p", repoUrl = "file:///tmp/origin-1", ref = "feat/app-state_reporter.v2")
+
+        assertFalse(com.example.data.bootstrapExitIsFailure(0))
+        assertFalse(com.example.data.bootstrapExitIsFailure(-1)) // dropped connection: handled separately
+        assertTrue(com.example.data.bootstrapExitIsFailure(3))
+        assertTrue(com.example.data.bootstrapExitIsFailure(4))
+        assertTrue(com.example.data.bootstrapExitIsFailure(127))
     }
 
     @Test

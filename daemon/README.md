@@ -13,8 +13,8 @@ One deliberate change since: text blocks around tool calls are now separated by 
 
 | File | Role |
 | :--- | :--- |
-| `install.sh` | Idempotent installer used by the app's SSH bootstrap (see the top-level README) |
-| `agentsterm-daemon` | Launcher: `serve` (default), `pairing`, `rotate-token`; `--host`, `--port`, `--no-auth` |
+| `install.sh` | Idempotent installer run by every SSH bootstrap: updates the checkout, restarts the daemon unless it already runs that commit, verifies the running commit (see the top-level README) |
+| `agentsterm-daemon` | Launcher: `serve` (default), `pairing`, `rotate-token`, `version`; `--host`, `--port`, `--no-auth` |
 | `agentsterm_daemon/server.py` | Routes, WebSocket sessions, debug dumps, directory listing |
 | `agentsterm_daemon/runner.py` | Agent turns and stream-json parsing |
 | `agentsterm_daemon/app_state.py` | App state broker (`/api/app/status`, `/api/app/command`) |

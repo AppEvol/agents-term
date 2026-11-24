@@ -59,11 +59,12 @@ def pairing_uri(host: str, port: int, token: str) -> str:
     return f"herdr://connect?{urlencode(params)}"
 
 
-USAGE = """usage: agentsterm-daemon [serve|pairing|rotate-token] [--host HOST] [--port PORT] [--no-auth]
+USAGE = """usage: agentsterm-daemon [serve|pairing|rotate-token|version] [--host HOST] [--port PORT] [--no-auth]
 
   serve         run the daemon (default); binds the Tailscale IPv4 unless --host is given
   pairing       print the herdr://connect pairing URI for the Android app
   rotate-token  generate a new bearer token (restart the daemon to apply)
+  version       print the daemon version and the git commit of this checkout
 """
 
 
@@ -73,6 +74,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if command == "help":
         print(USAGE, end="")
+        return 0
+
+    if command == "version":
+        from .config import SERVER_VERSION, daemon_commit
+
+        print(f"{SERVER_VERSION} {daemon_commit() or 'unknown'}")
         return 0
 
     if command in ("pairing", "rotate-token"):

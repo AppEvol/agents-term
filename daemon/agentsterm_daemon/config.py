@@ -21,6 +21,35 @@ _TAILSCALE_CACHE_TTL_S = 30.0
 _tailscale_cache: Dict[str, Any] = {"at": 0.0, "ip": None}
 
 
+_commit_cache: Dict[str, Optional[str]] = {}
+
+
+def daemon_commit() -> Optional[str]:
+    """Git commit of the checkout this daemon process was started from (resolved once).
+
+    The process keeps running the code it loaded at startup, so this identifies the running daemon
+    even after the checkout is updated underneath it. install.sh compares it with the checkout's
+    HEAD to decide whether a restart is needed, and to verify the restart took effect.
+    """
+    if "value" not in _commit_cache:
+        _commit_cache["value"] = _read_git_commit(Path(__file__).resolve().parent.parent.parent)
+    return _commit_cache["value"]
+
+
+def _read_git_commit(repo: Path) -> Optional[str]:
+    override = os.environ.get("AGENTSTERM_DAEMON_COMMIT")
+    if override:
+        return override.strip() or None
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5, check=False
+        )
+        commit = out.stdout.strip()
+        return commit if out.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", commit) else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def home_dir() -> Path:
     return Path(os.environ.get("HOME") or str(Path.home()))
 
@@ -193,6 +222,7 @@ def build_server_info(bind_host: Optional[str] = None) -> Dict[str, Any]:
     tailscale_ip = detect_tailscale_ip() or (bind_host if bind_host and bind_host != "0.0.0.0" else None)
     return {
         "version": SERVER_VERSION,
+        "commit": daemon_commit(),
         "hostname": socket.gethostname(),
         "tailscaleIp": tailscale_ip,
         "defaultCwd": str(home_dir()),
