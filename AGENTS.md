@@ -11,5 +11,6 @@
 
 ## Workflow
 
-- For simple changes, commit directly to `main` and push to `origin/main` when done.
-- For non-trivial work, create a work branch in its own git worktree, keep working on it until the work is done, then merge the work branch into `main`.
+- Always do your work in your own git worktree. Multiple agents may work in this repository on the same machine at the same time, and separate worktrees keep their changes from conflicting.
+- For simple changes, commit in your worktree and push directly to `origin/main` when done.
+- For non-trivial work, push your work branch to the remote and keep working on it until the work is done, then merge the work branch into `main` and push `main`.
