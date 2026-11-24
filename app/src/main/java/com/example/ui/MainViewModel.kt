@@ -115,6 +115,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repo.ensureConnectedOnForeground()
     }
 
+    override fun onCleared() {
+        repo.disconnect()
+        super.onCleared()
+    }
+
     fun handleIncomingPairingUri(uri: String) {
         val sshAutofill = parseSshSetupUri(uri)
         if (sshAutofill != null) {

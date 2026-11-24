@@ -1,5 +1,6 @@
 package com.example.data
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.WebSocket
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class WorkspaceState(
     val config: ConnectionConfig = ConnectionConfig(),
@@ -162,21 +164,28 @@ fun reduceWorkspaceEvent(
 
 class HerdrRepository(
     private val api: HerdrApiClient,
-    private val settings: SettingsStore,
+    private val settings: ConnectionSettings,
     private val debugRecorder: DebugRecorder? = null,
     private val onOperationalError: ((String) -> Unit)? = null,
+    private val reconnectBaseDelayMs: Long = DEFAULT_RECONNECT_BASE_DELAY_MS,
+    private val reconnectMaxDelayMs: Long = DEFAULT_RECONNECT_MAX_DELAY_MS,
+    private val clockMs: () -> Long = { System.currentTimeMillis() },
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
 
     private val _state = MutableStateFlow(
         WorkspaceState(config = settings.loadConnection())
     )
     val state: StateFlow<WorkspaceState> = _state.asStateFlow()
 
+    private val socketLock = Any()
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
     private var shouldStayConnected = false
     private var reconnectAttempt = 0
+    private var socketGeneration = 0L
+    private var lastConnectAttemptMs = 0L
 
     fun initializeAutoConnect() {
         val cfg = settings.loadConnection()
@@ -211,90 +220,170 @@ class HerdrRepository(
 
     fun connect(config: ConnectionConfig = _state.value.config) {
         if (!config.isValid) return
-        shouldStayConnected = true
-        reconnectAttempt = 0
-        reconnectJob?.cancel()
+        synchronized(socketLock) {
+            shouldStayConnected = true
+            reconnectAttempt = 0
+            reconnectJob?.cancel()
+            reconnectJob = null
+        }
         openSocketNow(config)
     }
 
     fun disconnect() {
-        shouldStayConnected = false
-        reconnectJob?.cancel()
-        webSocket?.close(1000, "User disconnected")
-        webSocket = null
-        _state.update {
-            it.copy(connectionState = ConnectionState.DISCONNECTED)
+        val socketToClose: WebSocket?
+        synchronized(socketLock) {
+            shouldStayConnected = false
+            socketGeneration++
+            reconnectJob?.cancel()
+            reconnectJob = null
+            socketToClose = webSocket
+            webSocket = null
+            _state.update {
+                it.copy(connectionState = ConnectionState.DISCONNECTED)
+            }
         }
+        socketToClose?.close(1000, "User disconnected")
     }
 
     fun ensureConnectedOnForeground() {
         val s = _state.value
-        if (s.config.isValid && shouldStayConnected && s.connectionState != ConnectionState.CONNECTED) {
-            connect(s.config)
-        } else if (s.config.isValid && s.connectionState == ConnectionState.CONNECTED) {
-            s.selectedTabId?.let { refreshTabMessages(it) }
+        if (!s.config.isValid) return
+        val action = synchronized(socketLock) {
+            when {
+                !shouldStayConnected -> ForegroundAction.NONE
+                s.connectionState == ConnectionState.CONNECTED -> ForegroundAction.REFRESH_ACTIVE_TAB
+                s.connectionState == ConnectionState.CONNECTING &&
+                    webSocket != null &&
+                    (clockMs() - lastConnectAttemptMs) < FOREGROUND_CONNECT_GRACE_MS -> ForegroundAction.NONE
+                else -> ForegroundAction.RECONNECT
+            }
+        }
+        when (action) {
+            ForegroundAction.RECONNECT -> connect(s.config)
+            ForegroundAction.REFRESH_ACTIVE_TAB -> s.selectedTabId?.let { refreshTabMessages(it) }
+            ForegroundAction.NONE -> Unit
         }
     }
 
-    private fun openSocketNow(config: ConnectionConfig) {
-        webSocket?.cancel()
-        _state.update {
-            it.copy(
-                config = config,
-                connectionState = ConnectionState.CONNECTING,
-                connectionError = null,
-            )
+    private fun openSocketNow(
+        config: ConnectionConfig,
+        expectedGeneration: Long? = null,
+    ) {
+        val previousSocket: WebSocket?
+        val generation: Long
+        synchronized(socketLock) {
+            if (!shouldStayConnected) return
+            if (expectedGeneration != null && expectedGeneration != socketGeneration) return
+            reconnectJob?.cancel()
+            reconnectJob = null
+            generation = ++socketGeneration
+            lastConnectAttemptMs = clockMs()
+            previousSocket = webSocket
+            webSocket = null
+            _state.update {
+                it.copy(
+                    config = config,
+                    connectionState = ConnectionState.CONNECTING,
+                    connectionError = null,
+                )
+            }
         }
+        previousSocket?.cancel()
 
         val lastSavedTabId = settings.loadLastTabId()
-        webSocket = api.openWebSocket(
+        val socketClosed = AtomicBoolean(false)
+        val newSocket = api.openWebSocket(
             config = config,
             onOpen = {
-                reconnectAttempt = 0
-                _state.update {
-                    it.copy(
-                        connectionState = ConnectionState.CONNECTED,
-                        connectionError = null,
-                    )
+                synchronized(socketLock) {
+                    if (generation != socketGeneration || !shouldStayConnected) return@openWebSocket
+                    reconnectAttempt = 0
+                    reconnectJob?.cancel()
+                    reconnectJob = null
+                    _state.update {
+                        it.copy(
+                            connectionState = ConnectionState.CONNECTED,
+                            connectionError = null,
+                        )
+                    }
                 }
             },
             onEvent = { envelope ->
                 var selectedAfter: String? = null
-                _state.update { current ->
-                    val next = reduceWorkspaceEvent(current, envelope, preferredTabId = lastSavedTabId)
-                    selectedAfter = next.selectedTabId
-                    next
+                val applied = synchronized(socketLock) {
+                    if (generation != socketGeneration || !shouldStayConnected) {
+                        false
+                    } else {
+                        _state.update { current ->
+                            val next = reduceWorkspaceEvent(current, envelope, preferredTabId = lastSavedTabId)
+                            selectedAfter = next.selectedTabId
+                            next
+                        }
+                        true
+                    }
                 }
-                if (envelope.type == "snapshot") {
+                if (applied && envelope.type == "snapshot") {
                     selectedAfter?.let { tabId ->
                         refreshTabMessages(tabId)
                     }
                 }
             },
             onClosed = { reason ->
-                _state.update {
-                    it.copy(
-                        connectionState = if (shouldStayConnected) ConnectionState.ERROR else ConnectionState.DISCONNECTED,
-                        connectionError = reason ?: "Disconnected from VM",
-                    )
+                if (!socketClosed.compareAndSet(false, true)) return@openWebSocket
+                val shouldReconnect = synchronized(socketLock) {
+                    if (generation != socketGeneration) return@openWebSocket
+                    webSocket = null
+                    val stayConnected = shouldStayConnected
+                    _state.update {
+                        it.copy(
+                            connectionState = if (stayConnected) ConnectionState.ERROR else ConnectionState.DISCONNECTED,
+                            connectionError = reason ?: "Disconnected from VM",
+                        )
+                    }
+                    stayConnected
                 }
-                if (shouldStayConnected) {
-                    scheduleReconnect(config)
+                if (shouldReconnect) {
+                    scheduleReconnect(config, expectedGeneration = generation)
                 }
             },
         )
-    }
 
-    private fun scheduleReconnect(config: ConnectionConfig) {
-        reconnectJob?.cancel()
-        reconnectJob = scope.launch {
-            val delayMs = (1500L * (1 shl reconnectAttempt.coerceAtMost(4))).coerceAtMost(15_000L)
-            reconnectAttempt++
-            delay(delayMs)
-            if (shouldStayConnected) {
-                openSocketNow(config)
+        val superseded = synchronized(socketLock) {
+            if (generation != socketGeneration || !shouldStayConnected) {
+                true
+            } else {
+                if (!socketClosed.get()) {
+                    webSocket = newSocket
+                }
+                false
             }
         }
+        if (superseded) {
+            newSocket.cancel()
+        }
+    }
+
+    private fun scheduleReconnect(
+        config: ConnectionConfig,
+        expectedGeneration: Long,
+    ) {
+        synchronized(socketLock) {
+            if (expectedGeneration != socketGeneration || !shouldStayConnected) return
+            reconnectJob?.cancel()
+            val delayMs = (reconnectBaseDelayMs * (1 shl reconnectAttempt.coerceAtMost(4)))
+                .coerceAtMost(reconnectMaxDelayMs)
+            reconnectAttempt++
+            reconnectJob = scope.launch {
+                delay(delayMs)
+                openSocketNow(config, expectedGeneration = expectedGeneration)
+            }
+        }
+    }
+
+    private enum class ForegroundAction {
+        NONE,
+        RECONNECT,
+        REFRESH_ACTIVE_TAB,
     }
 
     fun selectTab(tabId: String) {
@@ -460,5 +549,11 @@ class HerdrRepository(
         debugRecorder?.record("error", "banner_message", msg)
         _state.update { it.copy(bannerMessage = msg) }
         onOperationalError?.invoke(msg)
+    }
+
+    companion object {
+        private const val DEFAULT_RECONNECT_BASE_DELAY_MS = 1_500L
+        private const val DEFAULT_RECONNECT_MAX_DELAY_MS = 15_000L
+        private const val FOREGROUND_CONNECT_GRACE_MS = 2_000L
     }
 }

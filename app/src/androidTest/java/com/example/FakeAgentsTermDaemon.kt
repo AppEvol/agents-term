@@ -59,6 +59,15 @@ class FakeAgentsTermDaemon(
     val receivedOverrideModes = CopyOnWriteArrayList<String>()
     val uploadedDebugDumps = CopyOnWriteArrayList<DebugDumpUploadRequest>()
     val recordedRequests = CopyOnWriteArrayList<String>()
+    val webSocketUpgradeCount = AtomicInteger(0)
+
+    fun dropAllWebSockets() {
+        val snapshot = activeSockets.toList()
+        activeSockets.clear()
+        for (ws in snapshot) {
+            runCatching { ws.cancel() }
+        }
+    }
 
     private val serverInfo = ServerInfo(
         version = "0.1.0-e2e",
@@ -246,6 +255,7 @@ class FakeAgentsTermDaemon(
     }
 
     private fun handleWebSocketUpgrade(): MockResponse {
+        webSocketUpgradeCount.incrementAndGet()
         return MockResponse().withWebSocketUpgrade(
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {

@@ -2,10 +2,17 @@ package com.example.data
 
 import android.content.Context
 
-class SettingsStore(context: Context) {
+interface ConnectionSettings {
+    fun loadConnection(): ConnectionConfig
+    fun saveConnection(config: ConnectionConfig)
+    fun loadLastTabId(): String?
+    fun saveLastTabId(tabId: String?)
+}
+
+class SettingsStore(context: Context) : ConnectionSettings {
     private val prefs = context.getSharedPreferences("herdr_mobile_prefs", Context.MODE_PRIVATE)
 
-    fun loadConnection(): ConnectionConfig {
+    override fun loadConnection(): ConnectionConfig {
         return ConnectionConfig(
             host = prefs.getString(KEY_HOST, "").orEmpty(),
             port = prefs.getInt(KEY_PORT, 7501),
@@ -13,7 +20,7 @@ class SettingsStore(context: Context) {
         )
     }
 
-    fun saveConnection(config: ConnectionConfig) {
+    override fun saveConnection(config: ConnectionConfig) {
         prefs.edit()
             .putString(KEY_HOST, config.host.trim())
             .putInt(KEY_PORT, config.port)
@@ -21,9 +28,9 @@ class SettingsStore(context: Context) {
             .apply()
     }
 
-    fun loadLastTabId(): String? = prefs.getString(KEY_LAST_TAB, null)
+    override fun loadLastTabId(): String? = prefs.getString(KEY_LAST_TAB, null)
 
-    fun saveLastTabId(tabId: String?) {
+    override fun saveLastTabId(tabId: String?) {
         prefs.edit().putString(KEY_LAST_TAB, tabId).apply()
     }
 

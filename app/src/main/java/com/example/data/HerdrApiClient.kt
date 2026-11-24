@@ -12,8 +12,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
-class HerdrApiClient(
+open class HerdrApiClient(
     private val debugRecorder: DebugRecorder? = null,
 ) {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -135,7 +136,7 @@ class HerdrApiClient(
         }
     }
 
-    suspend fun getTabMessages(config: ConnectionConfig, tabId: String): TabMessagesResponse {
+    open suspend fun getTabMessages(config: ConnectionConfig, tabId: String): TabMessagesResponse {
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs/$tabId/messages")
             .withAuth(config)
@@ -210,7 +211,7 @@ class HerdrApiClient(
         return executeJson(req, logPayload = false)
     }
 
-    fun openWebSocket(
+    open fun openWebSocket(
         config: ConnectionConfig,
         onOpen: () -> Unit,
         onEvent: (WsServerEnvelope) -> Unit,
@@ -226,6 +227,13 @@ class HerdrApiClient(
             event = "ws_connecting",
             detail = "Opening WebSocket to ${config.host}:${config.port}/ws",
         )
+
+        val closedNotified = AtomicBoolean(false)
+        fun notifyClosedOnce(reason: String?) {
+            if (closedNotified.compareAndSet(false, true)) {
+                onClosed(reason)
+            }
+        }
 
         return client.newWebSocket(
             req,
@@ -277,7 +285,16 @@ class HerdrApiClient(
                         detail = "WebSocket closing (code=$code, reason=${reason.ifBlank { "none" }})",
                     )
                     webSocket.close(1000, null)
-                    onClosed(reason.ifBlank { null })
+                    notifyClosedOnce(reason.ifBlank { null })
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    debugRecorder?.record(
+                        category = "ws",
+                        event = "ws_closed",
+                        detail = "WebSocket closed (code=$code, reason=${reason.ifBlank { "none" }})",
+                    )
+                    notifyClosedOnce(reason.ifBlank { null })
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -288,7 +305,7 @@ class HerdrApiClient(
                         event = "ws_failure",
                         detail = "WebSocket failure: $reason",
                     )
-                    onClosed(reason)
+                    notifyClosedOnce(reason)
                 }
             }
         )

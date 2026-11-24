@@ -19,6 +19,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToString
+import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -26,6 +27,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.example.data.ChatMessage
 import com.example.data.TabRecord
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -508,5 +510,58 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("ssh_host_input").performScrollTo().assertTextContains("dev-vm.ts.net")
         composeRule.onNodeWithTag("ssh_username_input").performScrollTo().assertTextContains("alice")
         composeRule.onNodeWithTag("ssh_port_input").performScrollTo().assertTextContains("2200")
+    }
+
+    @Test
+    fun reconnectOnForegroundAfterSocketDropStabilizesWithoutReconnectStorm() {
+        val seedTab = TabRecord(
+            id = "tab_reconnect",
+            title = "Antigravity · stable",
+            agent = "agy",
+            cwd = "/home/ci/projects/agents-term",
+            permissionMode = "full-access",
+            status = "idle",
+        )
+        val activeDaemon = startDaemon(initialTabs = listOf(seedTab))
+
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForText("Antigravity · stable")
+        waitForTag("composer_input")
+
+        val initialUpgrades = activeDaemon.webSocketUpgradeCount.get()
+        assertTrue("Expected at least 1 initial WS connection", initialUpgrades >= 1)
+
+        // Drop the active socket, wait for the disconnect banner (which schedules the 1.5s
+        // backoff reconnect), then resume to foreground to trigger an overlapping reconnect.
+        activeDaemon.dropAllWebSockets()
+        waitForTag("banner_reconnect_button")
+        scenario?.moveToState(Lifecycle.State.STARTED)
+        scenario?.moveToState(Lifecycle.State.RESUMED)
+
+        // Wait for reconnection to succeed and the disconnect banner to clear
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            activeDaemon.webSocketUpgradeCount.get() > initialUpgrades &&
+                composeRule.onAllNodesWithTag("banner_reconnect_button")
+                    .fetchSemanticsNodes()
+                    .isEmpty()
+        }
+
+        // Send a prompt to confirm the recovered socket is healthy
+        composeRule.onNodeWithTag("composer_input").performTextInput("Verify reconnect stability")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForText("Repository is clean on main branch.")
+
+        // Wait longer than 2x the 1.5s reconnect interval and assert no further reconnects occur
+        val stableUpgrades = activeDaemon.webSocketUpgradeCount.get()
+        Thread.sleep(3_500L)
+        assertEquals(
+            "WebSocket entered a reconnect loop after foreground recovery",
+            stableUpgrades,
+            activeDaemon.webSocketUpgradeCount.get(),
+        )
     }
 }
