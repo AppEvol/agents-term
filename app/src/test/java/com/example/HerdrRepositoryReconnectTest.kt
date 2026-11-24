@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.data.AppStateRequestHandler
 import com.example.data.ConnectionConfig
 import com.example.data.ConnectionSettings
 import com.example.data.ConnectionState
@@ -67,6 +68,7 @@ class HerdrRepositoryReconnectTest {
             private set
         var closed = false
             private set
+        val sentTexts = mutableListOf<String>()
 
         fun emitOpen() = onOpenCb()
         fun emitEvent(envelope: WsServerEnvelope) = onEventCb(envelope)
@@ -74,7 +76,11 @@ class HerdrRepositoryReconnectTest {
 
         override fun request(): Request = Request.Builder().url("http://100.71.219.26:7501/ws").build()
         override fun queueSize(): Long = 0L
-        override fun send(text: String): Boolean = !cancelled && !closed
+        override fun send(text: String): Boolean {
+            if (cancelled || closed) return false
+            sentTexts.add(text)
+            return true
+        }
         override fun send(bytes: ByteString): Boolean = !cancelled && !closed
         override fun close(code: Int, reason: String?): Boolean {
             closed = true
@@ -471,5 +477,88 @@ class HerdrRepositoryReconnectTest {
         assertEquals("/home/test", afterDelete.path)
         assertEquals("/home/test", repo.state.value.lastCwd)
         assertEquals("/home/test", settings.loadLastCwd(testConfig.host))
+    }
+
+    private class RecordingAppStateHandler : AppStateRequestHandler {
+        val requests = mutableListOf<Triple<String, String, Map<String, Any?>>>()
+        override fun helloJson(): String = """{"type":"app_hello"}"""
+        override suspend fun handleRequest(requestId: String, command: String, args: Map<String, Any?>): String {
+            requests.add(Triple(requestId, command, args))
+            return """{"type":"app_state_response","requestId":"$requestId","ok":true}"""
+        }
+    }
+
+    @Test
+    fun appStateRequestsAreAnsweredOnTheSocketAndHelloFollowsSnapshot() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val api = FakeApiClient(fireClosedOnCancel = false)
+        val repo = HerdrRepository(
+            api = api,
+            settings = InMemorySettings(connection = testConfig),
+            ioDispatcher = dispatcher,
+        )
+        val handler = RecordingAppStateHandler()
+        repo.appStateHandler = handler
+
+        repo.connect(testConfig)
+        val socket = api.sockets[0]
+        socket.emitOpen()
+        socket.emitEvent(WsServerEnvelope(type = "snapshot", tabs = emptyList()))
+        runCurrent()
+        assertEquals(listOf("""{"type":"app_hello"}"""), socket.sentTexts)
+
+        val stateBefore = repo.state.value
+        socket.emitEvent(
+            WsServerEnvelope(
+                type = "app_state_request",
+                requestId = "r1",
+                command = "logs",
+                args = mapOf("limit" to 5.0),
+            )
+        )
+        runCurrent()
+        assertEquals(listOf(Triple("r1", "logs", mapOf<String, Any?>("limit" to 5.0))), handler.requests)
+        assertEquals("""{"type":"app_state_response","requestId":"r1","ok":true}""", socket.sentTexts.last())
+        // Requests never touch workspace state.
+        assertEquals(stateBefore, repo.state.value)
+
+        repo.sendAppHello()
+        assertEquals(3, socket.sentTexts.size)
+    }
+
+    @Test
+    fun appStateResponseIsDroppedWhenSocketWasReplaced() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val api = FakeApiClient(fireClosedOnCancel = false)
+        val repo = HerdrRepository(
+            api = api,
+            settings = InMemorySettings(connection = testConfig),
+            ioDispatcher = dispatcher,
+        )
+        repo.appStateHandler = RecordingAppStateHandler()
+
+        repo.connect(testConfig)
+        val socket1 = api.sockets[0]
+        socket1.emitOpen()
+        socket1.emitEvent(WsServerEnvelope(type = "app_state_request", requestId = "r1", command = "state"))
+        // Reconnect before the handler coroutine runs.
+        repo.connect(testConfig)
+        val socket2 = api.sockets[1]
+        socket2.emitOpen()
+        runCurrent()
+
+        assertTrue(socket1.sentTexts.isEmpty())
+        assertTrue(socket2.sentTexts.isEmpty())
+    }
+
+    @Test
+    fun appStateRequestDecodesFromDaemonJson() {
+        val env = com.example.data.decodeHerdrJson<WsServerEnvelope>(
+            """{"type":"app_state_request","requestId":"abc","command":"logs","args":{"limit":5,"categories":["http"]}}"""
+        )
+        assertEquals("abc", env.requestId)
+        assertEquals("logs", env.command)
+        assertEquals(5.0, env.args?.get("limit"))
+        assertEquals(listOf("http"), env.args?.get("categories"))
     }
 }

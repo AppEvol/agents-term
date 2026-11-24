@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import com.example.data.ForegroundActivityTracker
 import com.example.ui.HerdrApp
 import com.example.ui.MainViewModel
 import com.example.ui.theme.HerdrTheme
@@ -31,7 +32,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ForegroundActivityTracker.onResumed(this)
         viewModel.onForeground()
+    }
+
+    override fun onPause() {
+        ForegroundActivityTracker.onPaused(this)
+        super.onPause()
     }
 
     private fun handleIntent(intent: Intent?) {
