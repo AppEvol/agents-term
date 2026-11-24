@@ -22,9 +22,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -58,10 +60,12 @@ import com.example.ui.theme.statusLabel
 @Composable
 fun TabDrawerContent(
     state: WorkspaceState,
+    debugSharingEnabled: Boolean = false,
     onSelectTab: (String) -> Unit,
     onNewTab: () -> Unit,
     onDeleteTab: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAppSettings: () -> Unit = {},
     onReconnect: () -> Unit,
 ) {
     ModalDrawerSheet(
@@ -70,10 +74,12 @@ fun TabDrawerContent(
     ) {
         TabSidebarBody(
             state = state,
+            debugSharingEnabled = debugSharingEnabled,
             onSelectTab = onSelectTab,
             onNewTab = onNewTab,
             onDeleteTab = onDeleteTab,
             onOpenSettings = onOpenSettings,
+            onOpenAppSettings = onOpenAppSettings,
             onReconnect = onReconnect,
         )
     }
@@ -82,10 +88,12 @@ fun TabDrawerContent(
 @Composable
 fun TabSidebarBody(
     state: WorkspaceState,
+    debugSharingEnabled: Boolean = false,
     onSelectTab: (String) -> Unit,
     onNewTab: () -> Unit,
     onDeleteTab: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAppSettings: () -> Unit = {},
     onReconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -221,6 +229,48 @@ fun TabSidebarBody(
                         onClick = { onSelectTab(tab.id) },
                         onDelete = { onDeleteTab(tab.id) },
                     )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(8.dp))
+
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .clickable(onClick = onOpenAppSettings)
+                .testTag("drawer_app_settings_button"),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    imageVector = if (debugSharingEnabled) Icons.Rounded.BugReport else Icons.Rounded.Tune,
+                    contentDescription = null,
+                    tint = if (debugSharingEnabled) HerdrEmerald else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(19.dp),
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.action_app_settings),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (debugSharingEnabled) {
+                        Text(
+                            text = "VM debug sharing enabled",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = HerdrEmerald,
+                        )
+                    }
                 }
             }
         }

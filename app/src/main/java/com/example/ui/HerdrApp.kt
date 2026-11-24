@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
@@ -61,6 +62,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -72,7 +74,10 @@ import com.example.R
 import com.example.data.ConnectionState
 import com.example.data.TabRecord
 import com.example.data.WorkspaceState
+import com.example.data.captureWindowScreenshotBase64
+import com.example.data.shareDebugBundleFile
 import com.example.ui.theme.HerdrAmber
+import com.example.ui.theme.HerdrEmerald
 import com.example.ui.theme.HerdrRed
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.statusColor
@@ -83,10 +88,37 @@ import kotlinx.coroutines.launch
 fun HerdrApp(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val showConnect by viewModel.showConnectScreen.collectAsStateWithLifecycle()
+    val showSettings by viewModel.showSettingsScreen.collectAsStateWithLifecycle()
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val pendingPairing by viewModel.pendingPairingConfig.collectAsStateWithLifecycle()
     val sshProfile by viewModel.sshProfile.collectAsStateWithLifecycle()
     val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle()
+    val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
+    val debugUploadState by viewModel.debugUploadState.collectAsStateWithLifecycle()
+    val debugEventCount by viewModel.debugEventCount.collectAsStateWithLifecycle()
+    val hasLastCrash by viewModel.hasLastCrash.collectAsStateWithLifecycle()
+
+    if (showSettings) {
+        SettingsScreen(
+            workspaceState = state,
+            debugSettings = debugSettings,
+            uploadState = debugUploadState,
+            eventCount = debugEventCount,
+            hasLastCrash = hasLastCrash,
+            recentEventsProvider = { viewModel.recentDebugEvents() },
+            onBack = { viewModel.closeAppSettings() },
+            onOpenVmConnection = { viewModel.openConnectionSettings() },
+            onUpdateDebugSettings = { viewModel.updateDebugSettings(it) },
+            onUploadDumpToVm = { note, shot ->
+                viewModel.uploadDebugDumpToVm(note = note, screenshotBase64 = shot)
+            },
+            onExportOfflineZip = { note, shot ->
+                viewModel.createOfflineDebugZip(note = note, screenshotBase64 = shot)
+            },
+            onClearDebugBuffer = { viewModel.clearDebugLogs() },
+        )
+        return
+    }
 
     if (showConnect) {
         ConnectScreen(
@@ -103,10 +135,12 @@ fun HerdrApp(viewModel: MainViewModel) {
             onCancelSshBootstrap = { viewModel.cancelSshBootstrap() },
             onTrustNewHostKeyAndRetry = { viewModel.trustChangedHostKeyAndRetry(it) },
             onConsumedPendingPairing = { viewModel.clearPendingPairingConfig() },
+            onOpenAppSettings = { viewModel.openAppSettings() },
         )
         return
     }
 
+    val context = LocalContext.current
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -115,12 +149,25 @@ fun HerdrApp(viewModel: MainViewModel) {
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showPermissionDialog by remember { mutableStateOf(false) }
+    var showQuickDebugDialog by remember { mutableStateOf(false) }
+    var pendingScreenshotBase64 by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(state.bannerMessage) {
         val msg = state.bannerMessage
         if (!msg.isNullOrBlank()) {
             snackbarHostState.showSnackbar(msg)
             viewModel.clearBanner()
+        }
+    }
+
+    fun triggerQuickDebugDialog() {
+        scope.launch {
+            pendingScreenshotBase64 = if (debugSettings.includeScreenshot) {
+                captureWindowScreenshotBase64(context.findActivityOrNull())
+            } else {
+                null
+            }
+            showQuickDebugDialog = true
         }
     }
 
@@ -131,16 +178,19 @@ fun HerdrApp(viewModel: MainViewModel) {
             WorkspaceScaffold(
                 state = state,
                 isExpanded = isExpanded,
+                debugSharingEnabled = debugSettings.enabled,
                 snackbarHostState = snackbarHostState,
                 showOverflowMenu = showOverflowMenu,
                 onToggleOverflow = { showOverflowMenu = it },
                 onOpenDrawer = { scope.launch { drawerState.open() } },
                 onNewTab = { showNewTabSheet = true },
+                onQuickDebugDump = { triggerQuickDebugDialog() },
                 onSelectTab = { viewModel.selectTab(it) },
                 onRenameTab = { showRenameDialog = true },
                 onChangePermission = { showPermissionDialog = true },
                 onDeleteTab = { viewModel.deleteTab(it) },
                 onOpenSettings = { viewModel.openConnectionSettings() },
+                onOpenAppSettings = { viewModel.openAppSettings() },
                 onReconnect = { viewModel.reconnectNow() },
                 onSendMessage = { viewModel.sendMessage(it) },
                 onInterrupt = { viewModel.interruptActiveTab() },
@@ -158,10 +208,12 @@ fun HerdrApp(viewModel: MainViewModel) {
                 ) {
                     TabSidebarBody(
                         state = state,
+                        debugSharingEnabled = debugSettings.enabled,
                         onSelectTab = { viewModel.selectTab(it) },
                         onNewTab = { showNewTabSheet = true },
                         onDeleteTab = { viewModel.deleteTab(it) },
                         onOpenSettings = { viewModel.openConnectionSettings() },
+                        onOpenAppSettings = { viewModel.openAppSettings() },
                         onReconnect = { viewModel.reconnectNow() },
                     )
                 }
@@ -176,6 +228,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 drawerContent = {
                     TabDrawerContent(
                         state = state,
+                        debugSharingEnabled = debugSettings.enabled,
                         onSelectTab = { id ->
                             viewModel.selectTab(id)
                             scope.launch { drawerState.close() }
@@ -188,6 +241,10 @@ fun HerdrApp(viewModel: MainViewModel) {
                         onOpenSettings = {
                             scope.launch { drawerState.close() }
                             viewModel.openConnectionSettings()
+                        },
+                        onOpenAppSettings = {
+                            scope.launch { drawerState.close() }
+                            viewModel.openAppSettings()
                         },
                         onReconnect = { viewModel.reconnectNow() },
                     )
@@ -295,6 +352,104 @@ fun HerdrApp(viewModel: MainViewModel) {
             },
         )
     }
+
+    if (showQuickDebugDialog) {
+        var noteInput by remember { mutableStateOf("") }
+        val isConnected = state.connectionState == ConnectionState.CONNECTED && state.config.isValid
+        AlertDialog(
+            onDismissRequest = {
+                showQuickDebugDialog = false
+                pendingScreenshotBase64 = null
+            },
+            title = { Text(stringResource(R.string.dialog_debug_dump_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = stringResource(R.string.dialog_debug_dump_body),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val summaryParts = buildList {
+                        add("$debugEventCount events")
+                        if (pendingScreenshotBase64 != null) add("screenshot")
+                        if (debugSettings.includeLogcat) add("logcat")
+                        if (hasLastCrash) add("crash trace")
+                    }.joinToString(" · ")
+                    Text(
+                        text = "Included: $summaryParts",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = MonoFontFamily,
+                        color = HerdrEmerald,
+                    )
+                    OutlinedTextField(
+                        value = noteInput,
+                        onValueChange = { noteInput = it },
+                        minLines = 2,
+                        maxLines = 4,
+                        label = { Text(stringResource(R.string.settings_debug_note_label)) },
+                        placeholder = { Text(stringResource(R.string.settings_debug_note_placeholder)) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("quick_debug_note_input"),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = isConnected && !debugUploadState.isUploading,
+                    onClick = {
+                        val shot = pendingScreenshotBase64
+                        val note = noteInput.trim().ifBlank { null }
+                        showQuickDebugDialog = false
+                        pendingScreenshotBase64 = null
+                        viewModel.uploadDebugDumpToVm(note = note, screenshotBase64 = shot) { res ->
+                            scope.launch {
+                                res.onSuccess { uploaded ->
+                                    snackbarHostState.showSnackbar("Uploaded debug dump to ${uploaded.remoteDir}")
+                                }.onFailure { err ->
+                                    snackbarHostState.showSnackbar(err.message ?: "Debug upload failed")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("quick_debug_upload_confirm"),
+                ) {
+                    Text(stringResource(R.string.dialog_debug_dump_upload))
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            val shot = pendingScreenshotBase64
+                            val note = noteInput.trim().ifBlank { null }
+                            showQuickDebugDialog = false
+                            pendingScreenshotBase64 = null
+                            scope.launch {
+                                viewModel.createOfflineDebugZip(note = note, screenshotBase64 = shot)
+                                    .onSuccess { file ->
+                                        runCatching { shareDebugBundleFile(context, file) }
+                                    }
+                                    .onFailure { err ->
+                                        snackbarHostState.showSnackbar(err.message ?: "Export failed")
+                                    }
+                            }
+                        },
+                    ) {
+                        Text(stringResource(R.string.dialog_debug_dump_share))
+                    }
+                    TextButton(
+                        onClick = {
+                            showQuickDebugDialog = false
+                            pendingScreenshotBase64 = null
+                        },
+                    ) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -302,16 +457,19 @@ fun HerdrApp(viewModel: MainViewModel) {
 private fun WorkspaceScaffold(
     state: WorkspaceState,
     isExpanded: Boolean,
+    debugSharingEnabled: Boolean,
     snackbarHostState: SnackbarHostState,
     showOverflowMenu: Boolean,
     onToggleOverflow: (Boolean) -> Unit,
     onOpenDrawer: () -> Unit,
     onNewTab: () -> Unit,
+    onQuickDebugDump: () -> Unit,
     onSelectTab: (String) -> Unit,
     onRenameTab: () -> Unit,
     onChangePermission: () -> Unit,
     onDeleteTab: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAppSettings: () -> Unit,
     onReconnect: () -> Unit,
     onSendMessage: (String) -> Unit,
     onInterrupt: () -> Unit,
@@ -381,6 +539,18 @@ private fun WorkspaceScaffold(
                         }
                     },
                     actions = {
+                        if (debugSharingEnabled) {
+                            IconButton(
+                                onClick = onQuickDebugDump,
+                                modifier = Modifier.testTag("top_debug_dump_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.BugReport,
+                                    contentDescription = stringResource(R.string.action_quick_debug_dump),
+                                    tint = HerdrEmerald,
+                                )
+                            }
+                        }
                         IconButton(
                             onClick = onNewTab,
                             modifier = Modifier.testTag("top_new_tab_button"),
@@ -434,6 +604,14 @@ private fun WorkspaceScaffold(
                                         },
                                     )
                                 }
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.action_app_settings)) },
+                                    onClick = {
+                                        onToggleOverflow(false)
+                                        onOpenAppSettings()
+                                    },
+                                    modifier = Modifier.testTag("menu_app_settings"),
+                                )
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.action_vm_settings)) },
                                     onClick = {

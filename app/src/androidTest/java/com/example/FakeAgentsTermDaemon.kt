@@ -3,6 +3,8 @@ package com.example
 import com.example.data.AvailableAgentInfo
 import com.example.data.ChatMessage
 import com.example.data.CreateTabRequest
+import com.example.data.DebugDumpUploadRequest
+import com.example.data.DebugDumpUploadResponse
 import com.example.data.DeniedAction
 import com.example.data.FsDirectoryEntry
 import com.example.data.FsListResponse
@@ -55,6 +57,7 @@ class FakeAgentsTermDaemon(
     val interruptedTabIds = CopyOnWriteArrayList<String>()
     val markedReadTabIds = CopyOnWriteArrayList<String>()
     val receivedOverrideModes = CopyOnWriteArrayList<String>()
+    val uploadedDebugDumps = CopyOnWriteArrayList<DebugDumpUploadRequest>()
     val recordedRequests = CopyOnWriteArrayList<String>()
 
     private val serverInfo = ServerInfo(
@@ -152,6 +155,20 @@ class FakeAgentsTermDaemon(
                 directories = emptyList(),
             )
             return jsonResponse(200, encodeHerdrJson(listing))
+        }
+
+        if (method == "POST" && path == "/api/debug/dumps") {
+            val req = decodeHerdrJson<DebugDumpUploadRequest>(request.body.readUtf8())
+            uploadedDebugDumps.add(req)
+            val remoteDir = "/home/ci/.config/herdr-mobile/debug-dumps/20261124_${req.dumpId}"
+            val resp = DebugDumpUploadResponse(
+                ok = true,
+                dumpId = req.dumpId,
+                remoteDir = remoteDir,
+                latestSymlink = "/home/ci/.config/herdr-mobile/debug-dumps/latest",
+                files = listOf("summary.md", "meta.json", "state.json", "events.ndjson"),
+            )
+            return jsonResponse(200, encodeHerdrJson(resp))
         }
 
         if (method == "GET" && path == "/api/tabs") {

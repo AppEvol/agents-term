@@ -13,7 +13,9 @@ import okhttp3.WebSocketListener
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class HerdrApiClient {
+class HerdrApiClient(
+    private val debugRecorder: DebugRecorder? = null,
+) {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     private val client = OkHttpClient.Builder()
@@ -30,17 +32,47 @@ class HerdrApiClient {
         return this
     }
 
-    private suspend inline fun <reified T> executeJson(request: Request): T =
+    private suspend inline fun <reified T> executeJson(
+        request: Request,
+        logPayload: Boolean = true,
+    ): T =
         withContext(Dispatchers.IO) {
-            client.newCall(request).execute().use { resp ->
-                val bodyStr = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) {
-                    val parsedErr = runCatching {
-                        decodeHerdrJson<ErrorResponse>(bodyStr).error
-                    }.getOrNull()
-                    throw IOException(parsedErr ?: "HTTP ${resp.code}: ${resp.message}")
+            val startMs = System.currentTimeMillis()
+            val endpoint = "${request.method} ${request.url.encodedPath}"
+            try {
+                client.newCall(request).execute().use { resp ->
+                    val durationMs = System.currentTimeMillis() - startMs
+                    val bodyStr = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val parsedErr = runCatching {
+                            decodeHerdrJson<ErrorResponse>(bodyStr).error
+                        }.getOrNull()
+                        val errMsg = parsedErr ?: "HTTP ${resp.code}: ${resp.message}"
+                        debugRecorder?.record(
+                            category = "http",
+                            event = "http_error",
+                            detail = "$endpoint -> ${resp.code} (${durationMs}ms): $errMsg",
+                            payload = if (logPayload) bodyStr else null,
+                        )
+                        throw IOException(errMsg)
+                    }
+                    debugRecorder?.record(
+                        category = "http",
+                        event = "http_ok",
+                        detail = "$endpoint -> ${resp.code} (${durationMs}ms, ${bodyStr.length}B)",
+                    )
+                    decodeHerdrJson<T>(bodyStr)
                 }
-                decodeHerdrJson<T>(bodyStr)
+            } catch (err: Throwable) {
+                val durationMs = System.currentTimeMillis() - startMs
+                if (err !is IOException || err.message?.startsWith("HTTP ") != true) {
+                    debugRecorder?.record(
+                        category = "http",
+                        event = "http_exception",
+                        detail = "$endpoint failed (${durationMs}ms): ${err.message ?: err::class.java.simpleName}",
+                    )
+                }
+                throw err
             }
         }
 
@@ -157,6 +189,19 @@ class HerdrApiClient {
         return executeJson(req)
     }
 
+    suspend fun uploadDebugDump(
+        config: ConnectionConfig,
+        body: DebugDumpUploadRequest,
+    ): DebugDumpUploadResponse {
+        val json = encodeHerdrJson(body)
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/debug/dumps")
+            .withAuth(config)
+            .post(json.toRequestBody(jsonMediaType))
+            .build()
+        return executeJson(req, logPayload = false)
+    }
+
     fun openWebSocket(
         config: ConnectionConfig,
         onOpen: () -> Unit,
@@ -168,26 +213,74 @@ class HerdrApiClient {
             .withAuth(config)
             .build()
 
+        debugRecorder?.record(
+            category = "ws",
+            event = "ws_connecting",
+            detail = "Opening WebSocket to ${config.host}:${config.port}/ws",
+        )
+
         return client.newWebSocket(
             req,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    debugRecorder?.record(
+                        category = "ws",
+                        event = "ws_open",
+                        detail = "WebSocket connected (HTTP ${response.code})",
+                    )
                     onOpen()
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     runCatching { decodeHerdrJson<WsServerEnvelope>(text) }
-                        .onSuccess { onEvent(it) }
+                        .onSuccess { env ->
+                            val summary = buildString {
+                                append("type=${env.type}")
+                                if (!env.tabId.isNullOrBlank()) append(" tab=${env.tabId}")
+                                if (!env.messageId.isNullOrBlank()) append(" msg=${env.messageId}")
+                                if (env.tab != null) append(" tabStatus=${env.tab.status}")
+                                if (env.message != null) append(" msgStatus=${env.message.status}")
+                                if (env.textDelta != null) append(" textDeltaLen=${env.textDelta.length}")
+                                if (env.thinkingDelta != null) append(" thinkingDeltaLen=${env.thinkingDelta.length}")
+                                if (env.toolCall != null) append(" tool=${env.toolCall.name}:${env.toolCall.status}")
+                            }
+                            debugRecorder?.record(
+                                category = "ws",
+                                event = "ws_event",
+                                detail = summary,
+                                payload = if (env.type == "message_delta") null else text,
+                            )
+                            onEvent(env)
+                        }
+                        .onFailure { err ->
+                            debugRecorder?.record(
+                                category = "error",
+                                event = "ws_decode_failed",
+                                detail = "Failed to decode WS frame: ${err.message ?: err::class.java.simpleName}",
+                                payload = text,
+                            )
+                        }
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    debugRecorder?.record(
+                        category = "ws",
+                        event = "ws_closing",
+                        detail = "WebSocket closing (code=$code, reason=${reason.ifBlank { "none" }})",
+                    )
                     webSocket.close(1000, null)
                     onClosed(reason.ifBlank { null })
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     val codeMsg = response?.let { "HTTP ${it.code}: ${it.message}" }
-                    onClosed(codeMsg ?: t.message ?: "Connection lost")
+                    val reason = codeMsg ?: t.message ?: "Connection lost"
+                    debugRecorder?.record(
+                        category = "error",
+                        event = "ws_failure",
+                        detail = "WebSocket failure: $reason",
+                    )
+                    onClosed(reason)
                 }
             }
         )

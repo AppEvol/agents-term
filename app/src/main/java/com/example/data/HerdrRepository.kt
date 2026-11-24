@@ -163,6 +163,8 @@ fun reduceWorkspaceEvent(
 class HerdrRepository(
     private val api: HerdrApiClient,
     private val settings: SettingsStore,
+    private val debugRecorder: DebugRecorder? = null,
+    private val onOperationalError: ((String) -> Unit)? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -296,6 +298,7 @@ class HerdrRepository(
     }
 
     fun selectTab(tabId: String) {
+        debugRecorder?.record("ui", "select_tab", "Selected tab $tabId")
         settings.saveLastTabId(tabId)
         _state.update { it.copy(selectedTabId = tabId) }
         refreshTabMessages(tabId)
@@ -314,6 +317,11 @@ class HerdrRepository(
             _state.update { it.copy(loadingTabIds = it.loadingTabIds + tabId) }
             runCatching { api.getTabMessages(cfg, tabId) }
                 .onSuccess { res ->
+                    debugRecorder?.record(
+                        "state",
+                        "refresh_tab_messages_ok",
+                        "Loaded ${res.messages.size} messages for tab $tabId (status=${res.tab.status})",
+                    )
                     _state.update { cur ->
                         cur.copy(
                             tabs = cur.tabs.map { if (it.id == res.tab.id) res.tab else it },
@@ -322,7 +330,12 @@ class HerdrRepository(
                         )
                     }
                 }
-                .onFailure {
+                .onFailure { err ->
+                    debugRecorder?.record(
+                        "error",
+                        "refresh_tab_messages_failed",
+                        "Failed to load messages for tab $tabId: ${err.message ?: err::class.java.simpleName}",
+                    )
                     _state.update { it.copy(loadingTabIds = it.loadingTabIds - tabId) }
                 }
         }
@@ -330,6 +343,11 @@ class HerdrRepository(
 
     suspend fun createTab(request: CreateTabRequest): Result<TabRecord> {
         val cfg = _state.value.config
+        debugRecorder?.record(
+            "ui",
+            "create_tab",
+            "Creating tab agent=${request.agent} cwd=${request.cwd} mode=${request.permissionMode}",
+        )
         return runCatching {
             val tab = api.createTab(cfg, request)
             settings.saveLastTabId(tab.id)
@@ -362,6 +380,7 @@ class HerdrRepository(
 
     suspend fun deleteTab(tabId: String): Result<Unit> {
         val cfg = _state.value.config
+        debugRecorder?.record("ui", "delete_tab", "Deleting tab $tabId")
         return runCatching {
             api.deleteTab(cfg, tabId)
             _state.update { cur ->
@@ -385,6 +404,12 @@ class HerdrRepository(
         overridePermissionMode: String? = null,
     ): Result<Unit> {
         val cfg = _state.value.config
+        debugRecorder?.record(
+            "ui",
+            "send_message",
+            "Sending message to tab=$tabId len=${text.length} overrideMode=${overridePermissionMode ?: "none"}",
+            payload = text.take(500),
+        )
         return runCatching {
             api.sendMessage(cfg, tabId, text, overridePermissionMode)
             Unit
@@ -395,6 +420,7 @@ class HerdrRepository(
 
     suspend fun interruptTab(tabId: String) {
         val cfg = _state.value.config
+        debugRecorder?.record("ui", "interrupt_tab", "Interrupting tab=$tabId")
         runCatching { api.interruptTab(cfg, tabId) }
             .onFailure { err -> showBanner(err.message ?: "Failed to interrupt") }
     }
@@ -404,11 +430,21 @@ class HerdrRepository(
         return runCatching { api.listDirectories(cfg, path) }
     }
 
+    suspend fun uploadDebugDump(request: DebugDumpUploadRequest): Result<DebugDumpUploadResponse> {
+        val cfg = _state.value.config
+        if (!cfg.isValid) {
+            return Result.failure(IllegalStateException("Not connected to a VM daemon"))
+        }
+        return runCatching { api.uploadDebugDump(cfg, request) }
+    }
+
     fun clearBanner() {
         _state.update { it.copy(bannerMessage = null) }
     }
 
-    private fun showBanner(msg: String) {
+    fun showBanner(msg: String) {
+        debugRecorder?.record("error", "banner_message", msg)
         _state.update { it.copy(bannerMessage = msg) }
+        onOperationalError?.invoke(msg)
     }
 }

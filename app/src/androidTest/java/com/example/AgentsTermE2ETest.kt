@@ -335,4 +335,53 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithText("Close tab").performClick()
         waitForText("Hello from Primary Agent")
     }
+
+    @Test
+    fun settingsDebugSharingUploadsDumpToVmAndEnablesQuickBugButton() {
+        val tab1 = TabRecord(
+            id = "tab_1",
+            title = "Antigravity · app",
+            agent = "agy",
+            cwd = "/home/ci/projects",
+            status = "idle",
+        )
+        val activeDaemon = startDaemon(initialTabs = listOf(tab1))
+
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForText("Antigravity · app")
+
+        // Open Settings & Debug from overflow menu
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        composeRule.onNodeWithTag("menu_app_settings").performClick()
+        waitForTag("debug_sharing_switch")
+
+        // Enable Debug Sharing to VM and upload a dump with a note
+        composeRule.onNodeWithTag("debug_sharing_switch").performScrollTo().performClick()
+        composeRule.onNodeWithTag("debug_note_input").performScrollTo().performTextInput("agy glitched on comment")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("upload_debug_dump_button").performScrollTo().performClick()
+
+        // Wait for VM upload confirmation card showing remote dump directory
+        waitForTag("last_uploaded_dump_card")
+        composeRule.onNodeWithText("20261124_", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        assertTrue(activeDaemon.uploadedDebugDumps.any { it.note == "agy glitched on comment" })
+
+        // Return to workspace and verify the quick TopAppBar Bug Report icon is visible and works
+        composeRule.onNodeWithTag("settings_back_button").performClick()
+        waitForTag("top_debug_dump_button")
+        composeRule.onNodeWithTag("top_debug_dump_button").performClick()
+        waitForTag("quick_debug_note_input")
+        composeRule.onNodeWithTag("quick_debug_note_input").performTextInput("quick dump from chat")
+        composeRule.onNodeWithTag("quick_debug_upload_confirm").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            activeDaemon.uploadedDebugDumps.any { it.note == "quick dump from chat" }
+        }
+    }
 }

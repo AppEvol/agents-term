@@ -178,6 +178,8 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 | `POST /api/tabs/:id/interrupt` | Sends interrupt (`SIGINT`/`SIGTERM`) to a running agent turn. |
 | `POST /api/tabs/:id/read` | Marks a tab as read. |
 | `GET /api/fs?path=...` | Lists directories on the VM for the New Tab directory browser. |
+| `POST /api/debug/dumps` | Uploads an Android debug dump (`events.ndjson`, `state.json`, `logcat.txt`, `crash.txt`, optional `screenshot.png`) into `~/.config/herdr-mobile/debug-dumps/` and updates the `latest` symlink. |
+| `GET /api/debug/dumps` | Lists recent Android debug dump folders stored on the VM. |
 | `WS /ws?token=...` | Real-time stream of `snapshot`, `tab_*`, `message_created`, `message_delta`, `tool_update`, and `message_updated` events. |
 
 ---

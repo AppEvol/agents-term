@@ -81,6 +81,46 @@ class SettingsStore(context: Context) {
         prefs.edit().putStringSet(KEY_BOOTSTRAPPED_HOSTS, updated).apply()
     }
 
+    fun loadDebugSharingSettings(): DebugSharingSettings {
+        return DebugSharingSettings(
+            enabled = prefs.getBoolean(KEY_DEBUG_SHARING_ENABLED, false),
+            includeScreenshot = prefs.getBoolean(KEY_DEBUG_INCLUDE_SCREENSHOT, true),
+            includeLogcat = prefs.getBoolean(KEY_DEBUG_INCLUDE_LOGCAT, true),
+            autoUploadOnError = prefs.getBoolean(KEY_DEBUG_AUTO_UPLOAD_ERRORS, false),
+        )
+    }
+
+    fun saveDebugSharingSettings(settings: DebugSharingSettings) {
+        prefs.edit()
+            .putBoolean(KEY_DEBUG_SHARING_ENABLED, settings.enabled)
+            .putBoolean(KEY_DEBUG_INCLUDE_SCREENSHOT, settings.includeScreenshot)
+            .putBoolean(KEY_DEBUG_INCLUDE_LOGCAT, settings.includeLogcat)
+            .putBoolean(KEY_DEBUG_AUTO_UPLOAD_ERRORS, settings.autoUploadOnError)
+            .apply()
+    }
+
+    fun loadLastDebugUpload(): DebugDumpUploadState {
+        val remoteDir = prefs.getString(KEY_DEBUG_LAST_REMOTE_DIR, null)
+        val dumpId = prefs.getString(KEY_DEBUG_LAST_DUMP_ID, null)
+        val latestSymlink = prefs.getString(KEY_DEBUG_LAST_SYMLINK, null)
+        val uploadedAt = prefs.getLong(KEY_DEBUG_LAST_UPLOADED_AT, 0L).takeIf { it > 0L }
+        return DebugDumpUploadState(
+            lastDumpId = dumpId,
+            lastRemoteDir = remoteDir,
+            lastLatestSymlink = latestSymlink,
+            lastUploadedAt = uploadedAt,
+        )
+    }
+
+    fun saveLastDebugUpload(response: DebugDumpUploadResponse, uploadedAt: Long) {
+        prefs.edit()
+            .putString(KEY_DEBUG_LAST_DUMP_ID, response.dumpId)
+            .putString(KEY_DEBUG_LAST_REMOTE_DIR, response.remoteDir)
+            .putString(KEY_DEBUG_LAST_SYMLINK, response.latestSymlink)
+            .putLong(KEY_DEBUG_LAST_UPLOADED_AT, uploadedAt)
+            .apply()
+    }
+
     private fun hostKeyPrefKey(host: String, port: Int): String {
         return "${KEY_HOST_KEY_PREFIX}${cleanHost(host)}:$port"
     }
@@ -97,5 +137,13 @@ class SettingsStore(context: Context) {
         private const val KEY_SSH_DAEMON_PORT = "ssh_daemon_port"
         private const val KEY_HOST_KEY_PREFIX = "ssh_host_fp_"
         private const val KEY_BOOTSTRAPPED_HOSTS = "bootstrapped_hosts"
+        private const val KEY_DEBUG_SHARING_ENABLED = "debug_sharing_enabled"
+        private const val KEY_DEBUG_INCLUDE_SCREENSHOT = "debug_include_screenshot"
+        private const val KEY_DEBUG_INCLUDE_LOGCAT = "debug_include_logcat"
+        private const val KEY_DEBUG_AUTO_UPLOAD_ERRORS = "debug_auto_upload_errors"
+        private const val KEY_DEBUG_LAST_DUMP_ID = "debug_last_dump_id"
+        private const val KEY_DEBUG_LAST_REMOTE_DIR = "debug_last_remote_dir"
+        private const val KEY_DEBUG_LAST_SYMLINK = "debug_last_symlink"
+        private const val KEY_DEBUG_LAST_UPLOADED_AT = "debug_last_uploaded_at"
     }
 }

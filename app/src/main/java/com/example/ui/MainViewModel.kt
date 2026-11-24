@@ -3,10 +3,19 @@ package com.example.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.data.BootstrapPhase
 import com.example.data.BootstrapUiState
 import com.example.data.ConnectionConfig
+import com.example.data.ConnectionState
+import com.example.data.CrashLogStore
 import com.example.data.CreateTabRequest
+import com.example.data.DebugDumpUploadRequest
+import com.example.data.DebugDumpUploadResponse
+import com.example.data.DebugDumpUploadState
+import com.example.data.DebugEvent
+import com.example.data.DebugRecorder
+import com.example.data.DebugSharingSettings
 import com.example.data.FsListResponse
 import com.example.data.HerdrApiClient
 import com.example.data.HerdrRepository
@@ -17,7 +26,12 @@ import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
 import com.example.data.UpdateTabRequest
 import com.example.data.WorkspaceState
+import com.example.data.buildDeviceInfoSummary
+import com.example.data.buildSanitizedWorkspaceJson
 import com.example.data.cleanHost
+import com.example.data.collectAppLogcat
+import com.example.data.exportDebugBundleZip
+import com.example.data.generateDebugDumpId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -26,17 +40,31 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val settings = SettingsStore(application)
-    private val api = HerdrApiClient()
-    private val repo = HerdrRepository(api, settings)
-    private val sshClient = SshBootstrapClient(settings)
+    val debugRecorder = DebugRecorder()
+
+    private val lastAutoUploadMs = AtomicLong(0L)
+
+    private val api = HerdrApiClient(debugRecorder)
+    private val repo = HerdrRepository(
+        api = api,
+        settings = settings,
+        debugRecorder = debugRecorder,
+        onOperationalError = { reason -> maybeTriggerAutoUpload(reason) },
+    )
+    private val sshClient = SshBootstrapClient(settings, debugRecorder)
 
     val state: StateFlow<WorkspaceState> = repo.state
 
     private val _showConnectScreen = MutableStateFlow(!settings.loadConnection().isValid)
     val showConnectScreen: StateFlow<Boolean> = _showConnectScreen.asStateFlow()
+
+    private val _showSettingsScreen = MutableStateFlow(false)
+    val showSettingsScreen: StateFlow<Boolean> = _showSettingsScreen.asStateFlow()
 
     private val _isTestingConnection = MutableStateFlow(false)
     val isTestingConnection: StateFlow<Boolean> = _isTestingConnection.asStateFlow()
@@ -50,19 +78,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _bootstrapState = MutableStateFlow(BootstrapUiState())
     val bootstrapState: StateFlow<BootstrapUiState> = _bootstrapState.asStateFlow()
 
+    private val _debugSettings = MutableStateFlow(settings.loadDebugSharingSettings())
+    val debugSettings: StateFlow<DebugSharingSettings> = _debugSettings.asStateFlow()
+
+    private val _debugUploadState = MutableStateFlow(settings.loadLastDebugUpload())
+    val debugUploadState: StateFlow<DebugDumpUploadState> = _debugUploadState.asStateFlow()
+
+    private val _debugEventCount = MutableStateFlow(0)
+    val debugEventCount: StateFlow<Int> = _debugEventCount.asStateFlow()
+
+    private val _hasLastCrash = MutableStateFlow(false)
+    val hasLastCrash: StateFlow<Boolean> = _hasLastCrash.asStateFlow()
+
     private var bootstrapJob: Job? = null
 
     init {
+        CrashLogStore.install(application)
+        _hasLastCrash.value = CrashLogStore.hasLastCrash(application)
+        debugRecorder.setCountListener { count -> _debugEventCount.value = count }
+        debugRecorder.record(
+            category = "lifecycle",
+            event = "app_init",
+            detail = "AgentsTerm ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) started; crashLog=${_hasLastCrash.value}",
+        )
         repo.initializeAutoConnect()
     }
 
     fun onForeground() {
+        debugRecorder.record("lifecycle", "on_foreground", "App resumed to foreground")
         repo.ensureConnectedOnForeground()
     }
 
     fun handleIncomingPairingUri(uri: String) {
         val parsed = ConnectionConfig.parsePairingUri(uri) ?: return
+        debugRecorder.record("ui", "pairing_uri_received", "Parsed pairing URI for ${parsed.host}:${parsed.port}")
         _pendingPairingConfig.value = parsed
+        _showSettingsScreen.value = false
         _showConnectScreen.value = true
         connectToVm(parsed)
     }
@@ -73,6 +124,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openConnectionSettings() {
         _sshProfile.value = settings.loadSshProfile()
+        _showSettingsScreen.value = false
         _showConnectScreen.value = true
     }
 
@@ -80,6 +132,128 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (state.value.config.isValid) {
             _showConnectScreen.value = false
         }
+    }
+
+    fun openAppSettings() {
+        _hasLastCrash.value = CrashLogStore.hasLastCrash(getApplication())
+        _debugEventCount.value = debugRecorder.count
+        _showSettingsScreen.value = true
+    }
+
+    fun closeAppSettings() {
+        _showSettingsScreen.value = false
+    }
+
+    fun updateDebugSettings(transform: (DebugSharingSettings) -> DebugSharingSettings) {
+        val updated = transform(_debugSettings.value)
+        _debugSettings.value = updated
+        settings.saveDebugSharingSettings(updated)
+        debugRecorder.record(
+            category = "ui",
+            event = "debug_settings_updated",
+            detail = "enabled=${updated.enabled} screenshot=${updated.includeScreenshot} logcat=${updated.includeLogcat} autoUpload=${updated.autoUploadOnError}",
+        )
+    }
+
+    fun clearDebugLogs() {
+        debugRecorder.clear()
+        CrashLogStore.clearLastCrash(getApplication())
+        _hasLastCrash.value = false
+    }
+
+    fun recentDebugEvents(limit: Int = 30): List<DebugEvent> {
+        return debugRecorder.snapshot().takeLast(limit).reversed()
+    }
+
+    private suspend fun buildDebugDumpRequest(
+        note: String?,
+        screenshotBase64: String?,
+    ): DebugDumpUploadRequest {
+        val app = getApplication<Application>()
+        val cfg = _debugSettings.value
+        val wsState = state.value
+        val logcat = if (cfg.includeLogcat) collectAppLogcat(maxLines = 400) else null
+        val lastCrash = CrashLogStore.readLastCrash(app)
+        val connectionSummary = if (wsState.config.isValid) {
+            "${wsState.config.host}:${wsState.config.port} (${wsState.connectionState.name})"
+        } else {
+            "unconfigured (${wsState.connectionState.name})"
+        }
+        return DebugDumpUploadRequest(
+            dumpId = generateDebugDumpId(),
+            createdAt = System.currentTimeMillis(),
+            note = note?.trim()?.takeIf { it.isNotEmpty() },
+            appVersion = "${BuildConfig.VERSION_NAME} (code=${BuildConfig.VERSION_CODE}, debug=${BuildConfig.DEBUG})",
+            deviceInfo = buildDeviceInfoSummary(),
+            connectionSummary = connectionSummary,
+            workspaceStateJson = buildSanitizedWorkspaceJson(wsState),
+            eventsNdjson = debugRecorder.toNdjson(),
+            logcat = logcat,
+            lastCrash = lastCrash,
+            screenshotPngBase64 = if (cfg.includeScreenshot) screenshotBase64 else null,
+        )
+    }
+
+    fun uploadDebugDumpToVm(
+        note: String? = null,
+        screenshotBase64: String? = null,
+        onComplete: ((Result<DebugDumpUploadResponse>) -> Unit)? = null,
+    ) {
+        if (_debugUploadState.value.isUploading) return
+        viewModelScope.launch {
+            _debugUploadState.update { it.copy(isUploading = true, lastError = null) }
+            val result = runCatching {
+                val payload = buildDebugDumpRequest(note = note, screenshotBase64 = screenshotBase64)
+                repo.uploadDebugDump(payload).getOrThrow()
+            }
+            result.onSuccess { resp ->
+                val now = System.currentTimeMillis()
+                settings.saveLastDebugUpload(resp, now)
+                _debugUploadState.value = DebugDumpUploadState(
+                    isUploading = false,
+                    lastDumpId = resp.dumpId,
+                    lastRemoteDir = resp.remoteDir,
+                    lastLatestSymlink = resp.latestSymlink,
+                    lastUploadedAt = now,
+                    lastError = null,
+                )
+                debugRecorder.record(
+                    category = "ui",
+                    event = "debug_dump_uploaded",
+                    detail = "Uploaded dump ${resp.dumpId} to ${resp.remoteDir}",
+                )
+            }.onFailure { err ->
+                val msg = err.message ?: "Failed to upload debug dump to VM"
+                _debugUploadState.update { it.copy(isUploading = false, lastError = msg) }
+                debugRecorder.record(
+                    category = "error",
+                    event = "debug_dump_upload_failed",
+                    detail = msg,
+                )
+            }
+            onComplete?.invoke(result)
+        }
+    }
+
+    suspend fun createOfflineDebugZip(
+        note: String? = null,
+        screenshotBase64: String? = null,
+    ): Result<File> {
+        return runCatching {
+            val payload = buildDebugDumpRequest(note = note, screenshotBase64 = screenshotBase64)
+            exportDebugBundleZip(getApplication(), payload)
+        }
+    }
+
+    private fun maybeTriggerAutoUpload(reason: String) {
+        val cfg = _debugSettings.value
+        if (!cfg.enabled || !cfg.autoUploadOnError) return
+        if (state.value.connectionState != ConnectionState.CONNECTED) return
+        val now = System.currentTimeMillis()
+        val prev = lastAutoUploadMs.get()
+        if (now - prev < AUTO_UPLOAD_COOLDOWN_MS) return
+        if (!lastAutoUploadMs.compareAndSet(prev, now)) return
+        uploadDebugDumpToVm(note = "Auto-captured on error: $reason", screenshotBase64 = null)
     }
 
     fun connectToVm(config: ConnectionConfig) {
@@ -206,6 +380,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun appendBootstrapLog(line: String) {
+        debugRecorder.record("ssh", "bootstrap_log", line)
         _bootstrapState.update { cur ->
             val nextLogs = (cur.logs + line).takeLast(MAX_BOOTSTRAP_LOG_LINES)
             cur.copy(logs = nextLogs)
@@ -213,6 +388,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun reconnectNow() {
+        debugRecorder.record("ui", "reconnect_now", "User tapped Reconnect")
         repo.connect()
     }
 
@@ -295,5 +471,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val MAX_BOOTSTRAP_LOG_LINES = 400
+        private const val AUTO_UPLOAD_COOLDOWN_MS = 60_000L
     }
 }

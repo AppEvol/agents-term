@@ -252,3 +252,54 @@ enum class ConnectionState {
     CONNECTED,
     ERROR,
 }
+
+@JsonClass(generateAdapter = true)
+data class DebugEvent(
+    val ts: Long,
+    val isoTime: String,
+    val category: String,
+    val event: String,
+    val detail: String,
+    val payload: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class SanitizedWorkspaceSnapshot(
+    val host: String,
+    val port: Int,
+    val hasToken: Boolean,
+    val connectionState: String,
+    val connectionError: String? = null,
+    val bannerMessage: String? = null,
+    val serverHostname: String? = null,
+    val serverVersion: String? = null,
+    val selectedTabId: String? = null,
+    val loadingTabIds: List<String> = emptyList(),
+    val tabs: List<TabRecord> = emptyList(),
+    val activeTabMessages: List<ChatMessage> = emptyList(),
+    val messageCountsByTab: Map<String, Int> = emptyMap(),
+)
+
+@JsonClass(generateAdapter = true)
+data class DebugDumpUploadRequest(
+    val dumpId: String,
+    val createdAt: Long,
+    val note: String? = null,
+    val appVersion: String,
+    val deviceInfo: String,
+    val connectionSummary: String,
+    val workspaceStateJson: String,
+    val eventsNdjson: String,
+    val logcat: String? = null,
+    val lastCrash: String? = null,
+    val screenshotPngBase64: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class DebugDumpUploadResponse(
+    val ok: Boolean = true,
+    val dumpId: String,
+    val remoteDir: String,
+    val latestSymlink: String? = null,
+    val files: List<String> = emptyList(),
+)

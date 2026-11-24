@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Visibility
@@ -123,6 +124,7 @@ fun ConnectScreen(
     onCancelSshBootstrap: () -> Unit,
     onTrustNewHostKeyAndRetry: (SshBootstrapConfig) -> Unit,
     onConsumedPendingPairing: () -> Unit,
+    onOpenAppSettings: () -> Unit = {},
 ) {
     if (canCancel) {
         BackHandler(onBack = onCancel)
@@ -222,14 +224,29 @@ fun ConnectScreen(
                     .padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                if (canCancel) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = if (canCancel) Arrangement.SpaceBetween else Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (canCancel) {
+                        IconButton(
+                            onClick = onCancel,
+                            modifier = Modifier.testTag("connect_back_button"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = stringResource(R.string.action_back),
+                            )
+                        }
+                    }
                     IconButton(
-                        onClick = onCancel,
-                        modifier = Modifier.testTag("connect_back_button"),
+                        onClick = onOpenAppSettings,
+                        modifier = Modifier.testTag("connect_settings_button"),
                     ) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = stringResource(R.string.action_back),
+                            imageVector = Icons.Rounded.Settings,
+                            contentDescription = stringResource(R.string.action_app_settings),
                         )
                     }
                 }

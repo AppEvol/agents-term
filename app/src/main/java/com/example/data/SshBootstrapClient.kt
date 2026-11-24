@@ -25,6 +25,7 @@ import java.util.Properties
  */
 class SshBootstrapClient(
     private val settings: SettingsStore,
+    private val debugRecorder: DebugRecorder? = null,
 ) {
     suspend fun bootstrapWithAgy(
         config: SshBootstrapConfig,
@@ -41,6 +42,7 @@ class SshBootstrapClient(
         require(config.daemonPort in 1..65535) { "Daemon port must be between 1 and 65535" }
 
         onPhase(BootstrapPhase.CONNECTING_SSH)
+        debugRecorder?.record("ssh", "ssh_connect_start", "Connecting to $username@$host:${config.sshPort} (auth=${config.authMethod.storageKey})")
         onLog("Connecting to $username@$host:${config.sshPort} via SSH…")
 
         var observedFingerprint: String? = null
@@ -233,6 +235,7 @@ class SshBootstrapClient(
             stderrThread.join(2_000)
 
             val exitCode = channel.exitStatus
+            debugRecorder?.record("ssh", "ssh_bootstrap_exit", "Remote bootstrap exited with status $exitCode (conv=${agyConversationId ?: "none"})")
             onLog("Remote bootstrap command exited with status $exitCode")
 
             val combinedOutput = synchronized(fullOutput) { fullOutput.toString() }

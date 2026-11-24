@@ -2,17 +2,22 @@ package com.example
 
 import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
+import com.example.data.DebugDumpUploadRequest
+import com.example.data.DebugDumpUploadResponse
+import com.example.data.DebugRecorder
 import com.example.data.SshBootstrapConfig
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
 import com.example.data.WorkspaceState
 import com.example.data.WsServerEnvelope
 import com.example.data.buildAgyBootstrapCommand
+import com.example.data.buildSanitizedWorkspaceJson
 import com.example.data.decodeHerdrJson
 import com.example.data.encodeBase64Utf8
 import com.example.data.extractPairingUriFromOutput
 import com.example.data.parseAgyStreamJsonLine
 import com.example.data.reduceWorkspaceEvent
+import com.example.data.sanitizeDebugText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -238,5 +243,68 @@ class ModelsAndStateTest {
         assertFalse(
             SshBootstrapConfig(host = "100.71.219.26", username = "ned && id").isValid
         )
+    }
+
+    @Test
+    fun debugRecorderRedactsSecretsEnforcesRingLimitAndSerializesNdjson() {
+        val rawSecret = "Authorization: Bearer super_secret_tok_99 and ws://100.1.2.3:7501/ws?token=abc_secret_2"
+        val cleaned = sanitizeDebugText(rawSecret)
+        assertFalse(cleaned.contains("super_secret_tok_99"))
+        assertFalse(cleaned.contains("abc_secret_2"))
+        assertTrue(cleaned.contains("Bearer [REDACTED]"))
+        assertTrue(cleaned.contains("token=[REDACTED]"))
+
+        val recorder = DebugRecorder(maxEvents = 3)
+        for (i in 1..5) {
+            recorder.record(
+                category = "ws",
+                event = "evt_$i",
+                detail = "detail $i token=secret_$i",
+            )
+        }
+        assertEquals(3, recorder.count)
+        val events = recorder.snapshot()
+        assertEquals(listOf("evt_3", "evt_4", "evt_5"), events.map { it.event })
+        assertFalse(events.any { it.detail.contains("secret_") })
+
+        val ndjsonLines = recorder.toNdjson().trim().lines()
+        assertEquals(3, ndjsonLines.size)
+        assertTrue(ndjsonLines.first().contains("evt_3"))
+    }
+
+    @Test
+    fun debugDumpUploadSerializationAndWorkspaceRedaction() {
+        val state = WorkspaceState(
+            config = ConnectionConfig(host = "100.71.219.26", port = 7501, token = "my_private_bearer_token"),
+            tabs = listOf(
+                TabRecord(id = "t1", title = "Agy", agent = "agy", cwd = "/home/ned/app", status = "working")
+            ),
+            selectedTabId = "t1",
+        )
+        val stateJson = buildSanitizedWorkspaceJson(state)
+        assertFalse(stateJson.contains("my_private_bearer_token"))
+        assertTrue(stateJson.contains("100.71.219.26"))
+
+        val req = DebugDumpUploadRequest(
+            dumpId = "abcd1234",
+            createdAt = 1700000000000L,
+            note = "agy agent mode glitched",
+            appVersion = "1.0",
+            deviceInfo = "Pixel 8",
+            connectionSummary = "100.71.219.26:7501 (CONNECTED)",
+            workspaceStateJson = stateJson,
+            eventsNdjson = "",
+        )
+        val encoded = com.example.data.encodeHerdrJson(req)
+        val decoded = decodeHerdrJson<DebugDumpUploadRequest>(encoded)
+        assertEquals("abcd1234", decoded.dumpId)
+        assertEquals("agy agent mode glitched", decoded.note)
+
+        val resp = decodeHerdrJson<DebugDumpUploadResponse>(
+            """{"ok":true,"dumpId":"abcd1234","remoteDir":"/home/ned/.config/herdr-mobile/debug-dumps/latest","latestSymlink":"/home/ned/.config/herdr-mobile/debug-dumps/latest","files":["summary.md","events.ndjson"]}"""
+        )
+        assertTrue(resp.ok)
+        assertEquals("abcd1234", resp.dumpId)
+        assertEquals(2, resp.files.size)
     }
 }
