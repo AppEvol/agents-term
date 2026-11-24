@@ -46,7 +46,7 @@ done
 case "$PORT" in ''|*[!0-9]*) die 2 "invalid port: $PORT" ;; esac
 [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die 2 "invalid port: $PORT"
 
-export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="$PATH:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"  # fallbacks; keep the caller's PATH priority
 
 # --- prerequisites ------------------------------------------------------------------------------
 PYTHON="$(command -v python3 || true)"
