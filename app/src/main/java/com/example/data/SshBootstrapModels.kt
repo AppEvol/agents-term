@@ -153,19 +153,30 @@ fun stripAnsiCodes(line: String): String {
     return ansiEscapeRegex.replace(line, "")
 }
 
+/** Git repo + ref the VM daemon (Python, `daemon/` in this repo) is installed from. */
+const val AGENTSTERM_REPO_URL = "https://github.com/nedn/agents-term.git"
+const val AGENTSTERM_DAEMON_REF = "main"
+
+/** Checkout used by the VM daemon service, relative to `$HOME`. */
+const val AGENTSTERM_INSTALL_SUBDIR = ".local/share/agentsterm/agents-term"
+
 fun defaultAgyBootstrapPrompt(
     daemonPort: Int = 7501,
-    repoUrl: String = "https://github.com/nedn/agent-terminal",
+    repoUrl: String = AGENTSTERM_REPO_URL,
+    ref: String = AGENTSTERM_DAEMON_REF,
 ): String {
+    val dir = "\$HOME/$AGENTSTERM_INSTALL_SUBDIR"
+    val install = "bash \"$dir/daemon/install.sh\" --port $daemonPort --ref $ref"
     return buildString {
-        appendLine("Bootstrap this VM environment so the AgentsTerm Android client can connect over Tailscale:")
-        appendLine("1. First check if the AgentsTerm daemon is already running and responding on http://<tailscale-ip>:$daemonPort/api/info. If it is already healthy, skip installation and go directly to step 4.")
-        appendLine("2. If ~/agent-terminal/server/dist/index.js is not installed yet:")
-        appendLine("   - Ensure Node.js (>= 20) and npm are available.")
-        appendLine("   - If $repoUrl is accessible, clone it into ~/agent-terminal and run `npm install && npm run build` inside ~/agent-terminal/server.")
-        appendLine("   - Otherwise, implement and build a lightweight Node.js daemon in ~/agent-terminal/server/dist/index.js matching the AgentsTerm HTTP + WebSocket API contract (refer to ~/projects/agents-term/README.md if present).")
-        appendLine("3. Start the daemon persistently bound to this VM's Tailscale IPv4 on port $daemonPort (preferring `systemd --user` with herdr-mobile.service and `loginctl enable-linger`, or falling back to a fully detached process using `nohup node ~/agent-terminal/server/dist/index.js --port $daemonPort > ~/.config/herdr-mobile/daemon.log 2>&1 < /dev/null &` so stdout/stderr are not held open).")
-        appendLine("4. Verify http://<tailscale-ip>:$daemonPort/api/info responds cleanly, run `node ~/agent-terminal/server/dist/index.js pairing --port $daemonPort`, and print the exact `herdr://connect?host=...&port=$daemonPort&token=...` URI on its own line in your final response.")
+        appendLine("Bootstrap this VM so the AgentsTerm Android app can connect over Tailscale.")
+        appendLine("The VM daemon is the Python 3 program in `daemon/` of $repoUrl, installed by its `daemon/install.sh`. Do not write your own daemon.")
+        appendLine("1. Install or update it by running exactly:")
+        appendLine("   if [ -d \"$dir/.git\" ]; then $install; else git clone --depth 1 --branch $ref $repoUrl \"$dir\" && $install; fi")
+        appendLine("   install.sh is idempotent: it updates the checkout, installs the herdr-mobile.service systemd --user unit (or a detached process), replaces any legacy Node daemon, health-checks http://<tailscale-ip>:$daemonPort/api/info, and prints a herdr://connect pairing URI.")
+        appendLine("2. If it exits non-zero, read its ERROR line, fix the root cause, and run step 1 again:")
+        appendLine("   - exit 3 (missing prerequisite): install python3 (>= 3.8) or git with the system package manager, or bring Tailscale up (`sudo tailscale up`). If GitHub is unreachable, say so clearly.")
+        appendLine("   - exit 4 (daemon unhealthy): inspect `systemctl --user status herdr-mobile.service` or ~/.config/herdr-mobile/daemon.log (for example, another process holding port $daemonPort).")
+        appendLine("3. End your final response with the exact `herdr://connect?host=...&port=$daemonPort&token=...` line that install.sh printed, on its own line.")
     }.trim()
 }
 
@@ -316,8 +327,8 @@ private fun extractToolSummary(params: Map<String, Any?>?): String? {
 
 /**
  * Constructs a safe remote shell command that:
- * 1. Loads login PATH and checks if the AgentsTerm daemon is already running and healthy on [daemonPort]
- *    (returning its pairing URI immediately in <1s if already ready).
+ * 1. Loads login PATH and checks if the AgentsTerm Python daemon (installed by `daemon/install.sh`) is
+ *    already running and healthy on [daemonPort] (returning its pairing URI immediately if so).
  * 2. Otherwise verifies `agy`, decodes the base64-encoded bootstrap prompt without shell injection risk,
  *    invokes `agy --dangerously-skip-permissions --print=... --output-format stream-json` for live progress,
  *    and prints the pairing URI when done.
@@ -334,18 +345,18 @@ fun buildAgyBootstrapCommand(prompt: String, daemonPort: Int = 7501): String {
           [ -n "${'$'}NVM_LATEST" ] && export PATH="${'$'}HOME/.nvm/versions/node/${'$'}NVM_LATEST/bin:${'$'}PATH"
         fi
         export FORCE_COLOR=0
-        if [ -f "${'$'}HOME/agent-terminal/server/dist/index.js" ] && command -v node >/dev/null 2>&1; then
+        AGENTSTERM_DAEMON="${'$'}HOME/$AGENTSTERM_INSTALL_SUBDIR/daemon/agentsterm-daemon"
+        if [ -f "${'$'}AGENTSTERM_DAEMON" ] && command -v python3 >/dev/null 2>&1; then
           TS_IP=${'$'}(tailscale ip -4 2>/dev/null | head -n 1 || true)
-          if [ -n "${'$'}TS_IP" ] && command -v curl >/dev/null 2>&1; then
-            HERDR_TOKEN=${'$'}(node -e "const fs=require('fs'),p=require('os').homedir()+'/.config/herdr-mobile/config.json'; if(fs.existsSync(p)) { const c=JSON.parse(fs.readFileSync(p,'utf8')); if(c.token) process.stdout.write(c.token); }" 2>/dev/null || true)
-            if [ -n "${'$'}HERDR_TOKEN" ]; then
-              DAEMON_OK=${'$'}(curl -fsS --max-time 3 -H "Authorization: Bearer ${'$'}HERDR_TOKEN" "http://${'$'}{TS_IP}:$daemonPort/api/info" >/dev/null 2>&1 && echo yes || echo no)
-            else
-              DAEMON_OK=${'$'}(curl -fsS --max-time 3 "http://${'$'}{TS_IP}:$daemonPort/api/info" >/dev/null 2>&1 && echo yes || echo no)
-            fi
+          if [ -n "${'$'}TS_IP" ]; then
+            DAEMON_OK=${'$'}(python3 -c 'import json,os,sys,urllib.request
+p=os.path.expanduser("~/.config/herdr-mobile/config.json")
+t=json.load(open(p)).get("token","") if os.path.exists(p) else ""
+r=urllib.request.Request("http://%s:%s/api/info" % (sys.argv[1], sys.argv[2]), headers={"Authorization": "Bearer " + t})
+urllib.request.urlopen(r, timeout=3).read()' "${'$'}TS_IP" $daemonPort >/dev/null 2>&1 && echo yes || echo no)
             if [ "${'$'}DAEMON_OK" = "yes" ]; then
               echo ">>> AgentsTerm daemon is already running on ${'$'}{TS_IP}:$daemonPort."
-              node "${'$'}HOME/agent-terminal/server/dist/index.js" pairing --port $daemonPort
+              python3 "${'$'}AGENTSTERM_DAEMON" pairing --host "${'$'}TS_IP" --port $daemonPort
               exit 0
             fi
           fi
@@ -362,9 +373,9 @@ fun buildAgyBootstrapCommand(prompt: String, daemonPort: Int = 7501): String {
         else
           agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT"
         fi
-        if [ -f "${'$'}HOME/agent-terminal/server/dist/index.js" ]; then
+        if [ -f "${'$'}AGENTSTERM_DAEMON" ] && command -v python3 >/dev/null 2>&1; then
           echo ">>> Checking AgentsTerm pairing URI..."
-          node "${'$'}HOME/agent-terminal/server/dist/index.js" pairing --port $daemonPort || true
+          python3 "${'$'}AGENTSTERM_DAEMON" pairing --port $daemonPort || true
         fi
     """.trimIndent()
     val scriptB64 = encodeBase64Utf8(script)
