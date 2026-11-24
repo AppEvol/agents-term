@@ -80,7 +80,7 @@ The VM daemon is the Python 3 program in [`daemon/`](daemon/) (standard library 
 ### Prerequisites on the VM
 1. **Tailscale active** on the same tailnet as the phone: `tailscale ip -4` must print a `100.x.y.z` address.
 2. **SSH access** for the zero-touch bootstrap: Tailscale SSH (`sudo tailscale set --ssh`, recommended) or OpenSSH with a key or password.
-3. **Tools:** `python3` (>= 3.8), `git`, and the agent CLIs you want to control (`agy`, `claude`, `codex`) on `PATH` and authenticated. Non-interactive SSH shells don't load `.bashrc`, so put them in `~/.local/bin` or `/usr/local/bin`, or export them in `~/.profile`.
+3. **Tools:** `python3` (>= 3.9), `git`, and the agent CLIs you want to control (`agy`, `claude`, `codex`) on `PATH` and authenticated. Non-interactive SSH shells don't load `.bashrc`, so put them in `~/.local/bin` or `/usr/local/bin`, or export them in `~/.profile`.
 
 ### Install or update (idempotent)
 ```bash

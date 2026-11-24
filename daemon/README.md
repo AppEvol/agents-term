@@ -2,12 +2,14 @@
 
 The VM side of AgentsTerm. It serves the REST + WebSocket API the Android app talks to, runs agent
 turns (`agy`, `claude`, `codex`, persistent `bash`) and streams their output, and relays
-`app_state_cli` inspection commands to the app. Python 3.8+, standard library only.
+`app_state_cli` inspection commands to the app. Python 3.9+, standard library only.
 
 It replaces the earlier Node/TypeScript daemon (`~/agent-terminal`) and is a drop-in replacement:
 same API contract, same `~/.config/herdr-mobile/` config, token and `state.json` format, and the same
-`herdr-mobile.service` unit name. A side-by-side run against the TS daemon (same fake agents and
-requests) produced identical REST responses, WebSocket events and persisted state.
+`herdr-mobile.service` unit name. When first ported, a side-by-side run against the TS daemon (same
+fake agents and requests) produced identical REST responses, WebSocket events and persisted state.
+One deliberate change since: text blocks around tool calls are now separated by a paragraph break
+(the TS daemon glued them together).
 
 | File | Role |
 | :--- | :--- |
