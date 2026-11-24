@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  APP_MAJOR_MINOR: "0.3"
+
 jobs:
   build-and-unit-test:
     name: Build APK & Unit Tests
@@ -76,7 +79,7 @@ jobs:
           GITHUB_SHA_FULL: ${{ github.sha }}
         run: |
           SHORT_SHA="${GITHUB_SHA_FULL::7}"
-          export APP_VERSION_NAME="1.0.${APP_VERSION_CODE}-${SHORT_SHA}"
+          export APP_VERSION_NAME="${APP_MAJOR_MINOR}.${APP_VERSION_CODE}-${SHORT_SHA}"
           echo "Building AgentsTerm ${APP_VERSION_NAME} (versionCode=${APP_VERSION_CODE})"
           gradle :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
 
@@ -154,7 +157,7 @@ jobs:
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
           echo "APP_VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
-          echo "APP_VERSION_NAME=1.0.${GITHUB_RUN_NUMBER}-${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "APP_VERSION_NAME=${APP_MAJOR_MINOR}.${GITHUB_RUN_NUMBER}-${SHORT_SHA}" >> "$GITHUB_ENV"
 
       - name: Run E2E instrumented tests on Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -201,7 +204,7 @@ jobs:
         run: |
           set -euo pipefail
           SHORT_SHA="${GITHUB_SHA::7}"
-          VERSION="1.0.${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
+          VERSION="${APP_MAJOR_MINOR}.${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
           TAG="v${VERSION}"
           STABLE_APK="dist/AgentsTerm-debug.apk"
           VERSIONED_APK="dist/AgentsTerm-${TAG}-debug.apk"
@@ -209,11 +212,11 @@ jobs:
           cp dist/app-debug.apk "$VERSIONED_APK"
 
           EXISTING_TAGS=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=30" --jq '.[].tag_name' \
-            | grep -E '^v1\.0\.[0-9]+-' || true)
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-' || true)
 
           IS_NEWEST="true"
           EXISTING_MAX=$(printf '%s\n' "$EXISTING_TAGS" \
-            | sed -n 's/^v1\.0\.\([0-9][0-9]*\)-.*$/\1/p' \
+            | sed -n 's/^v[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\)-.*$/\1/p' \
             | sort -nr | head -n 1 || true)
           if [ -n "${EXISTING_MAX:-}" ] && [ "$EXISTING_MAX" -gt "$GITHUB_RUN_NUMBER" ]; then
             IS_NEWEST="false"

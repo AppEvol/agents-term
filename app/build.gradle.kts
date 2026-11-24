@@ -13,7 +13,7 @@ val ciVersionCode = providers.gradleProperty("appVersionCode").orNull?.toIntOrNu
   ?: 1
 val ciVersionName = providers.gradleProperty("appVersionName").orNull?.takeIf { it.isNotBlank() }
   ?: providers.environmentVariable("APP_VERSION_NAME").orNull?.takeIf { it.isNotBlank() }
-  ?: "1.0"
+  ?: "0.3"
 
 android {
   namespace = "com.example"

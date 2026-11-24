@@ -66,7 +66,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ### Automatic Verified Releases (GitHub Actions)
-Every push to `main` that passes both `Build APK & Unit Tests` and `End-to-End Android Instrumented Tests` automatically publishes a new versioned GitHub Release (`v1.0.<run_number>-<short_sha>`) with auto-generated release notes, incrementing Android `versionCode` / `versionName`, and both `AgentsTerm-debug.apk` and `AgentsTerm-v1.0.<run_number>-<short_sha>-debug.apk` attached.
+Every push to `main` that passes both `Build APK & Unit Tests` and `End-to-End Android Instrumented Tests` automatically publishes a new versioned GitHub Release (`v0.3.<run_number>-<short_sha>`) with auto-generated release notes, incrementing Android `versionCode` / `versionName`, and both `AgentsTerm-debug.apk` and `AgentsTerm-v0.3.<run_number>-<short_sha>-debug.apk` attached.
 
 - **Always-latest verified APK:** `https://github.com/nedn/agents-term/releases/latest/download/AgentsTerm-debug.apk`
 - **Legacy rolling tag link (also kept in sync):** `https://github.com/nedn/agents-term/releases/download/latest/AgentsTerm-debug.apk`
