@@ -12,3 +12,5 @@
 ## Workflow
 
 - Use git worktree to work on your commit changes.
+- For simple changes, commit directly to `main` and push to `origin/main` when done.
+- For non-trivial work, create a work branch, keep working on it until the work is done, then merge the work branch into `main`.
