@@ -1068,7 +1068,7 @@ private fun QuickTabStrip(
                         if (finished) {
                             Icon(
                                 imageVector = Icons.Rounded.CheckCircle,
-                                contentDescription = null,
+                                contentDescription = "Done",
                                 tint = HerdrEmerald,
                                 modifier = Modifier
                                     .size(14.dp)

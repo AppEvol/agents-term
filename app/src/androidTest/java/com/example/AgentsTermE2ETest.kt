@@ -148,10 +148,10 @@ class AgentsTermE2ETest {
         }
     }
 
-    private fun waitForTag(tag: String, timeoutMs: Long = 10_000L) {
+    private fun waitForTag(tag: String, timeoutMs: Long = 10_000L, useUnmergedTree: Boolean = false) {
         try {
             composeRule.waitUntil(timeoutMillis = timeoutMs) {
-                composeRule.onAllNodesWithTag(tag)
+                composeRule.onAllNodesWithTag(tag, useUnmergedTree = useUnmergedTree)
                     .fetchSemanticsNodes()
                     .isNotEmpty()
             }
@@ -983,8 +983,8 @@ class AgentsTermE2ETest {
         launchMainActivity(deepLink)
 
         // Quick tab strip shows checkmark icon on the finished tab
-        waitForTag("quick_tab_done_icon_tab_done")
-        composeRule.onNodeWithTag("quick_tab_done_icon_tab_done").assertIsDisplayed()
+        waitForTag("quick_tab_done_icon_tab_done", useUnmergedTree = true)
+        composeRule.onNodeWithTag("quick_tab_done_icon_tab_done", useUnmergedTree = true).assertIsDisplayed()
 
         // Selecting the finished tab shows Done indicator in top bar
         composeRule.onNodeWithTag("quick_tab_tab_done").performClick()
@@ -995,9 +995,9 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("open_drawer_button").performClick()
         waitForTag("drawer_finished_count_badge")
         composeRule.onNodeWithTag("drawer_finished_count_badge").assertTextContains("1 done")
-        composeRule.onNodeWithTag("drawer_tab_done_icon_tab_done").assertIsDisplayed()
-        composeRule.onNodeWithTag("drawer_tab_done_badge_tab_done").assertIsDisplayed()
-        composeRule.onNodeWithTag("drawer_tab_done_hint_tab_done")
+        composeRule.onNodeWithTag("drawer_tab_done_icon_tab_done", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_tab_done_badge_tab_done", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_tab_done_hint_tab_done", useUnmergedTree = true)
             .assertIsDisplayed()
             .assertTextContains("Task finished", substring = true)
 
