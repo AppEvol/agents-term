@@ -3,7 +3,7 @@
 Native Android client (Kotlin + Jetpack Compose + Material 3) for controlling persistent coding agents (**Antigravity (`agy`)**, **Claude Code (`claude`)**, **Codex (`codex`)**, and **Shell**) running on a Tailscale-connected Linux VM.
 
 AgentsTerm supports both:
-- **Zero-touch VM bootstrapping via SSH + Antigravity**: Connects over Tailscale SSH and runs `agy --dangerously-skip-permissions` on the VM so Antigravity sets up the daemon environment and outputs the pairing URI automatically.
+- **Zero-touch VM bootstrapping over SSH**: Connects over Tailscale SSH to run `daemon/install.sh` automatically (falling back to `agy --dangerously-skip-permissions` to repair the VM if prerequisites are missing) and outputs the pairing URI.
 - **Direct / Pairing URI connection**: Connects directly using an `agentsterm://connect?...` or `herdr://connect?...` URI (or manual Tailscale IP, port, and bearer token).
 
 ---
@@ -118,7 +118,7 @@ systemctl --user restart herdr-mobile.service
 python3 -m unittest discover -s daemon/tests   # daemon tests (from a repo checkout)
 ```
 
-*(AgentsTerm accepts both `agentsterm://connect?...` and `herdr://connect?...`. The SSH bootstrapper scans the agy output for this URI, tests `/api/info`, opens the WebSocket stream, and launches the workspace.)*
+*(AgentsTerm accepts both `agentsterm://connect?...` and `herdr://connect?...`. The SSH bootstrapper scans the bootstrap output for this URI, tests `/api/info`, opens the WebSocket stream, and launches the workspace.)*
 
 ---
 

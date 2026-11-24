@@ -493,7 +493,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _bootstrapState.update {
                         it.copy(
                             phase = BootstrapPhase.ERROR,
-                            errorMessage = "Antigravity finished setup, but could not reach ${result.connectionConfig.httpBaseUrl()}: ${lastErr ?: "connection refused"}. Verify Tailscale is active on your phone.",
+                            errorMessage = "VM bootstrap finished, but could not reach ${result.connectionConfig.httpBaseUrl()}: ${lastErr ?: "connection refused"}. Verify Tailscale is active on your phone.",
                         )
                     }
                 }
