@@ -2,7 +2,7 @@ package com.example.data
 
 private val WHITESPACE_RE = Regex("\\s+")
 private val LEADING_CD_RE = Regex(
-    """^\s*cd(?:\s+(?:-[LP]|--))?\s+(?:"[^"]*"|'[^']*'|(?:\\.|[^\s;&|\n])+)\s*(?:&&|;|\r?\n)\s*"""
+    """^\s*cd(?:\s+(?:-[LP]|--))?\s+(?:"[^"]*"|'[^']*'|(?:\\.|[^\s;&|\n])+)\s*(?:&&|;|\r?\n)\s*""",
 )
 private val SHELL_WRAPPER_RE = Regex(
     """^\s*(?:/(?:usr/)?bin/)?(?:ba|z)?sh\s+-[a-z]*c\s+(["'])(.*)\1\s*$""",
@@ -137,6 +137,7 @@ fun buildAssistantDisplayBlocks(message: ChatMessage): List<AssistantDisplayBloc
                     pendingTools.add(tc)
                 }
             }
+
             "text" -> {
                 val text = seg.text.orEmpty()
                 if (text.isNotBlank()) {

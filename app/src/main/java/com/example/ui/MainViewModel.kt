@@ -218,9 +218,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _hasLastCrash.value = false
     }
 
-    fun recentDebugEvents(limit: Int = 30): List<DebugEvent> {
-        return debugRecorder.snapshot().takeLast(limit).reversed()
-    }
+    fun recentDebugEvents(limit: Int = 30): List<DebugEvent> = debugRecorder.snapshot().takeLast(limit).reversed()
 
     private suspend fun buildDebugDumpRequest(
         note: String?,
@@ -394,11 +392,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun createOfflineDebugZip(
         note: String? = null,
         screenshotBase64: String? = null,
-    ): Result<File> {
-        return runCatching {
-            val payload = buildDebugDumpRequest(note = note, screenshotBase64 = screenshotBase64)
-            exportDebugBundleZip(getApplication(), payload)
-        }
+    ): Result<File> = runCatching {
+        val payload = buildDebugDumpRequest(note = note, screenshotBase64 = screenshotBase64)
+        exportDebugBundleZip(getApplication(), payload)
     }
 
     private fun maybeTriggerAutoUpload(reason: String) {
@@ -570,7 +566,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     permissionMode = permissionMode,
                     model = model?.trim()?.takeIf { it.isNotEmpty() },
                     systemPrompt = if (agent == "shell") null else systemPrompt?.trim().orEmpty(),
-                )
+                ),
             )
             if (res.isSuccess) {
                 onCreated()
@@ -666,13 +662,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> {
-        return repo.loadInitialDirectories(preferredPath)
-    }
+    suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> = repo.loadInitialDirectories(preferredPath)
 
-    suspend fun loadDirectories(path: String?): Result<FsListResponse> {
-        return repo.listDirectories(path)
-    }
+    suspend fun loadDirectories(path: String?): Result<FsListResponse> = repo.listDirectories(path)
 
     fun clearBanner() {
         repo.clearBanner()

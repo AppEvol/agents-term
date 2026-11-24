@@ -202,10 +202,8 @@ suspend fun resolveInitialDirectoryListing(
         return result
     }
 
-    suspend fun loadHomeFallback(): Result<ResolvedDirectoryListing> {
-        return loadWithRetry(normalizedHome).map { homeListing ->
-            ResolvedDirectoryListing(listing = homeListing, fellBackToHome = true)
-        }
+    suspend fun loadHomeFallback(): Result<ResolvedDirectoryListing> = loadWithRetry(normalizedHome).map { homeListing ->
+        ResolvedDirectoryListing(listing = homeListing, fellBackToHome = true)
     }
 
     val initialResult = loadWithRetry(candidate)
@@ -271,7 +269,7 @@ class HerdrRepository(
                 config = cfg,
                 lastCwd = settings.loadLastCwd(cfg.host),
             )
-        }
+        },
     )
     val state: StateFlow<WorkspaceState> = _state.asStateFlow()
 
@@ -300,28 +298,26 @@ class HerdrRepository(
         }
     }
 
-    suspend fun testAndConnect(config: ConnectionConfig): Result<ServerInfo> {
-        return runCatching {
-            val info = api.getInfo(config)
-            settings.saveConnection(config)
-            val savedLastCwd = settings.loadLastCwd(config.host)
-            _state.update {
-                it.copy(
-                    config = config,
-                    serverInfo = info,
-                    lastCwd = savedLastCwd,
-                    connectionError = null,
-                )
-            }
-            connect(config)
-            info
-        }.onFailure { err ->
-            _state.update {
-                it.copy(
-                    connectionState = ConnectionState.ERROR,
-                    connectionError = err.message ?: "Unable to reach VM",
-                )
-            }
+    suspend fun testAndConnect(config: ConnectionConfig): Result<ServerInfo> = runCatching {
+        val info = api.getInfo(config)
+        settings.saveConnection(config)
+        val savedLastCwd = settings.loadLastCwd(config.host)
+        _state.update {
+            it.copy(
+                config = config,
+                serverInfo = info,
+                lastCwd = savedLastCwd,
+                connectionError = null,
+            )
+        }
+        connect(config)
+        info
+    }.onFailure { err ->
+        _state.update {
+            it.copy(
+                connectionState = ConnectionState.ERROR,
+                connectionError = err.message ?: "Unable to reach VM",
+            )
         }
     }
 
@@ -358,10 +354,13 @@ class HerdrRepository(
         val action = synchronized(socketLock) {
             when {
                 !shouldStayConnected -> ForegroundAction.NONE
+
                 s.connectionState == ConnectionState.CONNECTED -> ForegroundAction.REFRESH_ACTIVE_TAB
+
                 s.connectionState == ConnectionState.CONNECTING &&
                     webSocket != null &&
                     (clockMs() - lastConnectAttemptMs) < FOREGROUND_CONNECT_GRACE_MS -> ForegroundAction.NONE
+
                 else -> ForegroundAction.RECONNECT
             }
         }

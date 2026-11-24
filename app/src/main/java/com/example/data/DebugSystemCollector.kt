@@ -79,9 +79,7 @@ object CrashLogStore {
     }
 }
 
-fun buildDeviceInfoSummary(): String {
-    return "${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, API ${Build.VERSION.SDK_INT})"
-}
+fun buildDeviceInfoSummary(): String = "${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, API ${Build.VERSION.SDK_INT})"
 
 suspend fun collectAppLogcat(maxLines: Int = 400): String? = withContext(Dispatchers.IO) {
     withTimeoutOrNull(3_000L) {

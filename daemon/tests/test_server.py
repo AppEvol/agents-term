@@ -20,7 +20,10 @@ from agentsterm_daemon.httpserver import connect_websocket
 REPO_DIR = DAEMON_DIR.parent
 CLI = REPO_DIR / "app_state_cli" / "app_state_cli.py"
 # The original daemon's node_modules has the `ws` package; used to cross-check our WebSocket server.
-NODE_WS_DIRS = [Path.home() / "agent-terminal" / "server", Path.home() / "projects" / "agent-terminal-app-state" / "server"]
+NODE_WS_DIRS = [
+    Path.home() / "agent-terminal" / "server",
+    Path.home() / "projects" / "agent-terminal-app-state" / "server",
+]
 
 
 class FakeSocket:
@@ -33,8 +36,12 @@ class FakeSocket:
 
 
 def hello(enabled):
-    return json.dumps({"type": "app_hello", "reporter": {"enabled": enabled, "appVersion": "1.2.3",
-                                                         "device": "Pixel", "commands": ["ping"]}})
+    return json.dumps(
+        {
+            "type": "app_hello",
+            "reporter": {"enabled": enabled, "appVersion": "1.2.3", "device": "Pixel", "commands": ["ping"]},
+        }
+    )
 
 
 class BrokerTest(unittest.TestCase):
@@ -57,6 +64,7 @@ class BrokerTest(unittest.TestCase):
             st = b.status()
             self.assertTrue(st["ready"])
             self.assertEqual((st["target"]["appVersion"], st["target"]["device"]), ("1.2.3", "Pixel"))
+
         run_async(go())
 
     def test_relay_error_timeout_disconnect_and_routing(self):
@@ -73,16 +81,33 @@ class BrokerTest(unittest.TestCase):
             req = newer.sent[-1]
             self.assertEqual((req["type"], req["command"], req["args"]), ("app_state_request", "logs", {"limit": 5}))
             # Spoofed answer from another socket is ignored.
-            b.handle_message(older, json.dumps({"type": "app_state_response", "requestId": req["requestId"],
-                                                "ok": True, "result": "spoof"}))
-            b.handle_message(newer, json.dumps({"type": "app_state_response", "requestId": req["requestId"],
-                                                "ok": True, "result": {"events": []}}))
+            b.handle_message(
+                older,
+                json.dumps(
+                    {"type": "app_state_response", "requestId": req["requestId"], "ok": True, "result": "spoof"}
+                ),
+            )
+            b.handle_message(
+                newer,
+                json.dumps(
+                    {"type": "app_state_response", "requestId": req["requestId"], "ok": True, "result": {"events": []}}
+                ),
+            )
             self.assertEqual((await task)["result"], {"events": []})
 
             task = asyncio.ensure_future(b.request("screenshot"))
             await asyncio.sleep(0)
-            b.handle_message(newer, json.dumps({"type": "app_state_response", "requestId": newer.sent[-1]["requestId"],
-                                                "ok": False, "error": "in background"}))
+            b.handle_message(
+                newer,
+                json.dumps(
+                    {
+                        "type": "app_state_response",
+                        "requestId": newer.sent[-1]["requestId"],
+                        "ok": False,
+                        "error": "in background",
+                    }
+                ),
+            )
             with self.assertRaises(AppStateError) as e:
                 await task
             self.assertEqual((e.exception.code, str(e.exception)), ("app_error", "in background"))
@@ -111,6 +136,7 @@ class BrokerTest(unittest.TestCase):
                 await task
             self.assertFalse(b.handle_message(older, "not json"))
             self.assertFalse(b.handle_message(older, json.dumps({"type": "other"})))
+
         run_async(go())
 
 
@@ -124,8 +150,9 @@ class DaemonE2ETest(unittest.TestCase):
         shutil.rmtree(self.home, ignore_errors=True)
 
     def ws(self, path="/ws", token=None):
-        return connect_websocket("127.0.0.1", self.daemon.port, path,
-                                 {"Authorization": f"Bearer {token or self.daemon.token}"})
+        return connect_websocket(
+            "127.0.0.1", self.daemon.port, path, {"Authorization": f"Bearer {token or self.daemon.token}"}
+        )
 
     def test_rest_auth_tabs_shell_turn_and_ws_events(self):
         d = self.daemon
@@ -146,13 +173,17 @@ class DaemonE2ETest(unittest.TestCase):
             self.assertEqual(snapshot["type"], "snapshot")
             self.assertEqual(snapshot["tabs"], [])
 
-            status, body = await asyncio.to_thread(d.api, "POST", "/api/tabs", {"agent": "shell", "cwd": str(self.home)})
+            status, body = await asyncio.to_thread(
+                d.api, "POST", "/api/tabs", {"agent": "shell", "cwd": str(self.home)}
+            )
             self.assertEqual(status, 200)
             tab = body["tab"]
             self.assertEqual(tab["title"], f"Shell · {self.home.name}")
             self.assertEqual(json.loads(await msgs.__anext__())["type"], "tab_created")
 
-            status, body = await asyncio.to_thread(d.api, "POST", f"/api/tabs/{tab['id']}/messages", {"text": "echo hi"})
+            status, body = await asyncio.to_thread(
+                d.api, "POST", f"/api/tabs/{tab['id']}/messages", {"text": "echo hi"}
+            )
             self.assertEqual(status, 200)
             self.assertEqual(body["assistantMessage"]["status"], "streaming")
             final = None
@@ -171,8 +202,9 @@ class DaemonE2ETest(unittest.TestCase):
         tab = run_async(go())
         status, body = d.api("GET", f"/api/tabs/{tab['id']}/messages")
         self.assertEqual([m["role"] for m in body["messages"]], ["user", "assistant"])
-        self.assertEqual(d.api("PATCH", f"/api/tabs/{tab['id']}", {"title": "Renamed", "model": "  "})[1]["tab"]["title"],
-                         "Renamed")
+        self.assertEqual(
+            d.api("PATCH", f"/api/tabs/{tab['id']}", {"title": "Renamed", "model": "  "})[1]["tab"]["title"], "Renamed"
+        )
         self.assertEqual(d.api("POST", f"/api/tabs/{tab['id']}/messages", {"text": "  "})[0], 400)
         self.assertEqual(d.api("GET", f"/api/tabs/{tab['id']}/interrupt")[0], 404)
         self.assertEqual(d.api("POST", f"/api/tabs/{tab['id']}/read")[1], {"ok": True})
@@ -182,11 +214,15 @@ class DaemonE2ETest(unittest.TestCase):
 
     def test_tab_system_prompt_create_patch_and_clear_via_rest(self):
         d = self.daemon
-        status, body = d.api("POST", "/api/tabs", {
-            "agent": "claude",
-            "cwd": str(self.home),
-            "systemPrompt": "  Stay concise for mobile.  ",
-        })
+        status, body = d.api(
+            "POST",
+            "/api/tabs",
+            {
+                "agent": "claude",
+                "cwd": str(self.home),
+                "systemPrompt": "  Stay concise for mobile.  ",
+            },
+        )
         self.assertEqual(status, 200)
         tab = body["tab"]
         self.assertEqual(tab["systemPrompt"], "Stay concise for mobile.")
@@ -215,8 +251,10 @@ class DaemonE2ETest(unittest.TestCase):
         bin_dir = self.home / "bin"
         bin_dir.mkdir()
         fake = bin_dir / "claude"
-        fake.write_text(f"#!/usr/bin/env python3\nimport sys\n"
-                        f"sys.stdout.write(open({str(FIXTURES_DIR / 'claude_tool_turn.ndjson')!r}).read())\n")
+        fake.write_text(
+            f"#!/usr/bin/env python3\nimport sys\n"
+            f"sys.stdout.write(open({str(FIXTURES_DIR / 'claude_tool_turn.ndjson')!r}).read())\n"
+        )
         fake.chmod(0o755)
         self.daemon = DaemonProcess(self.home, extra_path=bin_dir)
         d = self.daemon
@@ -249,22 +287,27 @@ class DaemonE2ETest(unittest.TestCase):
         self.assertEqual(stored["text"], final["text"])
         self.assertEqual(stored["usage"]["outputTokens"], 85)
         self.assertEqual(stored["toolCalls"][0]["inputSummary"], "Print hi")
-        self.assertEqual(stored["segments"], [
-            {"type": "text", "text": "Starting now."},
-            {"type": "tool", "toolCallId": "toolu_fixture_1"},
-            {"type": "text", "text": "All done."},
-        ])
+        self.assertEqual(
+            stored["segments"],
+            [
+                {"type": "text", "text": "Starting now."},
+                {"type": "tool", "toolCallId": "toolu_fixture_1"},
+                {"type": "text", "text": "All done."},
+            ],
+        )
 
     def test_ws_rejects_bad_auth_and_path_and_accepts_query_token(self):
         async def go():
             with self.assertRaises(ConnectionError):
                 await self.ws(token="wrong")
             with self.assertRaises(ConnectionError):
-                await connect_websocket("127.0.0.1", self.daemon.port, "/other",
-                                        {"Authorization": f"Bearer {self.daemon.token}"})
+                await connect_websocket(
+                    "127.0.0.1", self.daemon.port, "/other", {"Authorization": f"Bearer {self.daemon.token}"}
+                )
             ws = await connect_websocket("127.0.0.1", self.daemon.port, f"/ws?token={self.daemon.token}")
             self.assertEqual(json.loads(await ws.messages().__anext__())["type"], "snapshot")
             ws.close()
+
         run_async(go())
 
     def test_fs_listing_and_debug_dump_upload(self):
@@ -281,18 +324,31 @@ class DaemonE2ETest(unittest.TestCase):
         self.assertEqual((missing["exists"], missing["directories"]), (False, []))
 
         png = base64.b64encode(b"\x89PNG\r\n\x1a\nxx").decode()
-        status, res = self.daemon.api("POST", "/api/debug/dumps", {
-            "dumpId": "ab/../cd", "createdAt": 1795536752575, "note": "hi", "eventsNdjson": "{}\n{}\n",
-            "workspaceStateJson": '{"a":1}', "logcat": "log", "screenshotPngBase64": png})
+        status, res = self.daemon.api(
+            "POST",
+            "/api/debug/dumps",
+            {
+                "dumpId": "ab/../cd",
+                "createdAt": 1795536752575,
+                "note": "hi",
+                "eventsNdjson": "{}\n{}\n",
+                "workspaceStateJson": '{"a":1}',
+                "logcat": "log",
+                "screenshotPngBase64": png,
+            },
+        )
         self.assertEqual(status, 200)
         self.assertEqual(res["dumpId"], "ab_.._cd")
-        self.assertEqual(sorted(res["files"]), sorted(["meta.json", "state.json", "events.ndjson", "logcat.txt",
-                                                       "screenshot.png", "summary.md"]))
+        self.assertEqual(
+            sorted(res["files"]),
+            sorted(["meta.json", "state.json", "events.ndjson", "logcat.txt", "screenshot.png", "summary.md"]),
+        )
         dump_dir = Path(res["remoteDir"])
         self.assertTrue(dump_dir.name.startswith("20261124-"))
         meta = json.loads((dump_dir / "meta.json").read_text())
-        self.assertEqual((meta["eventCount"], meta["hasScreenshot"], meta["createdAtIso"]),
-                         (2, True, "2026-11-24T16:12:32.575Z"))
+        self.assertEqual(
+            (meta["eventCount"], meta["hasScreenshot"], meta["createdAtIso"]), (2, True, "2026-11-24T16:12:32.575Z")
+        )
         self.assertEqual(os.path.realpath(res["latestSymlink"]), str(dump_dir))
         self.assertEqual(self.daemon.api("GET", "/api/debug/dumps")[1]["dumps"][0]["dirName"], dump_dir.name)
 
@@ -301,9 +357,13 @@ class DaemonE2ETest(unittest.TestCase):
             body = json.dumps({"agent": "shell"}).encode()
             chunked = b"%x\r\n%s\r\n0\r\n\r\n" % (len(body), body)
             s.sendall(
-                b"GET /api/tabs HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer " + self.daemon.token.encode() + b"\r\n\r\n"
+                b"GET /api/tabs HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer "
+                + self.daemon.token.encode()
+                + b"\r\n\r\n"
                 + b"POST /api/tabs HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nAuthorization: Bearer "
-                + self.daemon.token.encode() + b"\r\n\r\n" + chunked
+                + self.daemon.token.encode()
+                + b"\r\n\r\n"
+                + chunked
             )
             data = b""
             while data.count(b"HTTP/1.1 200") < 2 or not data.rstrip().endswith(b"}}"):
@@ -319,6 +379,7 @@ class DaemonE2ETest(unittest.TestCase):
 
         async def fake_app(ready: asyncio.Event, stop: asyncio.Event):
             ws = await self.ws()
+
             async def loop():
                 async for text in ws.messages():
                     msg = json.loads(text)
@@ -328,17 +389,37 @@ class DaemonE2ETest(unittest.TestCase):
                         ready.set()
                     elif msg["type"] == "app_state_request":
                         result = {"pngBase64": big_png} if msg["command"] == "screenshot" else {"pong": True}
-                        ws.send(json.dumps({"type": "app_state_response", "requestId": msg["requestId"],
-                                            "ok": True, "result": result}))
+                        ws.send(
+                            json.dumps(
+                                {
+                                    "type": "app_state_response",
+                                    "requestId": msg["requestId"],
+                                    "ok": True,
+                                    "result": result,
+                                }
+                            )
+                        )
+
             task = asyncio.ensure_future(loop())
             await stop.wait()
             ws.close()
             await asyncio.wait_for(task, 5)
 
         def cli(*args):
-            return subprocess.run([sys.executable, str(CLI), "--config",
-                                   str(self.home / ".config" / "herdr-mobile" / "config.json"),
-                                   "--host", "127.0.0.1", *args], capture_output=True, text=True, timeout=60)
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--config",
+                    str(self.home / ".config" / "herdr-mobile" / "config.json"),
+                    "--host",
+                    "127.0.0.1",
+                    *args,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
 
         async def go():
             r = await asyncio.to_thread(cli, "status")
@@ -357,6 +438,7 @@ class DaemonE2ETest(unittest.TestCase):
             await asyncio.sleep(0.1)
             r = await asyncio.to_thread(cli, "status")
             self.assertEqual(r.returncode, 3)
+
         run_async(go(), 90)
 
     def test_node_ws_client_interop(self):
@@ -393,7 +475,9 @@ ws.on("error", (e) => {{ console.log("ERROR", e.message); process.exit(1); }});
             msgs = ws.messages()
             await msgs.__anext__()  # snapshot
 
-            status, body = await asyncio.to_thread(d.api, "POST", "/api/tabs", {"agent": "shell", "cwd": str(self.home)})
+            status, body = await asyncio.to_thread(
+                d.api, "POST", "/api/tabs", {"agent": "shell", "cwd": str(self.home)}
+            )
             self.assertEqual(status, 200)
             tab_id = body["tab"]["id"]
 
@@ -404,9 +488,7 @@ ws.on("error", (e) => {{ console.log("ERROR", e.message); process.exit(1); }});
             self.assertEqual(status, 200)
 
             # Queue two follow-ups while the first turn is still running (must return 200, not 409)
-            status, q1 = await asyncio.to_thread(
-                d.api, "POST", f"/api/tabs/{tab_id}/messages", {"text": "echo second"}
-            )
+            status, q1 = await asyncio.to_thread(d.api, "POST", f"/api/tabs/{tab_id}/messages", {"text": "echo second"})
             self.assertEqual((status, q1["queued"]), (200, True))
             status, q2 = await asyncio.to_thread(
                 d.api, "POST", f"/api/tabs/{tab_id}/messages", {"text": "echo drop_me"}
@@ -422,7 +504,9 @@ ws.on("error", (e) => {{ console.log("ERROR", e.message); process.exit(1); }});
 
             # Force interrupt & process queue + current draft text
             status, intr = await asyncio.to_thread(
-                d.api, "POST", f"/api/tabs/{tab_id}/interrupt",
+                d.api,
+                "POST",
+                f"/api/tabs/{tab_id}/interrupt",
                 {"processQueue": True, "text": "echo third"},
             )
             self.assertEqual((status, intr["ok"]), (200, True))
@@ -431,8 +515,11 @@ ws.on("error", (e) => {{ console.log("ERROR", e.message); process.exit(1); }});
             completed = None
             while completed is None:
                 env = json.loads(await asyncio.wait_for(msgs.__anext__(), timeout=15))
-                if env["type"] == "message_updated" and env["message"]["role"] == "assistant" \
-                        and env["message"]["status"] == "complete":
+                if (
+                    env["type"] == "message_updated"
+                    and env["message"]["role"] == "assistant"
+                    and env["message"]["status"] == "complete"
+                ):
                     completed = env["message"]
             ws.close()
             return tab_id, completed

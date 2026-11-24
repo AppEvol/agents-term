@@ -1,0 +1,56 @@
+# Static-check configuration for the Python code (VM daemon and app_state_cli).
+# This is tool config only, not a package definition; the code stays
+# standard-library only. Run everything via scripts/static-checks.sh.
+
+[tool.ruff]
+# Lowest supported interpreter (app_state_cli: 3.8+, daemon: 3.9+), so ruff
+# never suggests syntax that would break on it.
+target-version = "py38"
+line-length = 120
+extend-include = ["daemon/agentsterm-daemon"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",  # pycodestyle
+  "F",       # pyflakes (unused imports/variables, undefined names)
+  "I",       # import order
+  "B",       # bugbear
+  "UP",      # pyupgrade
+  "SIM",     # simplifications
+  "C4",      # comprehensions
+  "PIE",
+  "RET",     # return-statement consistency
+  "PERF",
+  "ARG",     # unused arguments
+  "PLE", "PLW",
+  "RUF",
+]
+ignore = [
+  "B904",     # error translation at API boundaries deliberately drops the cause
+  "SIM102",   # nested ifs mirror the stream-event structure in runner.py
+  "PERF203",  # try/except in loops is free on 3.11+
+  "PERF401",
+  "SIM105",   # contextlib.suppress is slower and no clearer than try/except/pass
+  "PLW0603",  # module-level singletons are intentional
+  "PLW2901",
+  # typing.Optional/Dict/List stay: PEP 585/604 spellings only work on the
+  # 3.8/3.9 floor inside postponed annotations, and mixing both is worse.
+  "UP006", "UP007", "UP035", "UP045",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: http.server handler signatures, long literal fixtures, subprocess
+# calls whose return code is asserted on, shared mutable handler state.
+"**/test_*.py" = ["ARG002", "E501", "PLW1510", "RUF012"]
+"daemon/tests/*" = ["ARG002", "E501", "PLW1510", "RUF012"]
+
+# Dead code detection.
+[tool.vulture]
+paths = ["daemon", "app_state_cli"]
+min_confidence = 60
+ignore_names = [
+  # http.server / argparse hooks called by the standard library
+  "do_GET", "do_POST", "log_message", "required",
+  # WebSocket state kept for protocol completeness and debugging
+  "CONNECTING", "close_reason",
+]

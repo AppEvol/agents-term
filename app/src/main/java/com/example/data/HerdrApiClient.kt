@@ -36,46 +36,45 @@ open class HerdrApiClient(
     private suspend fun executeRawJson(
         request: Request,
         logPayload: Boolean = true,
-    ): String =
-        withContext(Dispatchers.IO) {
-            val startMs = System.currentTimeMillis()
-            val endpoint = "${request.method} ${request.url.encodedPath}"
-            try {
-                client.newCall(request).execute().use { resp ->
-                    val durationMs = System.currentTimeMillis() - startMs
-                    val bodyStr = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        val parsedErr = runCatching {
-                            decodeHerdrJson<ErrorResponse>(bodyStr).error
-                        }.getOrNull()
-                        val errMsg = parsedErr ?: "HTTP ${resp.code}: ${resp.message}"
-                        debugRecorder?.record(
-                            category = "http",
-                            event = "http_error",
-                            detail = "$endpoint -> ${resp.code} (${durationMs}ms): $errMsg",
-                            payload = if (logPayload) bodyStr else null,
-                        )
-                        throw IOException(errMsg)
-                    }
-                    debugRecorder?.record(
-                        category = "http",
-                        event = "http_ok",
-                        detail = "$endpoint -> ${resp.code} (${durationMs}ms, ${bodyStr.length}B)",
-                    )
-                    bodyStr
-                }
-            } catch (err: Throwable) {
+    ): String = withContext(Dispatchers.IO) {
+        val startMs = System.currentTimeMillis()
+        val endpoint = "${request.method} ${request.url.encodedPath}"
+        try {
+            client.newCall(request).execute().use { resp ->
                 val durationMs = System.currentTimeMillis() - startMs
-                if (err !is IOException || err.message?.startsWith("HTTP ") != true) {
+                val bodyStr = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    val parsedErr = runCatching {
+                        decodeHerdrJson<ErrorResponse>(bodyStr).error
+                    }.getOrNull()
+                    val errMsg = parsedErr ?: "HTTP ${resp.code}: ${resp.message}"
                     debugRecorder?.record(
                         category = "http",
-                        event = "http_exception",
-                        detail = "$endpoint failed (${durationMs}ms): ${err.message ?: err::class.java.simpleName}",
+                        event = "http_error",
+                        detail = "$endpoint -> ${resp.code} (${durationMs}ms): $errMsg",
+                        payload = if (logPayload) bodyStr else null,
                     )
+                    throw IOException(errMsg)
                 }
-                throw err
+                debugRecorder?.record(
+                    category = "http",
+                    event = "http_ok",
+                    detail = "$endpoint -> ${resp.code} (${durationMs}ms, ${bodyStr.length}B)",
+                )
+                bodyStr
             }
+        } catch (err: Throwable) {
+            val durationMs = System.currentTimeMillis() - startMs
+            if (err !is IOException || err.message?.startsWith("HTTP ") != true) {
+                debugRecorder?.record(
+                    category = "http",
+                    event = "http_exception",
+                    detail = "$endpoint failed (${durationMs}ms): ${err.message ?: err::class.java.simpleName}",
+                )
+            }
+            throw err
         }
+    }
 
     private suspend inline fun <reified T> executeJson(
         request: Request,
@@ -170,7 +169,7 @@ open class HerdrApiClient(
         overridePermissionMode: String? = null,
     ): SendMessageResponse {
         val json = encodeHerdrJson(
-            SendMessageRequest(text = text, overridePermissionMode = overridePermissionMode)
+            SendMessageRequest(text = text, overridePermissionMode = overridePermissionMode),
         )
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs/$tabId/messages")
@@ -192,7 +191,7 @@ open class HerdrApiClient(
                 processQueue = processQueue,
                 text = text?.trim()?.takeIf { it.isNotEmpty() },
                 overridePermissionMode = overridePermissionMode,
-            )
+            ),
         )
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs/$tabId/interrupt")
@@ -347,7 +346,7 @@ open class HerdrApiClient(
                     )
                     notifyClosedOnce(reason)
                 }
-            }
+            },
         )
     }
 }

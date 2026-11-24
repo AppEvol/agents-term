@@ -63,7 +63,7 @@ class AppStateReporter(
                 "device" to device,
                 "commands" to COMMANDS,
             ),
-        )
+        ),
     )
 
     override suspend fun handleRequest(requestId: String, command: String, args: Map<String, Any?>): String {
@@ -71,7 +71,7 @@ class AppStateReporter(
         val outcome: Result<Any?> = try {
             if (!isEnabled()) {
                 throw AppStateCommandException(
-                    "Remote inspection is disabled in the app (Settings > Debug sharing)."
+                    "Remote inspection is disabled in the app (Settings > Debug sharing).",
                 )
             }
             Result.success(dispatch(command, args))
@@ -103,7 +103,7 @@ class AppStateReporter(
                         "requestId" to requestId,
                         "ok" to true,
                         "result" to result,
-                    )
+                    ),
                 )
             },
             onFailure = { err ->
@@ -113,7 +113,7 @@ class AppStateReporter(
                         "requestId" to requestId,
                         "ok" to false,
                         "error" to sanitizeDebugText(err.message ?: "Unknown error"),
-                    )
+                    ),
                 )
             },
         )
@@ -121,6 +121,7 @@ class AppStateReporter(
 
     private suspend fun dispatch(command: String, args: Map<String, Any?>): Any? = when (command) {
         "ping" -> mapOf("pong" to true, "ts" to clockMs(), "appVersion" to appVersion)
+
         "state" -> mapOf(
             "capturedAt" to clockMs(),
             "appVersion" to appVersion,
@@ -128,22 +129,28 @@ class AppStateReporter(
             "ui" to sources.uiState(),
             "workspace" to RawJson(sources.workspaceJson()),
         )
+
         "logs" -> logs(args)
+
         "logcat" -> {
             val lines = args.intArg("lines", default = 400).coerceIn(50, 2000)
             mapOf("lines" to lines, "text" to sources.logcat(lines))
         }
+
         "crash" -> {
             val text = sources.lastCrash()?.let { sanitizeDebugText(it) }
             mapOf("hasCrash" to (text != null), "text" to text)
         }
+
         "screenshot" -> mapOf("capturedAt" to clockMs(), "pngBase64" to sources.screenshotPngBase64())
+
         "dump" -> sources.uploadDump(
             note = args["note"] as? String,
             includeScreenshot = args["includeScreenshot"] as? Boolean ?: true,
         )
+
         else -> throw AppStateCommandException(
-            "Unknown command '$command'. Supported: ${COMMANDS.joinToString(", ")}"
+            "Unknown command '$command'. Supported: ${COMMANDS.joinToString(", ")}",
         )
     }
 
@@ -173,8 +180,7 @@ class AppStateReporter(
         )
     }
 
-    private fun Map<String, Any?>.intArg(name: String, default: Int): Int =
-        (this[name] as? Number)?.toInt() ?: default
+    private fun Map<String, Any?>.intArg(name: String, default: Int): Int = (this[name] as? Number)?.toInt() ?: default
 
     companion object {
         val COMMANDS = listOf("ping", "state", "logs", "logcat", "crash", "screenshot", "dump")
@@ -199,9 +205,13 @@ fun toJsonText(value: Any?): String = buildString { appendJson(value) }
 private fun StringBuilder.appendJson(value: Any?) {
     when (value) {
         null -> append("null")
+
         is RawJson -> append(value.json)
+
         is String -> append(jsonStringAdapter.toJson(value))
+
         is Boolean, is Int, is Long, is Short, is Byte -> append(value.toString())
+
         is Double, is Float -> {
             val d = value.toDouble()
             when {
@@ -210,7 +220,9 @@ private fun StringBuilder.appendJson(value: Any?) {
                 else -> append(d.toString())
             }
         }
+
         is Number -> append(value.toString())
+
         is Map<*, *> -> {
             append('{')
             var first = true
@@ -223,6 +235,7 @@ private fun StringBuilder.appendJson(value: Any?) {
             }
             append('}')
         }
+
         is Iterable<*> -> {
             append('[')
             var first = true
@@ -233,8 +246,11 @@ private fun StringBuilder.appendJson(value: Any?) {
             }
             append(']')
         }
+
         is Array<*> -> appendJson(value.asList())
+
         is Enum<*> -> append(jsonStringAdapter.toJson(value.name))
+
         else -> append(jsonStringAdapter.toJson(value.toString()))
     }
 }

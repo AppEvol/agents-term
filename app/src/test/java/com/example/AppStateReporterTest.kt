@@ -32,8 +32,7 @@ class AppStateReporterTest {
             screenshotError?.let { throw AppStateCommandException(it) }
             return "iVBORw0KGgo="
         }
-        override suspend fun uploadDump(note: String?, includeScreenshot: Boolean): Map<String, Any?> =
-            mapOf("dumpId" to "abc", "note" to note, "includedScreenshot" to includeScreenshot)
+        override suspend fun uploadDump(note: String?, includeScreenshot: Boolean): Map<String, Any?> = mapOf("dumpId" to "abc", "note" to note, "includedScreenshot" to includeScreenshot)
     }
 
     private var enabled = true
@@ -59,6 +58,7 @@ class AppStateReporterTest {
             r.endObject()
             m
         }
+
         JsonReader.Token.BEGIN_ARRAY -> {
             val l = mutableListOf<Any?>()
             r.beginArray()
@@ -66,18 +66,22 @@ class AppStateReporterTest {
             r.endArray()
             l
         }
+
         JsonReader.Token.STRING -> r.nextString()
+
         JsonReader.Token.NUMBER -> r.nextString().let { it.toLongOrNull() ?: it.toDouble() }
+
         JsonReader.Token.BOOLEAN -> r.nextBoolean()
+
         JsonReader.Token.NULL -> r.nextNull<Any?>()
+
         else -> error("unexpected token ${r.peek()}")
     }
 
     @Suppress("UNCHECKED_CAST")
     private fun obj(value: Any?): Map<String, Any?> = value as Map<String, Any?>
 
-    private suspend fun call(command: String, args: Map<String, Any?> = emptyMap()): Map<String, Any?> =
-        obj(parse(reporter.handleRequest("req-1", command, args)))
+    private suspend fun call(command: String, args: Map<String, Any?> = emptyMap()): Map<String, Any?> = obj(parse(reporter.handleRequest("req-1", command, args)))
 
     @Test
     fun helloAnnouncesEnabledStateAndCommands() {
@@ -212,8 +216,8 @@ class AppStateReporterTest {
                     "nan" to Double.NaN,
                     "l" to listOf(true, false),
                     "raw" to RawJson("""{"x":1}"""),
-                )
-            )
+                ),
+            ),
         )
     }
 }

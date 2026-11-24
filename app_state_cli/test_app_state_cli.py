@@ -118,8 +118,9 @@ class CliTest(unittest.TestCase):
         self.assertEqual(StubDaemon.requests[-2]["timeoutMs"], 7000)
 
     def test_logs_builds_filter_args(self):
-        code, out, _ = self.run_cli("logs", "--limit", "5", "--category", "http", "--category", "ws",
-                                    "--since", "123", "--grep", "fail")
+        code, out, _ = self.run_cli(
+            "logs", "--limit", "5", "--category", "http", "--category", "ws", "--since", "123", "--grep", "fail"
+        )
         self.assertEqual(code, 0)
         self.assertEqual(
             json.loads(out)["result"]["echo"],

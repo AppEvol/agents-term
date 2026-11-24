@@ -14,13 +14,11 @@ interface ConnectionSettings {
 class SettingsStore(context: Context) : ConnectionSettings {
     private val prefs = context.getSharedPreferences("herdr_mobile_prefs", Context.MODE_PRIVATE)
 
-    override fun loadConnection(): ConnectionConfig {
-        return ConnectionConfig(
-            host = prefs.getString(KEY_HOST, "").orEmpty(),
-            port = prefs.getInt(KEY_PORT, 7501),
-            token = prefs.getString(KEY_TOKEN, "").orEmpty(),
-        )
-    }
+    override fun loadConnection(): ConnectionConfig = ConnectionConfig(
+        host = prefs.getString(KEY_HOST, "").orEmpty(),
+        port = prefs.getInt(KEY_PORT, 7501),
+        token = prefs.getString(KEY_TOKEN, "").orEmpty(),
+    )
 
     override fun saveConnection(config: ConnectionConfig) {
         prefs.edit()
@@ -86,9 +84,7 @@ class SettingsStore(context: Context) : ConnectionSettings {
             .apply()
     }
 
-    fun getTrustedHostFingerprint(host: String, port: Int): String? {
-        return prefs.getString(hostKeyPrefKey(host, port), null)
-    }
+    fun getTrustedHostFingerprint(host: String, port: Int): String? = prefs.getString(hostKeyPrefKey(host, port), null)
 
     fun saveTrustedHostFingerprint(host: String, port: Int, fingerprint: String) {
         prefs.edit().putString(hostKeyPrefKey(host, port), fingerprint).apply()
@@ -112,15 +108,13 @@ class SettingsStore(context: Context) : ConnectionSettings {
         prefs.edit().putStringSet(KEY_BOOTSTRAPPED_HOSTS, updated).apply()
     }
 
-    fun loadDebugSharingSettings(): DebugSharingSettings {
-        return DebugSharingSettings(
-            enabled = prefs.getBoolean(KEY_DEBUG_SHARING_ENABLED, false),
-            includeScreenshot = prefs.getBoolean(KEY_DEBUG_INCLUDE_SCREENSHOT, true),
-            includeLogcat = prefs.getBoolean(KEY_DEBUG_INCLUDE_LOGCAT, true),
-            autoUploadOnError = prefs.getBoolean(KEY_DEBUG_AUTO_UPLOAD_ERRORS, false),
-            remoteInspectionEnabled = prefs.getBoolean(KEY_DEBUG_REMOTE_INSPECTION, false),
-        )
-    }
+    fun loadDebugSharingSettings(): DebugSharingSettings = DebugSharingSettings(
+        enabled = prefs.getBoolean(KEY_DEBUG_SHARING_ENABLED, false),
+        includeScreenshot = prefs.getBoolean(KEY_DEBUG_INCLUDE_SCREENSHOT, true),
+        includeLogcat = prefs.getBoolean(KEY_DEBUG_INCLUDE_LOGCAT, true),
+        autoUploadOnError = prefs.getBoolean(KEY_DEBUG_AUTO_UPLOAD_ERRORS, false),
+        remoteInspectionEnabled = prefs.getBoolean(KEY_DEBUG_REMOTE_INSPECTION, false),
+    )
 
     fun saveDebugSharingSettings(settings: DebugSharingSettings) {
         prefs.edit()
@@ -154,13 +148,9 @@ class SettingsStore(context: Context) : ConnectionSettings {
             .apply()
     }
 
-    private fun hostKeyPrefKey(host: String, port: Int): String {
-        return "${KEY_HOST_KEY_PREFIX}${cleanHost(host)}:$port"
-    }
+    private fun hostKeyPrefKey(host: String, port: Int): String = "${KEY_HOST_KEY_PREFIX}${cleanHost(host)}:$port"
 
-    private fun lastCwdPrefKey(normalizedHost: String): String {
-        return "${KEY_LAST_CWD_PREFIX}$normalizedHost"
-    }
+    private fun lastCwdPrefKey(normalizedHost: String): String = "${KEY_LAST_CWD_PREFIX}$normalizedHost"
 
     companion object {
         private const val KEY_HOST = "vm_host"

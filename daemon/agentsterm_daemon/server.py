@@ -31,6 +31,7 @@ _DUMP_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 # ------------------------------------------------------------------ debug dumps & fs (blocking; run in threads)
 
+
 def debug_dumps_root() -> Path:
     return home_dir() / ".config" / "herdr-mobile" / "debug-dumps"
 
@@ -61,8 +62,14 @@ def save_debug_dump(payload: Dict[str, Any]) -> Dict[str, Any]:
     root = debug_dumps_root()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     created = payload.get("createdAt")
-    created_at = int(created) if isinstance(created, (int, float)) and not isinstance(created, bool) \
-        and created == created and abs(created) != float("inf") else int(time.time() * 1000)
+    created_at = (
+        int(created)
+        if isinstance(created, (int, float))
+        and not isinstance(created, bool)
+        and created == created
+        and abs(created) != float("inf")
+        else int(time.time() * 1000)
+    )
     safe_id = _sanitize_dump_segment(payload.get("dumpId"))
     dir_name = f"{_utc_stamp(created_at)}_{safe_id}"
     remote_dir = root / dir_name
@@ -226,12 +233,17 @@ class Daemon:
         commit = daemon_commit()  # resolve now: it must describe the code this process loaded
         self._server = await asyncio.start_server(
             lambda r, w: httpserver.serve_connection(r, w, self.handle, self.handle_upgrade),
-            self.host, self.port, limit=httpserver.MAX_HEADER_BYTES,
+            self.host,
+            self.port,
+            limit=httpserver.MAX_HEADER_BYTES,
         )
         self._ping_task = asyncio.get_running_loop().create_task(self._ping_loop())
         auth = "disabled" if self.no_auth else "bearer"
-        print(f"AgentsTerm daemon v{SERVER_VERSION} (python, commit {(commit or 'unknown')[:12]}) "
-              f"listening on http://{self.host}:{self.port} (auth={auth})", flush=True)
+        print(
+            f"AgentsTerm daemon v{SERVER_VERSION} (python, commit {(commit or 'unknown')[:12]}) "
+            f"listening on http://{self.host}:{self.port} (auth={auth})",
+            flush=True,
+        )
 
     async def _ping_loop(self) -> None:
         while True:
@@ -268,13 +280,19 @@ class Daemon:
         self.app_state.add_socket(ws)
         try:
             listing = self.store.list_tabs()
-            ws.send(json.dumps({
-                "type": "snapshot",
-                "server": build_server_info(self.host),
-                "tabs": listing["tabs"],
-                "activeTabId": listing["activeTabId"],
-                "ts": now_ms(),
-            }, ensure_ascii=False, separators=(",", ":")))
+            ws.send(
+                json.dumps(
+                    {
+                        "type": "snapshot",
+                        "server": build_server_info(self.host),
+                        "tabs": listing["tabs"],
+                        "activeTabId": listing["activeTabId"],
+                        "ts": now_ms(),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
             async for text in ws.messages():
                 self.app_state.handle_message(ws, text)
         finally:
@@ -312,7 +330,9 @@ class Daemon:
                 return Response.json(200, await asyncio.to_thread(list_debug_dumps))
             if method == "POST":
                 body = await req.json(max_bytes=10 * 1024 * 1024)
-                return Response.json(200, await asyncio.to_thread(save_debug_dump, body if isinstance(body, dict) else {}))
+                return Response.json(
+                    200, await asyncio.to_thread(save_debug_dump, body if isinstance(body, dict) else {})
+                )
             return Response.json(405, {"error": "Method not allowed"})
 
         if path == "/api/app/status":
@@ -327,8 +347,11 @@ class Daemon:
             body = body if isinstance(body, dict) else {}
             command = body.get("command").strip() if isinstance(body.get("command"), str) else ""
             args = body.get("args") if isinstance(body.get("args"), dict) else {}
-            timeout = body.get("timeoutMs") if isinstance(body.get("timeoutMs"), (int, float)) \
-                and not isinstance(body.get("timeoutMs"), bool) else DEFAULT_COMMAND_TIMEOUT_MS
+            timeout = (
+                body.get("timeoutMs")
+                if isinstance(body.get("timeoutMs"), (int, float)) and not isinstance(body.get("timeoutMs"), bool)
+                else DEFAULT_COMMAND_TIMEOUT_MS
+            )
             try:
                 result = await self.app_state.request(command, args, timeout)
             except AppStateError as err:
@@ -344,9 +367,14 @@ class Daemon:
             agent = body.get("agent")
             if not agent or not isinstance(agent, str):
                 return Response.json(400, {"error": "Missing required field: agent"})
-            tab = self.store.create_tab(agent, title=body.get("title"), cwd=body.get("cwd"),
-                                        permission_mode=body.get("permissionMode"), model=body.get("model"),
-                                        system_prompt=body.get("systemPrompt"))
+            tab = self.store.create_tab(
+                agent,
+                title=body.get("title"),
+                cwd=body.get("cwd"),
+                permission_mode=body.get("permissionMode"),
+                model=body.get("model"),
+                system_prompt=body.get("systemPrompt"),
+            )
             self.broadcast({"type": "tab_created", "tab": tab})
             return Response.json(200, {"tab": tab})
 
@@ -357,9 +385,7 @@ class Daemon:
 
         return Response.json(404, {"error": f"Unknown endpoint {method} {path}"})
 
-    async def _route_tab(
-        self, req: Request, tab_id: str, sub: str, item_id: Optional[str] = None
-    ) -> Response:
+    async def _route_tab(self, req: Request, tab_id: str, sub: str, item_id: Optional[str] = None) -> Response:
         method = req.method
         if item_id is not None and sub != "queue":
             return Response.json(404, {"error": f"Unknown endpoint {method} {req.path}"})
@@ -383,8 +409,10 @@ class Daemon:
                 system_prompt_changed = False
                 if "systemPrompt" in body:
                     sp = body["systemPrompt"]
-                    new_sp = None if existing.get("agent") == "shell" else (
-                        sp.strip() if isinstance(sp, str) and sp.strip() else None
+                    new_sp = (
+                        None
+                        if existing.get("agent") == "shell"
+                        else (sp.strip() if isinstance(sp, str) and sp.strip() else None)
                     )
                     patch["systemPrompt"] = new_sp
                     system_prompt_changed = new_sp != existing.get("systemPrompt")
@@ -433,7 +461,9 @@ class Daemon:
             body = body if isinstance(body, dict) else {}
             process_queue = bool(body.get("processQueue"))
             text = body["text"].strip() if isinstance(body.get("text"), str) and body["text"].strip() else None
-            override = body.get("overridePermissionMode") if isinstance(body.get("overridePermissionMode"), str) else None
+            override = (
+                body.get("overridePermissionMode") if isinstance(body.get("overridePermissionMode"), str) else None
+            )
             self.runner.interrupt(
                 tab_id,
                 process_queue=process_queue,

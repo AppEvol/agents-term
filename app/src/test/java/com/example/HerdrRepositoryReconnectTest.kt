@@ -14,7 +14,6 @@ import com.example.data.TabMessagesResponse
 import com.example.data.TabRecord
 import com.example.data.WsServerEnvelope
 import com.example.data.resolveInitialDirectoryListing
-import java.io.IOException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -28,6 +27,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HerdrRepositoryReconnectTest {
@@ -142,12 +142,10 @@ class HerdrRepositoryReconnectTest {
             )
         }
 
-        override suspend fun getTabMessages(config: ConnectionConfig, tabId: String): TabMessagesResponse {
-            return TabMessagesResponse(
-                tab = TabRecord(id = tabId, title = "Tab", agent = "agy", cwd = "/home/test"),
-                messages = emptyList(),
-            )
-        }
+        override suspend fun getTabMessages(config: ConnectionConfig, tabId: String): TabMessagesResponse = TabMessagesResponse(
+            tab = TabRecord(id = tabId, title = "Tab", agent = "agy", cwd = "/home/test"),
+            messages = emptyList(),
+        )
     }
 
     private val testConfig = ConnectionConfig(host = "100.71.219.26", port = 7501, token = "tok_test")
@@ -219,7 +217,7 @@ class HerdrRepositoryReconnectTest {
                 type = "snapshot",
                 tabs = listOf(TabRecord(id = "stale_tab", title = "Stale", agent = "agy", cwd = "/tmp")),
                 activeTabId = "stale_tab",
-            )
+            ),
         )
         socket1.emitClosed("Socket closed")
 
@@ -451,7 +449,7 @@ class HerdrRepositoryReconnectTest {
                 type = "snapshot",
                 server = ServerInfo(version = "0.1.0", hostname = "vm", defaultCwd = "/home/test"),
                 tabs = emptyList(),
-            )
+            ),
         )
 
         // Creating a tab persists lastCwd in both WorkspaceState and ConnectionSettings
@@ -514,7 +512,7 @@ class HerdrRepositoryReconnectTest {
                 requestId = "r1",
                 command = "logs",
                 args = mapOf("limit" to 5.0),
-            )
+            ),
         )
         runCurrent()
         assertEquals(listOf(Triple("r1", "logs", mapOf<String, Any?>("limit" to 5.0))), handler.requests)
@@ -554,7 +552,7 @@ class HerdrRepositoryReconnectTest {
     @Test
     fun appStateRequestDecodesFromDaemonJson() {
         val env = com.example.data.decodeHerdrJson<WsServerEnvelope>(
-            """{"type":"app_state_request","requestId":"abc","command":"logs","args":{"limit":5,"categories":["http"]}}"""
+            """{"type":"app_state_request","requestId":"abc","command":"logs","args":{"limit":5,"categories":["http"]}}""",
         )
         assertEquals("abc", env.requestId)
         assertEquals("logs", env.command)

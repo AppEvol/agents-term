@@ -134,17 +134,20 @@ fun fallbackModelsForAgent(agentType: String): List<AgentModelOption> = when (ag
         AgentModelOption("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
         AgentModelOption("claude-sonnet-5-5-medium", "Claude Sonnet 5.5 (Medium)"),
     )
+
     "claude" -> listOf(
         AgentModelOption("opus", "Opus", "Most capable Claude model alias"),
         AgentModelOption("sonnet", "Sonnet", "Balanced Claude model alias"),
         AgentModelOption("haiku", "Haiku", "Fastest Claude model alias"),
     )
+
     "codex" -> listOf(
         AgentModelOption("gpt-6.2-sol", "GPT-6.2-Sol"),
         AgentModelOption("gpt-6.2-astra", "GPT-6.2-Astra"),
         AgentModelOption("gpt-6.1-terra", "GPT-6.1 Terra"),
         AgentModelOption("gpt-6-astra", "GPT-6-Astra"),
     )
+
     else -> emptyList()
 }
 
@@ -359,12 +362,10 @@ fun resolvePreferredNewTabCwd(
     lastCwd: String?,
     activeTabCwd: String?,
     homeCwd: String?,
-): String {
-    return lastCwd?.trim()?.takeIf { it.isNotEmpty() }
-        ?: activeTabCwd?.trim()?.takeIf { it.isNotEmpty() }
-        ?: homeCwd?.trim()?.takeIf { it.isNotEmpty() }
-        ?: "/home"
-}
+): String = lastCwd?.trim()?.takeIf { it.isNotEmpty() }
+    ?: activeTabCwd?.trim()?.takeIf { it.isNotEmpty() }
+    ?: homeCwd?.trim()?.takeIf { it.isNotEmpty() }
+    ?: "/home"
 
 @JsonClass(generateAdapter = true)
 data class CreateTabRequest(

@@ -28,8 +28,7 @@ class InstallScriptTest(unittest.TestCase):
         self.port = free_port()
         # "origin": a repo whose main branch contains daemon/, like the real agents-term repo.
         self.origin = self.tmp / "origin"
-        shutil.copytree(DAEMON_DIR, self.origin / "daemon",
-                        ignore=shutil.ignore_patterns("__pycache__", "tests"))
+        shutil.copytree(DAEMON_DIR, self.origin / "daemon", ignore=shutil.ignore_patterns("__pycache__", "tests"))
         self.git("init", "-q", "-b", "main")
         self.commit("initial daemon")
         self.install_dir = self.home / ".local" / "share" / "agentsterm" / "agents-term"
@@ -38,7 +37,7 @@ class InstallScriptTest(unittest.TestCase):
             "HOME": str(self.home),
             "AGENTSTERM_HOST": "127.0.0.1",
             "AGENTSTERM_REPO_URL": f"file://{self.origin}",
-            "AGENTSTERM_KEEP_LEGACY": "1",   # never touch a real daemon on this machine
+            "AGENTSTERM_KEEP_LEGACY": "1",  # never touch a real daemon on this machine
             "AGENTSTERM_NO_SYSTEMD": "1",
         }
         self.env.pop("AGENTSTERM_INSTALL_DIR", None)
@@ -54,7 +53,9 @@ class InstallScriptTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def git(self, *args):
-        return subprocess.run([*GIT, "-C", str(self.origin), *args], check=True, capture_output=True, text=True).stdout.strip()
+        return subprocess.run(
+            [*GIT, "-C", str(self.origin), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
 
     def commit(self, message):
         (self.origin / "CHANGELOG").write_text(message + "\n")
@@ -64,17 +65,26 @@ class InstallScriptTest(unittest.TestCase):
 
     def install(self, *args, script=None):
         # First run: the script comes from origin (as the bootstrap does after cloning).
-        script = script or (self.install_dir / "daemon" / "install.sh"
-                            if self.install_dir.exists() else self.origin / "daemon" / "install.sh")
-        return subprocess.run(["bash", str(script), "--port", str(self.port), *args],
-                              env=self.env, capture_output=True, text=True, timeout=90)
+        script = script or (
+            self.install_dir / "daemon" / "install.sh"
+            if self.install_dir.exists()
+            else self.origin / "daemon" / "install.sh"
+        )
+        return subprocess.run(
+            ["bash", str(script), "--port", str(self.port), *args],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
 
     def pid(self):
         return int((self.home / ".config" / "herdr-mobile" / "daemon.pid").read_text().strip())
 
     def info(self, token):
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/info",
-                                     headers={"Authorization": f"Bearer {token}"})
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/api/info", headers={"Authorization": f"Bearer {token}"}
+        )
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.load(resp)
 
@@ -149,12 +159,14 @@ class InstallScriptTest(unittest.TestCase):
 
     def test_bad_arguments_and_missing_prerequisites_have_distinct_exit_codes(self):
         script = self.origin / "daemon" / "install.sh"
-        bad_port = subprocess.run(["bash", str(script), "--port", "99999"], env=self.env,
-                                  capture_output=True, text=True, timeout=30)
+        bad_port = subprocess.run(
+            ["bash", str(script), "--port", "99999"], env=self.env, capture_output=True, text=True, timeout=30
+        )
         self.assertEqual(bad_port.returncode, 2)
         self.assertIn("invalid port", bad_port.stderr)
-        unknown = subprocess.run(["bash", str(script), "--frobnicate"], env=self.env,
-                                 capture_output=True, text=True, timeout=30)
+        unknown = subprocess.run(
+            ["bash", str(script), "--frobnicate"], env=self.env, capture_output=True, text=True, timeout=30
+        )
         self.assertEqual(unknown.returncode, 2)
 
         # No Tailscale address and no AGENTSTERM_HOST -> prerequisite error, nothing started.
@@ -164,8 +176,9 @@ class InstallScriptTest(unittest.TestCase):
         (stub / "tailscale").chmod(0o755)
         env = {k: v for k, v in self.env.items() if k != "AGENTSTERM_HOST"}
         env["PATH"] = f"{stub}:{env['PATH']}"
-        no_ip = subprocess.run(["bash", str(script), "--port", str(self.port)], env=env,
-                               capture_output=True, text=True, timeout=30)
+        no_ip = subprocess.run(
+            ["bash", str(script), "--port", str(self.port)], env=env, capture_output=True, text=True, timeout=30
+        )
         self.assertEqual(no_ip.returncode, 3, no_ip.stdout + no_ip.stderr)
         self.assertIn("Tailscale has no IPv4", no_ip.stderr)
         self.assertFalse((self.home / ".config" / "herdr-mobile" / "daemon.pid").exists())
@@ -175,8 +188,13 @@ class InstallScriptTest(unittest.TestCase):
         self.git("rm", "-rq", "--cached", ".")
         shutil.rmtree(self.origin / "daemon")
         self.commit("branch without a daemon")
-        no_daemon = subprocess.run(["bash", str(DAEMON_DIR / "install.sh"), "--port", str(self.port), "--ref", "empty"],
-                                   env=self.env, capture_output=True, text=True, timeout=60)
+        no_daemon = subprocess.run(
+            ["bash", str(DAEMON_DIR / "install.sh"), "--port", str(self.port), "--ref", "empty"],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         self.assertEqual(no_daemon.returncode, 3, no_daemon.stdout + no_daemon.stderr)
         self.assertIn("not found", no_daemon.stderr)
 

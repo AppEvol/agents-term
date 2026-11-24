@@ -70,9 +70,7 @@ def _tool_output_text(raw_out: Any) -> Optional[str]:
     if isinstance(raw_out, str):
         return raw_out
     if isinstance(raw_out, list):
-        return "\n".join(
-            js_str(x["text"]) if isinstance(x, dict) and "text" in x else json_compact(x) for x in raw_out
-        )
+        return "\n".join(js_str(x["text"]) if isinstance(x, dict) and "text" in x else json_compact(x) for x in raw_out)
     if raw_out is not None:
         return json_pretty(raw_out)
     return None
@@ -192,9 +190,7 @@ class AgentRunner:
         if model_cmd:
             return self._handle_model_command(tab, user_message, assistant_message, (model_cmd.group(1) or "").strip())
 
-        effective_mode = (
-            (override_permission_mode or "").strip() or tab.get("permissionMode") or "full-access"
-        )
+        effective_mode = (override_permission_mode or "").strip() or tab.get("permissionMode") or "full-access"
         working_tab = self.store.update_tab(
             tab["id"],
             {
@@ -395,15 +391,25 @@ class AgentRunner:
         elif _MODEL_RESET_RE.fullmatch(arg):
             updated_tab = self.store.update_tab(
                 tab["id"],
-                {"model": None, "status": "idle", "statusDetail": None,
-                 "lastMessagePreview": "Model reset to default", "unread": False},
+                {
+                    "model": None,
+                    "status": "idle",
+                    "statusDetail": None,
+                    "lastMessagePreview": "Model reset to default",
+                    "unread": False,
+                },
             )
             reply = "Model reset to CLI default for this tab."
         else:
             updated_tab = self.store.update_tab(
                 tab["id"],
-                {"model": arg, "status": "idle", "statusDetail": None,
-                 "lastMessagePreview": f"Model: {arg}", "unread": False},
+                {
+                    "model": arg,
+                    "status": "idle",
+                    "statusDetail": None,
+                    "lastMessagePreview": f"Model: {arg}",
+                    "unread": False,
+                },
             )
             reply = f"Model switched to `{arg}` for this tab. Subsequent messages will use this model."
         complete_msg = {
@@ -507,8 +513,13 @@ class AgentRunner:
         if usage:
             final_usage = {**usage, "durationMs": first_not_none(usage.get("durationMs"), duration_ms)}
         else:
-            final_usage = {"inputTokens": None, "outputTokens": None, "thinkingTokens": None,
-                           "costUsd": None, "durationMs": duration_ms}
+            final_usage = {
+                "inputTokens": None,
+                "outputTokens": None,
+                "thinkingTokens": None,
+                "costUsd": None,
+                "durationMs": duration_ms,
+            }
 
         final_status, final_error = "complete", msg.get("error")
         tab_status, status_detail = "idle", None
@@ -548,9 +559,8 @@ class AgentRunner:
         if updated_tab:
             self.broadcast({"type": "tab_updated", "tab": updated_tab})
 
-        should_drain = (
-            (not interrupted and tab_status == "idle")
-            or (interrupted and active is not None and active.drain_queue_on_exit)
+        should_drain = (not interrupted and tab_status == "idle") or (
+            interrupted and active is not None and active.drain_queue_on_exit
         )
         if should_drain and updated_tab and updated_tab.get("queuedMessages"):
             self.drain_and_start_queued(tab_id)
@@ -691,11 +701,11 @@ class AgentRunner:
                 if before:
                     st["raw"] += before
                     append_text(before)
-                after = pending[idx + marker_len:]
+                after = pending[idx + marker_len :]
                 nl = after.find("\n")
                 if nl >= 0:
                     detect_cwd(after[:nl])
-                    st["pending"] = after[nl + 1:]
+                    st["pending"] = after[nl + 1 :]
                 else:
                     st["pending"] = pending[idx:]
             elif len(pending) > marker_len + 2:
@@ -719,7 +729,7 @@ class AgentRunner:
                 before = pending[:idx]
                 if before:
                     append_text(before)
-                detect_cwd(pending[idx + marker_len:])
+                detect_cwd(pending[idx + marker_len :])
 
             if st["fence"]:
                 self._emit_delta(tab_id, msg, text_delta="```" if msg["text"].endswith("\n") else "\n```")
@@ -727,8 +737,13 @@ class AgentRunner:
                 self._emit_delta(tab_id, msg, text_delta="_Command completed with no output._" if code == 0 else "")
 
             self._finalize_turn(
-                tab_id, msg, interrupted=interrupted, exit_code=code, stderr_text=st["stderr"],
-                new_cwd=st["new_cwd"], duration_ms=now_ms() - start,
+                tab_id,
+                msg,
+                interrupted=interrupted,
+                exit_code=code,
+                stderr_text=st["stderr"],
+                new_cwd=st["new_cwd"],
+                duration_ms=now_ms() - start,
             )
 
         self._spawn(tab_id, msg, [bash, "-lc", wrapped], cwd, "bash", on_stdout, on_stderr, on_close)
@@ -770,8 +785,13 @@ class AgentRunner:
 
         self._set_status_detail(tab_id, "Antigravity is thinking…")
 
-        st: Dict[str, Any] = {"session_ref": session, "usage": None, "saw_text": False,
-                              "text_step": None, "think_step": None}
+        st: Dict[str, Any] = {
+            "session_ref": session,
+            "usage": None,
+            "saw_text": False,
+            "text_step": None,
+            "think_step": None,
+        }
         denied: List[Dict[str, Any]] = []
         tool_starts: Dict[str, int] = {}
         breaks = _BlockBreaks()
@@ -845,10 +865,14 @@ class AgentRunner:
             if step_type == "tool":
                 tool_info = as_obj(step.get("tool_info")) or {}
                 step_idx = js_str(step["step_index"]) if step.get("step_index") is not None else None
-                tool_id = js_str(first_not_none(
-                    step.get("tool_call_id"), step.get("tool_use_id"), tool_info.get("id"),
-                    f"agy_step_{step_idx}" if step_idx else f"tool_{rand_hex(4)}",
-                ))
+                tool_id = js_str(
+                    first_not_none(
+                        step.get("tool_call_id"),
+                        step.get("tool_use_id"),
+                        tool_info.get("id"),
+                        f"agy_step_{step_idx}" if step_idx else f"tool_{rand_hex(4)}",
+                    )
+                )
                 name = js_str(first_not_none(step.get("tool_name"), tool_info.get("name"), "Tool"))
                 params = first_not_none(tool_info.get("parameters"), tool_info.get("input"), tool_info.get("args"))
                 summary = summarize_tool_input(params)
@@ -857,18 +881,29 @@ class AgentRunner:
                 if step_state in ("ACTIVE", "RUNNING", "PENDING"):
                     tool_starts.setdefault(tool_id, now_ms())
                     self._running_status(tab_id, name, summary)
-                    self._upsert_tool_call(tab_id, msg, {
-                        "id": tool_id,
-                        "name": name,
-                        "inputSummary": summary or (existing or {}).get("inputSummary") or "",
-                        "inputJson": json_pretty(params) if params is not None else (existing or {}).get("inputJson"),
-                        "output": (existing or {}).get("output"),
-                        "status": "running",
-                        "durationMs": None,
-                    })
+                    self._upsert_tool_call(
+                        tab_id,
+                        msg,
+                        {
+                            "id": tool_id,
+                            "name": name,
+                            "inputSummary": summary or (existing or {}).get("inputSummary") or "",
+                            "inputJson": json_pretty(params)
+                            if params is not None
+                            else (existing or {}).get("inputJson"),
+                            "output": (existing or {}).get("output"),
+                            "status": "running",
+                            "durationMs": None,
+                        },
+                    )
                 else:
-                    raw_out = first_not_none(tool_info.get("output"), tool_info.get("result"), tool_info.get("error"),
-                                             step.get("output"), step.get("error"))
+                    raw_out = first_not_none(
+                        tool_info.get("output"),
+                        tool_info.get("result"),
+                        tool_info.get("error"),
+                        step.get("output"),
+                        step.get("error"),
+                    )
                     if isinstance(raw_out, str):
                         out_text: Optional[str] = raw_out
                     elif raw_out is not None:
@@ -878,7 +913,8 @@ class AgentRunner:
                     is_denied = step_state == "DENIED" or js_truthy(tool_info.get("denied"))
                     is_err = not is_denied and (
                         step_state in ("ERROR", "FAILED")
-                        or js_truthy(tool_info.get("is_error")) or js_truthy(tool_info.get("error"))
+                        or js_truthy(tool_info.get("is_error"))
+                        or js_truthy(tool_info.get("error"))
                     )
                     started = tool_starts.get(tool_id)
                     if is_finite_number(step.get("duration_seconds")):
@@ -889,17 +925,21 @@ class AgentRunner:
                         dur = None
                     if is_denied:
                         denied.append({"action": name, "displayName": name, "detail": summary or None})
-                    self._upsert_tool_call(tab_id, msg, {
-                        "id": tool_id,
-                        "name": first_not_none((existing or {}).get("name"), name),
-                        "inputSummary": (existing or {}).get("inputSummary") or summary,
-                        "inputJson": first_not_none(
-                            (existing or {}).get("inputJson"), json_pretty(params) if params is not None else None
-                        ),
-                        "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
-                        "status": "denied" if is_denied else "error" if is_err else "done",
-                        "durationMs": dur,
-                    })
+                    self._upsert_tool_call(
+                        tab_id,
+                        msg,
+                        {
+                            "id": tool_id,
+                            "name": first_not_none((existing or {}).get("name"), name),
+                            "inputSummary": (existing or {}).get("inputSummary") or summary,
+                            "inputJson": first_not_none(
+                                (existing or {}).get("inputJson"), json_pretty(params) if params is not None else None
+                            ),
+                            "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
+                            "status": "denied" if is_denied else "error" if is_err else "done",
+                            "durationMs": dur,
+                        },
+                    )
                     self._set_status_detail(tab_id, "Antigravity is thinking…")
 
         def handle_result(res: Dict[str, Any]) -> None:
@@ -997,7 +1037,9 @@ class AgentRunner:
             if ev_type in ("tool_use", "tool_call", "tool_start"):
                 input_obj = first_not_none(ev.get("input"), ev.get("args"), ev.get("arguments"))
                 self._tool_use_started(
-                    tab_id, msg, tool_starts,
+                    tab_id,
+                    msg,
+                    tool_starts,
                     first_not_none(ev.get("id"), ev.get("tool_use_id")),
                     first_not_none(ev.get("name"), ev.get("tool")),
                     input_obj,
@@ -1020,15 +1062,21 @@ class AgentRunner:
                     out_text = _tool_output_text(first_not_none(b.get("content"), b.get("output"), b.get("result")))
                     is_err = js_truthy(b.get("is_error")) or js_truthy(b.get("error"))
                     started = tool_starts.get(tool_id)
-                    self._upsert_tool_call(tab_id, msg, {
-                        "id": tool_id,
-                        "name": first_not_none((existing or {}).get("name"), js_str(first_not_none(b.get("name"), "Tool"))),
-                        "inputSummary": first_not_none((existing or {}).get("inputSummary"), ""),
-                        "inputJson": (existing or {}).get("inputJson"),
-                        "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
-                        "status": "error" if is_err else "done",
-                        "durationMs": now_ms() - started if started else None,
-                    })
+                    self._upsert_tool_call(
+                        tab_id,
+                        msg,
+                        {
+                            "id": tool_id,
+                            "name": first_not_none(
+                                (existing or {}).get("name"), js_str(first_not_none(b.get("name"), "Tool"))
+                            ),
+                            "inputSummary": first_not_none((existing or {}).get("inputSummary"), ""),
+                            "inputJson": (existing or {}).get("inputJson"),
+                            "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
+                            "status": "error" if is_err else "done",
+                            "durationMs": now_ms() - started if started else None,
+                        },
+                    )
                 return
 
             if ev_type == "result":
@@ -1058,8 +1106,15 @@ class AgentRunner:
 
         def finish(code: Optional[int], interrupted: bool, stderr: str, duration: int) -> None:
             self._finalize_turn(
-                tab_id, msg, interrupted=interrupted, exit_code=code, stderr_text=stderr,
-                session_ref=st["session_ref"], usage=st["usage"], denied_actions=denied, duration_ms=duration,
+                tab_id,
+                msg,
+                interrupted=interrupted,
+                exit_code=code,
+                stderr_text=stderr,
+                session_ref=st["session_ref"],
+                usage=st["usage"],
+                denied_actions=denied,
+                duration_ms=duration,
             )
 
         self._spawn_json_lines(tab, msg, [binary, *args], cwd, "agy", handle_line, finish)
@@ -1072,15 +1127,19 @@ class AgentRunner:
         tool_starts[tool_id] = now_ms()
         summary = summarize_tool_input(input_obj)
         self._running_status(tab_id, name, summary)
-        self._upsert_tool_call(tab_id, msg, {
-            "id": tool_id,
-            "name": name,
-            "inputSummary": summary,
-            "inputJson": json_pretty(input_obj) if input_obj is not None else None,
-            "output": None,
-            "status": "running",
-            "durationMs": None,
-        })
+        self._upsert_tool_call(
+            tab_id,
+            msg,
+            {
+                "id": tool_id,
+                "name": name,
+                "inputSummary": summary,
+                "inputJson": json_pretty(input_obj) if input_obj is not None else None,
+                "output": None,
+                "status": "running",
+                "durationMs": None,
+            },
+        )
 
     # ---------------------------------------------------------------- claude
 
@@ -1169,15 +1228,19 @@ class AgentRunner:
                         existing = self._find_tool(msg, tool_id)
                         out_text = _tool_output_text(b.get("content"))
                         started = tool_starts.get(tool_id)
-                        self._upsert_tool_call(tab_id, msg, {
-                            "id": tool_id,
-                            "name": first_not_none((existing or {}).get("name"), "Tool"),
-                            "inputSummary": first_not_none((existing or {}).get("inputSummary"), ""),
-                            "inputJson": (existing or {}).get("inputJson"),
-                            "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
-                            "status": "error" if js_truthy(b.get("is_error")) else "done",
-                            "durationMs": now_ms() - started if started else None,
-                        })
+                        self._upsert_tool_call(
+                            tab_id,
+                            msg,
+                            {
+                                "id": tool_id,
+                                "name": first_not_none((existing or {}).get("name"), "Tool"),
+                                "inputSummary": first_not_none((existing or {}).get("inputSummary"), ""),
+                                "inputJson": (existing or {}).get("inputJson"),
+                                "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
+                                "status": "error" if js_truthy(b.get("is_error")) else "done",
+                                "durationMs": now_ms() - started if started else None,
+                            },
+                        )
             elif ev_type == "result":
                 result_val = ev.get("result")
                 if isinstance(result_val, str) and result_val and not msg["text"].strip():
@@ -1200,8 +1263,15 @@ class AgentRunner:
 
         def finish(code: Optional[int], interrupted: bool, stderr: str, duration: int) -> None:
             self._finalize_turn(
-                tab_id, msg, interrupted=interrupted, exit_code=code, stderr_text=stderr,
-                session_ref=st["session_ref"], usage=st["usage"], denied_actions=denied, duration_ms=duration,
+                tab_id,
+                msg,
+                interrupted=interrupted,
+                exit_code=code,
+                stderr_text=stderr,
+                session_ref=st["session_ref"],
+                usage=st["usage"],
+                denied_actions=denied,
+                duration_ms=duration,
             )
 
         self._spawn_json_lines(tab, msg, [binary, *args], cwd, "claude", handle_line, finish)
@@ -1219,8 +1289,11 @@ class AgentRunner:
 
         session = tab.get("sessionRef")
         is_resume = isinstance(session, dict) and session.get("kind") == "codex" and bool(session.get("value"))
-        args = (["exec", "resume", "--json", "--skip-git-repo-check"] if is_resume
-                else ["exec", "--json", "--skip-git-repo-check", "-C", cwd])
+        args = (
+            ["exec", "resume", "--json", "--skip-git-repo-check"]
+            if is_resume
+            else ["exec", "--json", "--skip-git-repo-check", "-C", cwd]
+        )
         if permission_mode == "full-access":
             args.append("--dangerously-bypass-approvals-and-sandbox")
         elif not is_resume:
@@ -1271,15 +1344,19 @@ class AgentRunner:
                     started = tool_starts.get(item_id)
                     exit_code = item.get("exit_code") if is_number(item.get("exit_code")) else None
                     agg = item.get("aggregated_output")
-                    self._upsert_tool_call(tab_id, msg, {
-                        "id": item_id,
-                        "name": "Bash",
-                        "inputSummary": cmd_summary,
-                        "inputJson": json_pretty({"command": cmd}),
-                        "output": agg[:MAX_TOOL_OUTPUT] if isinstance(agg, str) else None,
-                        "status": ("error" if exit_code and exit_code != 0 else "done") if completed else "running",
-                        "durationMs": now_ms() - started if completed and started else None,
-                    })
+                    self._upsert_tool_call(
+                        tab_id,
+                        msg,
+                        {
+                            "id": item_id,
+                            "name": "Bash",
+                            "inputSummary": cmd_summary,
+                            "inputJson": json_pretty({"command": cmd}),
+                            "output": agg[:MAX_TOOL_OUTPUT] if isinstance(agg, str) else None,
+                            "status": ("error" if exit_code and exit_code != 0 else "done") if completed else "running",
+                            "durationMs": now_ms() - started if completed and started else None,
+                        },
+                    )
             elif ev_type == "turn.completed" and as_obj(ev.get("usage")) is not None:
                 u = as_obj(ev["usage"]) or {}
                 st["usage"] = {
@@ -1294,8 +1371,14 @@ class AgentRunner:
 
         def finish(code: Optional[int], interrupted: bool, stderr: str, duration: int) -> None:
             self._finalize_turn(
-                tab_id, msg, interrupted=interrupted, exit_code=code, stderr_text=stderr,
-                session_ref=st["session_ref"], usage=st["usage"], duration_ms=duration,
+                tab_id,
+                msg,
+                interrupted=interrupted,
+                exit_code=code,
+                stderr_text=stderr,
+                session_ref=st["session_ref"],
+                usage=st["usage"],
+                duration_ms=duration,
             )
 
         self._spawn_json_lines(tab, msg, [binary, *args], cwd, "codex", handle_line, finish)

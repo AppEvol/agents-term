@@ -64,11 +64,13 @@ class SshBootstrapClient(
                             onHostFingerprint(fp)
                             HostKeyRepository.OK
                         }
+
                         stored == fp -> {
                             onLog("Verified VM host key: $fp")
                             onHostFingerprint(fp)
                             HostKeyRepository.OK
                         }
+
                         else -> {
                             hostKeyMismatch = HostKeyMismatchException(
                                 host = host,
@@ -249,7 +251,7 @@ class SshBootstrapClient(
                 }.orEmpty()
                 throw IOException(
                     "Bootstrap exited with code $exitCode: the latest daemon could not be verified. " +
-                        "Check the live output above for details.$debugHint"
+                        "Check the live output above for details.$debugHint",
                 )
             }
 
@@ -270,7 +272,7 @@ class SshBootstrapClient(
                 val remoteProcess = if (agyConversationId != null) "remote repair agent" else "remote setup"
                 throw IOException(
                     "SSH connection dropped before bootstrap finished ($remoteProcess may still be running on $host). " +
-                        "Keep the screen awake and tap Retry to connect once the daemon is up.$debugHint"
+                        "Keep the screen awake and tap Retry to connect once the daemon is up.$debugHint",
                 )
             }
 

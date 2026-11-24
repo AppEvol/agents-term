@@ -169,7 +169,8 @@ async def _run_agy_models(binary: str) -> tuple:
     stdout = stderr = b""
     try:
         proc = await asyncio.create_subprocess_exec(
-            binary, "models",
+            binary,
+            "models",
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

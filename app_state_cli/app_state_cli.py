@@ -52,8 +52,9 @@ class DaemonClient:
         self.token = token
         self.http_timeout = http_timeout
 
-    def _request(self, method: str, path: str, body: Optional[Dict[str, Any]] = None,
-                 timeout: Optional[float] = None) -> Dict[str, Any]:
+    def _request(
+        self, method: str, path: str, body: Optional[Dict[str, Any]] = None, timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(self.base_url + path, data=data, method=method)
         req.add_header("Accept", "application/json")
@@ -78,7 +79,8 @@ class DaemonClient:
             if err.code == 404:
                 raise CliError(
                     f"{message}. The daemon is too old for app state reporting; update and restart it.",
-                    EXIT_DAEMON, "daemon_unsupported",
+                    EXIT_DAEMON,
+                    "daemon_unsupported",
                 )
             raise CliError(message, EXIT_DAEMON, "daemon_error")
         except (urllib.error.URLError, OSError) as err:
@@ -126,12 +128,14 @@ def emit(payload: Any, pretty: bool) -> None:
     sys.stdout.flush()
 
 
-def run_app_command(client: DaemonClient, args: argparse.Namespace, command: str,
-                    cmd_args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def run_app_command(
+    client: DaemonClient, args: argparse.Namespace, command: str, cmd_args: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     return client.command(command, cmd_args, timeout_s=args.timeout)
 
 
 # --- subcommands -------------------------------------------------------------------------------
+
 
 def cmd_status(client: DaemonClient, args: argparse.Namespace) -> int:
     status = client.status()
@@ -143,6 +147,7 @@ def cmd_simple(name: str):
     def handler(client: DaemonClient, args: argparse.Namespace) -> int:
         emit(run_app_command(client, args, name), args.pretty)
         return 0
+
     return handler
 
 
@@ -217,8 +222,10 @@ def cmd_screenshot(client: DaemonClient, args: argparse.Namespace) -> int:
     b64 = result.pop("pngBase64", None)
     if not b64:
         raise CliError("App returned no screenshot data", EXIT_APP, "app_error")
-    out = Path(args.output).expanduser() if args.output else Path(
-        f"/tmp/agentsterm-screenshot-{time.strftime('%Y%m%d-%H%M%S')}.png"
+    out = (
+        Path(args.output).expanduser()
+        if args.output
+        else Path(f"/tmp/agentsterm-screenshot-{time.strftime('%Y%m%d-%H%M%S')}.png")
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     data = base64.b64decode(b64)
@@ -255,6 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
         # defaults, or they would overwrite values given before the subcommand.
         def d(value):
             return argparse.SUPPRESS if suppress else value
+
         common = argparse.ArgumentParser(add_help=False)
         common.add_argument("--host", default=d(None), help="daemon host (default: from daemon config)")
         common.add_argument("--port", type=int, default=d(None), help="daemon port (default: from daemon config)")
@@ -285,8 +293,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("logs", cmd_logs, "Show the app's in-memory debug event log (HTTP/WS/SSH/UI/errors).")
     p.add_argument("--limit", type=int, default=100, help="max events (default: 100, max 600)")
-    p.add_argument("--category", action="append",
-                   help="only these categories (repeatable): http, ws, ssh, ui, lifecycle, error, app_state")
+    p.add_argument(
+        "--category",
+        action="append",
+        help="only these categories (repeatable): http, ws, ssh, ui, lifecycle, error, app_state",
+    )
     p.add_argument("--since", type=int, help="only events with ts >= this epoch-ms timestamp")
     p.add_argument("--grep", help="only events whose event/detail/payload contains this text (case-insensitive)")
     p.add_argument("--follow", "-f", action="store_true", help="keep polling; print one JSON event per line")

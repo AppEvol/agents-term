@@ -7,12 +7,11 @@ import java.util.Locale
 enum class SshAuthMethod(val storageKey: String) {
     TAILSCALE_SSH("tailscale_ssh"),
     PRIVATE_KEY("private_key"),
-    PASSWORD("password");
+    PASSWORD("password"),
+    ;
 
     companion object {
-        fun fromStorageKey(key: String?): SshAuthMethod {
-            return entries.firstOrNull { it.storageKey == key } ?: TAILSCALE_SSH
-        }
+        fun fromStorageKey(key: String?): SshAuthMethod = entries.firstOrNull { it.storageKey == key } ?: TAILSCALE_SSH
     }
 }
 
@@ -112,7 +111,7 @@ class HostKeyMismatchException(
     val expectedFingerprint: String,
     val receivedFingerprint: String,
 ) : Exception(
-    "SSH host key changed for $host:$port.\nExpected: $expectedFingerprint\nReceived: $receivedFingerprint"
+    "SSH host key changed for $host:$port.\nExpected: $expectedFingerprint\nReceived: $receivedFingerprint",
 )
 
 data class SshBootstrapResult(
@@ -145,13 +144,9 @@ fun isValidUsername(raw: String): Boolean {
     return clean.isNotBlank() && usernameAllowedRegex.matches(clean)
 }
 
-fun cleanHost(raw: String): String {
-    return raw.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
-}
+fun cleanHost(raw: String): String = raw.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
 
-fun stripAnsiCodes(line: String): String {
-    return ansiEscapeRegex.replace(line, "")
-}
+fun stripAnsiCodes(line: String): String = ansiEscapeRegex.replace(line, "")
 
 /** Git repo + ref the VM daemon (Python, `daemon/` in this repo) is installed from. */
 const val AGENTSTERM_REPO_URL = "https://github.com/nedn/agents-term.git"
@@ -512,28 +507,35 @@ fun parseSshSetupInput(raw: String): SshSetupAutofill? {
                     sshPort = tokens[idx + 1].toIntOrNull()?.takeIf { it in 1..65535 }
                     idx += 2
                 }
+
                 tok.startsWith("-p") && tok.length > 2 -> {
                     sshPort = tok.substring(2).toIntOrNull()?.takeIf { it in 1..65535 }
                     idx++
                 }
+
                 tok == "-l" && idx + 1 < tokens.size -> {
                     flagUser = tokens[idx + 1].trim()
                     idx += 2
                 }
+
                 tok.startsWith("-l") && tok.length > 2 -> {
                     flagUser = tok.substring(2).trim()
                     idx++
                 }
+
                 tok in flagsWithValue && idx + 1 < tokens.size -> {
                     idx += 2
                 }
+
                 tok.startsWith("-") -> {
                     idx++
                 }
+
                 targetToken == null -> {
                     targetToken = tok
                     idx++
                 }
+
                 else -> idx++
             }
         }

@@ -118,7 +118,7 @@ def summarize_command(command: str) -> str:
         match = _LEADING_CD_RE.match(s)
         if not match:
             break
-        rest = s[match.end():].strip()
+        rest = s[match.end() :].strip()
         if not rest:
             break
         s = rest

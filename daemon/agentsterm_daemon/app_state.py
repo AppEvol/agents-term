@@ -89,8 +89,9 @@ class _Client:
 
 
 class _Pending:
-    def __init__(self, client_id: str, command: str, future: "asyncio.Future[Dict[str, Any]]",
-                 timer: asyncio.TimerHandle) -> None:
+    def __init__(
+        self, client_id: str, command: str, future: "asyncio.Future[Dict[str, Any]]", timer: asyncio.TimerHandle
+    ) -> None:
         self.client_id = client_id
         self.command = command
         self.started_at = now_ms()
@@ -118,8 +119,7 @@ class AppStateBroker:
             if req.client_id == client.client_id:
                 del self._pending[request_id]
                 req.timer.cancel()
-                self._fail(req, AppStateError(
-                    "app_disconnected", f"App disconnected before answering '{req.command}'"))
+                self._fail(req, AppStateError("app_disconnected", f"App disconnected before answering '{req.command}'"))
 
     def handle_message(self, socket: BrokerSocket, raw: str) -> bool:
         """Returns True if the frame was an app-state frame (consumed here)."""
@@ -148,12 +148,14 @@ class AppStateBroker:
             req.timer.cancel()
             if msg.get("ok") is True:
                 if not req.future.done():
-                    req.future.set_result({
-                        "clientId": client.client_id,
-                        "command": req.command,
-                        "elapsedMs": now_ms() - req.started_at,
-                        "result": msg.get("result"),
-                    })
+                    req.future.set_result(
+                        {
+                            "clientId": client.client_id,
+                            "command": req.command,
+                            "elapsedMs": now_ms() - req.started_at,
+                            "result": msg.get("result"),
+                        }
+                    )
             else:
                 err = _str_or_none(msg.get("error")) or "App reported an unspecified error"
                 self._fail(req, AppStateError("app_error", err))
@@ -172,8 +174,10 @@ class AppStateBroker:
         elif not any(c.hello is not None for c in clients):
             reason = "The connected app build does not support app state reporting. Install a newer AgentsTerm build."
         else:
-            reason = ("The app is connected but remote inspection is off. On the phone: Settings > Debug sharing > "
-                      "enable debug sharing and 'Allow VM agents to inspect the app'.")
+            reason = (
+                "The app is connected but remote inspection is off. On the phone: Settings > Debug sharing > "
+                "enable debug sharing and 'Allow VM agents to inspect the app'."
+            )
         return {
             "ready": target is not None,
             "reason": reason,
@@ -181,8 +185,9 @@ class AppStateBroker:
             "clients": [c.summary() for c in clients],
         }
 
-    async def request(self, command: str, args: Optional[Dict[str, Any]] = None,
-                      timeout_ms: Any = DEFAULT_COMMAND_TIMEOUT_MS) -> Dict[str, Any]:
+    async def request(
+        self, command: str, args: Optional[Dict[str, Any]] = None, timeout_ms: Any = DEFAULT_COMMAND_TIMEOUT_MS
+    ) -> Dict[str, Any]:
         if not isinstance(command, str) or not _COMMAND_NAME_RE.match(command):
             raise AppStateError("bad_request", f"Invalid command name: '{command}'")
         target = self._pick_target()
@@ -207,16 +212,24 @@ class AppStateBroker:
         def on_timeout() -> None:
             req = self._pending.pop(request_id, None)
             if req:
-                self._fail(req, AppStateError(
-                    "timeout",
-                    f"App did not answer '{command}' within {bounded_label}ms (is the app frozen or backgrounded?)"))
+                self._fail(
+                    req,
+                    AppStateError(
+                        "timeout",
+                        f"App did not answer '{command}' within {bounded_label}ms (is the app frozen or backgrounded?)",
+                    ),
+                )
 
         timer = loop.call_later(bounded / 1000.0, on_timeout)
         self._pending[request_id] = _Pending(target.client_id, command, future, timer)
         try:
-            target.socket.send(json.dumps(
-                {"type": "app_state_request", "requestId": request_id, "command": command, "args": args or {}},
-                ensure_ascii=False, separators=(",", ":")))
+            target.socket.send(
+                json.dumps(
+                    {"type": "app_state_request", "requestId": request_id, "command": command, "args": args or {}},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         except Exception as err:  # noqa: BLE001 - any send failure means the socket is gone
             self._pending.pop(request_id, None)
             timer.cancel()

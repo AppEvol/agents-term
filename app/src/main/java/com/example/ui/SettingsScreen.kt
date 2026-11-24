@@ -226,7 +226,7 @@ fun SettingsScreen(
                                 modifier = Modifier
                                     .size(10.dp)
                                     .clip(CircleShape)
-                                    .background(dotColor)
+                                    .background(dotColor),
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
@@ -510,12 +510,12 @@ fun SettingsScreen(
                                         runCatching { shareDebugBundleFile(context, file) }
                                             .onFailure { err ->
                                                 snackbarHostState.showSnackbar(
-                                                    err.message ?: "Unable to open Android share sheet"
+                                                    err.message ?: "Unable to open Android share sheet",
                                                 )
                                             }
                                     }.onFailure { err ->
                                         snackbarHostState.showSnackbar(
-                                            err.message ?: "Failed to export debug ZIP"
+                                            err.message ?: "Failed to export debug ZIP",
                                         )
                                     }
                                 }
@@ -758,7 +758,7 @@ private fun SettingsSwitchRow(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
-                    alpha = if (enabled) 0.9f else 0.55f
+                    alpha = if (enabled) 0.9f else 0.55f,
                 ),
             )
         }

@@ -43,9 +43,7 @@ class TempHomeTestCase(unittest.TestCase):
         return path
 
     def emit_lines_script(self, lines: List[Dict[str, Any]], args_log: Optional[Path] = None) -> str:
-        log = (
-            f"open({str(args_log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n" if args_log else ""
-        )
+        log = f"open({str(args_log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n" if args_log else ""
         return log + f"for line in {json.dumps(lines)!s}:\n    sys.stdout.write(json.dumps(line) + '\\n')\n"
 
 
@@ -66,7 +64,10 @@ class DaemonProcess:
             env["PATH"] = f"{extra_path}:{env.get('PATH', '')}"
         self.proc = subprocess.Popen(
             [sys.executable, str(DAEMON_DIR / "agentsterm-daemon"), "--host", "127.0.0.1", "--port", str(self.port)],
-            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
         line = self.proc.stdout.readline()
         if "listening" not in line:

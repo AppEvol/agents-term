@@ -4,11 +4,6 @@ import com.example.data.buildAgyBootstrapCommand
 import com.example.data.decodeHerdrJson
 import com.example.data.defaultAgyBootstrapPrompt
 import com.example.data.extractPairingUriFromOutput
-import java.io.File
-import java.net.HttpURLConnection
-import java.net.ServerSocket
-import java.net.URL
-import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,6 +13,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.ServerSocket
+import java.net.URL
+import java.util.concurrent.TimeUnit
 
 /**
  * Runs the exact remote command the app sends over SSH ([buildAgyBootstrapCommand]) against a
@@ -65,8 +65,7 @@ class BootstrapScriptE2ETest {
         return git("rev-parse", "HEAD")
     }
 
-    private fun hasTool(name: String) =
-        runCatching { ProcessBuilder("sh", "-c", "command -v $name").start().waitFor() == 0 }.getOrDefault(false)
+    private fun hasTool(name: String) = runCatching { ProcessBuilder("sh", "-c", "command -v $name").start().waitFor() == 0 }.getOrDefault(false)
 
     @Before
     fun setUp() {
@@ -128,8 +127,7 @@ class BootstrapScriptE2ETest {
      * Fake Antigravity CLI. Only a `--print=<prompt>` invocation counts as a bootstrap repair call:
      * the daemon itself also runs `agy models` at startup for the model picker.
      */
-    private fun agyScript(onPrompt: String) =
-        "case \"\$*\" in\n  *--print=*) echo invoked >> \"\$HOME/agy-calls\"; $onPrompt ;;\nesac\nexit 0"
+    private fun agyScript(onPrompt: String) = "case \"\$*\" in\n  *--print=*) echo invoked >> \"\$HOME/agy-calls\"; $onPrompt ;;\nesac\nexit 0"
 
     private fun daemonPid() = File(home, ".config/herdr-mobile/daemon.pid").readText().trim()
 
