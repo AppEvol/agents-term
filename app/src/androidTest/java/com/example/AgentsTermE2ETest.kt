@@ -588,20 +588,21 @@ class AgentsTermE2ETest {
         waitForText("Antigravity · app")
 
         // What the VM agent does, through the same frames the daemon relays for app_state_cli.
+        // Under the Compose test rule the UI only advances while the test thread is inside the rule,
+        // so each step ends with waitForIdle and waits go through waitUntil.
         fun agent(command: String, argsJson: String = "{}"): Map<String, Any?> {
             val response = activeDaemon.requestAppState(command, argsJson)
+            composeRule.waitForIdle()
             assertEquals("'$command' $argsJson failed: ${response["error"]}", true, response["ok"])
             return response["result"] as Map<String, Any?>
         }
         fun nodes(argsJson: String = "{}") = agent("ui", argsJson)["nodes"] as List<Map<String, Any?>>
         fun screen() = (agent("state")["ui"] as Map<String, Any?>)["screen"]
         fun agentWaitsFor(what: String, condition: () -> Boolean) {
-            val deadline = System.currentTimeMillis() + 10_000L
-            while (!condition()) {
-                if (System.currentTimeMillis() > deadline) {
-                    throw AssertionError("Timed out waiting for $what. On screen: ${nodes().map { it["tag"] ?: it["text"] }}")
-                }
-                Thread.sleep(100)
+            try {
+                composeRule.waitUntil(timeoutMillis = 10_000L) { condition() }
+            } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+                throw AssertionError("Timed out waiting for $what. On screen: ${nodes().map { it["tag"] ?: it["text"] }}")
             }
         }
 
