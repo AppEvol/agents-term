@@ -4,9 +4,6 @@ import asyncio
 import json
 import os
 import unittest
-from pathlib import Path
-
-from helpers import FIXTURES_DIR, TempHomeTestCase, run_async
 
 from agentsterm_daemon.config import default_system_prompt, live_debugging_doc_path
 from agentsterm_daemon.models import (
@@ -18,6 +15,7 @@ from agentsterm_daemon.models import (
 from agentsterm_daemon.runner import AgentRunner, block_separator
 from agentsterm_daemon.store import StateStore
 from agentsterm_daemon.util import summarize_command, summarize_tool_input
+from helpers import FIXTURES_DIR, TempHomeTestCase, run_async
 
 
 class ModelsTest(TempHomeTestCase):
@@ -960,7 +958,7 @@ else:
                 if store.get_message(tab["id"], r1["assistantMessage"]["id"])["text"]:
                     break
                 await asyncio.sleep(0.02)
-            q1 = runner.submit_message(store.get_tab(tab["id"]), "Queued A")
+            runner.submit_message(store.get_tab(tab["id"]), "Queued A")
             q2 = runner.submit_message(store.get_tab(tab["id"]), "Queued B")
             runner.remove_queued_message(tab["id"], q2["queuedMessage"]["id"])
             self.assertEqual([m["text"] for m in store.get_tab(tab["id"])["queuedMessages"]], ["Queued A"])

@@ -18,7 +18,7 @@ import sys
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 
-from .config import enriched_path, home_dir, resolve_binary
+from .config import enriched_path, resolve_binary
 from .store import StateStore
 from .util import (
     first_not_none,
@@ -625,7 +625,7 @@ class AgentRunner:
                 await run()
             except asyncio.CancelledError:
                 raise
-            except Exception as err:  # Parser bugs must not leave the tab stuck "working".
+            except Exception as err:  # noqa: BLE001 - parser bugs must not leave the tab stuck "working".
                 traceback.print_exc(file=sys.stderr)
                 if self._active.get(tab_id) is active:
                     del self._active[tab_id]

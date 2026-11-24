@@ -75,7 +75,6 @@
     <string name="status_interrupted">Interrupted by user</string>
     <string name="status_working_badge">Working</string>
     <string name="status_working_fallback">Working…</string>
-    <string name="copied_snackbar">Copied to clipboard</string>
     <string name="scroll_to_bottom">Scroll to latest</string>
     <string name="connect_mode_ssh_bootstrap">SSH Auto-Setup</string>
     <string name="connect_mode_direct">Direct / URI</string>
@@ -96,7 +95,6 @@
     <string name="ssh_prompt_customize">Customize repair agent prompt</string>
     <string name="ssh_prompt_reset">Reset default</string>
     <string name="ssh_bootstrap_button">SSH &amp; Bootstrap VM</string>
-    <string name="ssh_bootstrap_running">Bootstrapping VM over SSH…</string>
     <string name="ssh_bootstrap_cancel">Cancel</string>
     <string name="ssh_console_title">LIVE VM BOOTSTRAP OUTPUT</string>
     <string name="ssh_copy_logs">Copy bootstrap logs</string>

@@ -90,7 +90,7 @@ class _Client:
 
 class _Pending:
     def __init__(
-        self, client_id: str, command: str, future: "asyncio.Future[Dict[str, Any]]", timer: asyncio.TimerHandle
+        self, client_id: str, command: str, future: asyncio.Future[Dict[str, Any]], timer: asyncio.TimerHandle
     ) -> None:
         self.client_id = client_id
         self.command = command
@@ -207,7 +207,7 @@ class AppStateBroker:
         bounded_label = int(bounded) if bounded == int(bounded) else bounded
         request_id = str(uuid.uuid4())
         loop = asyncio.get_running_loop()
-        future: "asyncio.Future[Dict[str, Any]]" = loop.create_future()
+        future: asyncio.Future[Dict[str, Any]] = loop.create_future()
 
         def on_timeout() -> None:
             req = self._pending.pop(request_id, None)
@@ -230,7 +230,7 @@ class AppStateBroker:
                     separators=(",", ":"),
                 )
             )
-        except Exception as err:  # noqa: BLE001 - any send failure means the socket is gone
+        except Exception as err:  # Any send failure means the socket is gone
             self._pending.pop(request_id, None)
             timer.cancel()
             raise AppStateError("app_disconnected", f"Failed to send request to app: {err}") from err

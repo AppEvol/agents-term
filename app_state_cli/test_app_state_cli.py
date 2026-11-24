@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import app_state_cli as cli  # noqa: E402
+import app_state_cli as cli
 
 TOKEN = "tok_test"
 PNG_BYTES = b"\x89PNG\r\n\x1a\nfake"
@@ -186,7 +186,7 @@ class CliTest(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), self.assertRaises(KeyboardInterrupt):
             cli.cmd_logs(FakeClient(), args)
-        self.assertEqual([json.loads(l)["event"] for l in out.getvalue().splitlines()], ["a", "b", "c", "d"])
+        self.assertEqual([json.loads(line)["event"] for line in out.getvalue().splitlines()], ["a", "b", "c", "d"])
         self.assertEqual(sent_since, [None, 20, 30, 30])
 
     def test_raw_rejects_non_object_args(self):

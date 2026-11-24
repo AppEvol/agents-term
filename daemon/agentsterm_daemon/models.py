@@ -22,7 +22,7 @@ AGY_CACHE_TTL_MS = 5 * 60_000
 DISK_CACHE_TTL_MS = 60_000
 
 _cache_by_agent: Dict[str, Dict[str, Any]] = {}
-_agy_in_flight: Optional["asyncio.Future[Dict[str, Any]]"] = None
+_agy_in_flight: Optional[asyncio.Future[Dict[str, Any]]] = None
 
 
 def _now_ms() -> int:
@@ -206,7 +206,7 @@ async def discover_agy_models(force: bool = False, home: Optional[Path] = None) 
         return empty
 
     loop = asyncio.get_running_loop()
-    future: "asyncio.Future[Dict[str, Any]]" = loop.create_future()
+    future: asyncio.Future[Dict[str, Any]] = loop.create_future()
     _agy_in_flight = future
     try:
         combined, err = await _run_agy_models(binary)
@@ -247,9 +247,8 @@ def get_cached_agent_models(agent: str) -> Dict[str, Any]:
     now = _now_ms()
     if agent == "agy":
         cached = _cache_by_agent.get("agy")
-        if not cached or now - cached["fetchedAt"] >= AGY_CACHE_TTL_MS:
-            if _agy_in_flight is None:
-                _kick_agy_discovery()
+        if (not cached or now - cached["fetchedAt"] >= AGY_CACHE_TTL_MS) and _agy_in_flight is None:
+            _kick_agy_discovery()
         return {
             "defaultModel": cached["defaultModel"] if cached else _read_agy_default_model(),
             "models": cached["models"] if cached else [],

@@ -131,7 +131,7 @@ class Response:
         self.content_type = content_type
 
     @classmethod
-    def json(cls, status: int, payload: Any) -> "Response":
+    def json(cls, status: int, payload: Any) -> Response:
         return cls(status, json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 

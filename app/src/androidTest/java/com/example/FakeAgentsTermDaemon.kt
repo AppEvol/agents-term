@@ -513,7 +513,6 @@ class FakeAgentsTermDaemon(
         val (workingTab, userMsg, assistantMsg, effectivePrompt) = startTurnInternal(
             tabId = tabId,
             promptText = req.text,
-            overridePermissionMode = req.overridePermissionMode,
         ) ?: return jsonResponse(404, """{"error":"Tab not found"}""")
 
         executor.submit {
@@ -539,7 +538,6 @@ class FakeAgentsTermDaemon(
     private fun startTurnInternal(
         tabId: String,
         promptText: String,
-        overridePermissionMode: String?,
     ): StartedTurn? {
         val now = System.currentTimeMillis()
         return synchronized(lock) {
@@ -882,7 +880,7 @@ class FakeAgentsTermDaemon(
 
         if (combinedToRun != null) {
             val (combinedPrompt, overrideMode) = combinedToRun
-            val started = startTurnInternal(tabId, combinedPrompt, overrideMode)
+            val started = startTurnInternal(tabId, combinedPrompt)
             if (started != null) {
                 executor.submit {
                     emitTurnEvents(

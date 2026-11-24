@@ -94,9 +94,7 @@ class SshBootstrapClient(
 
         if (config.authMethod == SshAuthMethod.PRIVATE_KEY) {
             val keyText = config.privateKey.trim()
-            if (keyText.isBlank()) {
-                throw IllegalArgumentException("Paste an OpenSSH/PEM private key or switch to Tailscale SSH")
-            }
+            require(keyText.isNotBlank()) { "Paste an OpenSSH/PEM private key or switch to Tailscale SSH" }
             val passphraseBytes = config.passphrase.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8)
             jsch.addIdentity("herdr-vm-key", keyText.toByteArray(Charsets.UTF_8), null, passphraseBytes)
         }

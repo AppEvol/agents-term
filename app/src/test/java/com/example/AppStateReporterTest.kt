@@ -191,7 +191,7 @@ class AppStateReporterTest {
         val crashing = AppStateReporter(
             recorder = recorder,
             sources = object : AppStateSources by sources {
-                override fun uiState(): Map<String, Any?> = throw IllegalStateException("boom")
+                override fun uiState(): Map<String, Any?> = error("boom")
             },
             isEnabled = { true },
             appVersion = "1",

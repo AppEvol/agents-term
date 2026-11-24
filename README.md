@@ -38,6 +38,15 @@ Verify the protocol models, pairing URI parser, WebSocket state reducer, and SSH
 gradle :app:testDebugUnitTest --tests "com.example.ModelsAndStateTest"
 ```
 
+### Static Checks
+Linting, formatting, import order, and dead-code detection for the Kotlin, Python, shell, and workflow code run from one script (CI runs the same one). It needs a JDK on `PATH` and downloads its pinned tools on first use:
+
+```bash
+scripts/static-checks.sh          # check
+scripts/static-checks.sh --fix    # apply automatic fixes, then check
+gradle :app:lintDebug             # Android Lint (needs the Android SDK)
+```
+
 ### Step 3: Build the Debug APK
 ```bash
 gradle :app:assembleDebug
@@ -66,7 +75,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ### Automatic Verified Releases (GitHub Actions)
-Every push to `main` that passes both `Build APK & Unit Tests` and `End-to-End Android Instrumented Tests` automatically publishes a new versioned GitHub Release (`v0.3.<run_number>-<short_sha>`) with auto-generated release notes, incrementing Android `versionCode` / `versionName`, and both `AgentsTerm-debug.apk` and `AgentsTerm-v0.3.<run_number>-<short_sha>-debug.apk` attached.
+Every push to `main` that passes `Static Checks`, `Build APK & Unit Tests`, the VM daemon tests, and `End-to-End Android Instrumented Tests` automatically publishes a new versioned GitHub Release (`v0.3.<run_number>-<short_sha>`) with auto-generated release notes, incrementing Android `versionCode` / `versionName`, and both `AgentsTerm-debug.apk` and `AgentsTerm-v0.3.<run_number>-<short_sha>-debug.apk` attached.
 
 - **Always-latest verified APK:** `https://github.com/nedn/agents-term/releases/latest/download/AgentsTerm-debug.apk`
 - **Legacy rolling tag link (also kept in sync):** `https://github.com/nedn/agents-term/releases/download/latest/AgentsTerm-debug.apk`

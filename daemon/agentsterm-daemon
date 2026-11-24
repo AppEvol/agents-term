@@ -6,6 +6,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
-from agentsterm_daemon.__main__ import main  # noqa: E402
+from agentsterm_daemon.__main__ import main
 
 sys.exit(main())

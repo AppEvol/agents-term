@@ -71,6 +71,15 @@ android {
         buildConfig = true
     }
     testOptions { unitTests { isIncludeAndroidResources = true } }
+    lint {
+        // Android Lint is part of CI (`gradle :app:lintDebug`): any warning fails the build.
+        warningsAsErrors = true
+        abortOnError = true
+        // Findings that predate the check. Fix them rather than adding to this file.
+        baseline = file("lint-baseline.xml")
+        // "A newer version exists" nags would break CI whenever a dependency ships a release.
+        disable += listOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion")
+    }
     packaging {
         resources {
             excludes += listOf(
