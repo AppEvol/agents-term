@@ -90,11 +90,17 @@ class AgentsTermE2ETest {
             }
         } catch (e: Throwable) {
             val reqs = daemon?.recordedRequests?.joinToString("\n  ") ?: "(no daemon)"
+            val dbg = com.example.ui.MainViewModel.latestDebugRecorder
+                ?.snapshot()
+                ?.takeLast(30)
+                ?.joinToString("\n  ") { "[${it.category}] ${it.event}: ${it.detail}" }
+                ?: "(no debug events)"
             val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString(maxDepth = Int.MAX_VALUE) }
                 .getOrElse { it.toString() }
             throw AssertionError(
                 "Timed out waiting for text='$text' (substring=$substring).\n" +
                     "Daemon requests:\n  $reqs\n" +
+                    "App debug events:\n  $dbg\n" +
                     "Compose roots:\n$roots",
                 e,
             )

@@ -93,6 +93,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var bootstrapJob: Job? = null
 
     init {
+        latestDebugRecorder = debugRecorder
         CrashLogStore.install(application)
         _hasLastCrash.value = CrashLogStore.hasLastCrash(application)
         debugRecorder.setCountListener { count -> _debugEventCount.value = count }
@@ -472,5 +473,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val MAX_BOOTSTRAP_LOG_LINES = 400
         private const val AUTO_UPLOAD_COOLDOWN_MS = 60_000L
+
+        @Volatile
+        internal var latestDebugRecorder: DebugRecorder? = null
     }
 }

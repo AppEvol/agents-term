@@ -84,9 +84,11 @@ fun NewTabSheet(
     var permissionMode by remember { mutableStateOf("full-access") }
     var customTitle by remember { mutableStateOf("") }
     var fsListing by remember { mutableStateOf<FsListResponse?>(null) }
+    var fsError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(defaultCwd) {
+        fsError = null
         var result = onLoadDirectories(defaultCwd)
         if (result.isFailure) {
             result = onLoadDirectories(defaultCwd)
@@ -94,15 +96,22 @@ fun NewTabSheet(
         result.onSuccess {
             fsListing = it
             cwd = it.path
+            fsError = null
+        }.onFailure { err ->
+            fsError = err.message ?: err::class.java.simpleName
         }
     }
 
     fun browseTo(targetPath: String) {
         cwd = targetPath
+        fsError = null
         scope.launch {
             onLoadDirectories(targetPath).onSuccess {
                 fsListing = it
                 cwd = it.path
+                fsError = null
+            }.onFailure { err ->
+                fsError = err.message ?: err::class.java.simpleName
             }
         }
     }
@@ -230,6 +239,13 @@ fun NewTabSheet(
                             )
                         }
                     }
+                }
+                if (!fsError.isNullOrBlank()) {
+                    Text(
+                        text = "Directory listing error: $fsError",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
                 val dirs = fsListing?.directories.orEmpty().take(18)
                 if (dirs.isNotEmpty()) {

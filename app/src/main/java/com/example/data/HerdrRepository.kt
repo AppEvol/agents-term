@@ -428,6 +428,13 @@ class HerdrRepository(
     suspend fun listDirectories(path: String?): Result<FsListResponse> {
         val cfg = _state.value.config
         return runCatching { api.listDirectories(cfg, path) }
+            .onSuccess { res ->
+                debugRecorder?.record(
+                    "state",
+                    "list_directories_ok",
+                    "listDirectories(${path ?: "default"}) -> path=${res.path} parent=${res.parent} dirs=${res.directories.size}",
+                )
+            }
             .onFailure { err ->
                 debugRecorder?.record(
                     "error",
