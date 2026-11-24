@@ -195,9 +195,9 @@ class AgentsTermE2ETest {
         Espresso.closeSoftKeyboard()
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
 
-        // Workspace transitions to the newly created tab
+        // Workspace transitions to the newly created tab (subtitle appears in both top bar and tab drawer)
         waitForText("E2E Claude Tab")
-        composeRule.onNodeWithText("Claude · projects").assertIsDisplayed()
+        waitForText("Claude · projects")
 
         // Send a prompt and verify streamed reasoning, tool call, markdown text, and usage stats
         composeRule.onNodeWithTag("composer_input").performTextInput("Summarize the repo")

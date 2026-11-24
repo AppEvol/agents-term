@@ -542,6 +542,7 @@ class FakeAgentsTermDaemon(
         return MockResponse()
             .setResponseCode(code)
             .addHeader("Content-Type", "application/json; charset=utf-8")
+            .addHeader("Connection", "close")
             .setBody(body)
     }
 
