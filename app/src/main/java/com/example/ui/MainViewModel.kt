@@ -9,6 +9,8 @@ import com.example.R
 import com.example.data.AppStateCommandException
 import com.example.data.AppStateReporter
 import com.example.data.AppStateSources
+import com.example.data.AppUiController
+import com.example.data.AndroidUiDriver
 import com.example.data.BootstrapPhase
 import com.example.data.BootstrapUiState
 import com.example.data.ConnectionConfig
@@ -60,6 +62,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val debugRecorder = DebugRecorder()
 
     private val lastAutoUploadMs = AtomicLong(0L)
+    private val lastControlNoticeMs = AtomicLong(0L)
 
     private val api = HerdrApiClient(debugRecorder)
     private val repo = HerdrRepository(
@@ -119,6 +122,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         isEnabled = { _debugSettings.value.remoteInspectionActive },
         appVersion = appVersionLabel,
         device = buildDeviceInfoSummary(),
+        ui = AppUiController(
+            driver = AndroidUiDriver(activity = { ForegroundActivityTracker.current() }),
+            onControl = { notifyRemoteControl() },
+        ),
+        isControlEnabled = { _debugSettings.value.remoteControlActive },
     )
 
     init {
@@ -205,9 +213,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             category = "ui",
             event = "debug_settings_updated",
             detail = "enabled=${updated.enabled} screenshot=${updated.includeScreenshot} logcat=${updated.includeLogcat} " +
-                "autoUpload=${updated.autoUploadOnError} remoteInspection=${updated.remoteInspectionEnabled}",
+                "autoUpload=${updated.autoUploadOnError} remoteInspection=${updated.remoteInspectionEnabled} " +
+                "remoteControl=${updated.remoteControlEnabled}",
         )
-        if (previous.remoteInspectionActive != updated.remoteInspectionActive) {
+        if (previous.remoteInspectionActive != updated.remoteInspectionActive ||
+            previous.remoteControlActive != updated.remoteControlActive
+        ) {
             repo.sendAppHello()
         }
     }
@@ -301,6 +312,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return result
     }
 
+    /** Tells the user an agent is driving the app: a toast, at most one per [CONTROL_NOTICE_INTERVAL_MS]. */
+    private fun notifyRemoteControl() {
+        val now = System.currentTimeMillis()
+        val prev = lastControlNoticeMs.get()
+        if (now - prev < CONTROL_NOTICE_INTERVAL_MS || !lastControlNoticeMs.compareAndSet(prev, now)) return
+        val activity = ForegroundActivityTracker.current() ?: return
+        viewModelScope.launch(Dispatchers.Main) {
+            Toast.makeText(activity, R.string.app_state_control_toast, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     /** Android-backed data for [AppStateReporter]; respects the user's debug sharing toggles. */
     private inner class ViewModelAppStateSources : AppStateSources {
         override fun uiState(): Map<String, Any?> {
@@ -328,6 +350,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     "includeLogcat" to debug.includeLogcat,
                     "autoUploadOnError" to debug.autoUploadOnError,
                     "remoteInspectionEnabled" to debug.remoteInspectionEnabled,
+                    "remoteControlEnabled" to debug.remoteControlEnabled,
                 ),
                 "debugEventCount" to debugRecorder.count,
                 "hasLastCrash" to CrashLogStore.hasLastCrash(getApplication()),
@@ -681,6 +704,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val MAX_BOOTSTRAP_LOG_LINES = 400
         private const val AUTO_UPLOAD_COOLDOWN_MS = 60_000L
+        private const val CONTROL_NOTICE_INTERVAL_MS = 30_000L
 
         @Volatile
         internal var latestDebugRecorder: DebugRecorder? = null

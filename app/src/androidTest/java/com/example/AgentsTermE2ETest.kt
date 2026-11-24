@@ -570,6 +570,141 @@ class AgentsTermE2ETest {
     }
 
     @Test
+    @Suppress("UNCHECKED_CAST")
+    fun vmAgentDrivesTheAppOnceTheUserAllowsControl() {
+        val tab1 = TabRecord(
+            id = "tab_1",
+            title = "Antigravity · app",
+            agent = "agy",
+            cwd = "/home/ci/projects",
+            status = "idle",
+        )
+        val activeDaemon = startDaemon(initialTabs = listOf(tab1))
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForText("Antigravity · app")
+
+        // What the VM agent does, through the same frames the daemon relays for app_state_cli.
+        // Under the Compose test rule the UI only advances while the test thread is inside the rule,
+        // so each step ends with waitForIdle and waits go through waitUntil.
+        fun agent(command: String, argsJson: String = "{}"): Map<String, Any?> {
+            val response = activeDaemon.requestAppState(command, argsJson)
+            composeRule.waitForIdle()
+            assertEquals("'$command' $argsJson failed: ${response["error"]}", true, response["ok"])
+            return response["result"] as Map<String, Any?>
+        }
+        fun nodes(argsJson: String = "{}") = agent("ui", argsJson)["nodes"] as List<Map<String, Any?>>
+        fun screen() = (agent("state")["ui"] as Map<String, Any?>)["screen"]
+        fun agentWaitsFor(what: String, condition: () -> Boolean) {
+            try {
+                composeRule.waitUntil(timeoutMillis = 10_000L) { condition() }
+            } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+                throw AssertionError("Timed out waiting for $what. On screen: ${nodes().map { it["tag"] ?: it["text"] }}")
+            }
+        }
+
+        // Like `app_state_cli wait --tag … && app_state_cli tap --tag …`: screens change asynchronously.
+        fun agentTaps(tag: String): Map<String, Any?> {
+            agentWaitsFor("'$tag' to tap") { nodes("""{"tag":"$tag"}""").isNotEmpty() }
+            return agent("tap", """{"tag":"$tag"}""")
+        }
+
+        // The user allows inspection only: the agent can read the screen but not touch it.
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        composeRule.onNodeWithTag("menu_app_settings").performClick()
+        waitForTag("debug_sharing_switch")
+        composeRule.onNodeWithTag("debug_sharing_switch").performScrollTo().performClick()
+        composeRule.onNodeWithTag("debug_remote_inspection_switch").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("enabled") == true }
+        assertEquals(false, activeDaemon.latestAppHello()!!["controlEnabled"])
+        composeRule.onNodeWithTag("debug_remote_control_switch").performScrollTo()
+        assertEquals(
+            "on screen: ${nodes()}",
+            "off",
+            nodes("""{"tag":"debug_remote_control_switch"}""").singleOrNull()?.get("toggle"),
+        )
+        val refused = activeDaemon.requestAppState("key", """{"key":"back"}""")
+        assertEquals(false, refused["ok"])
+        assertTrue((refused["error"] as String).contains("Remote control is disabled"))
+        assertEquals("settings", screen())
+
+        // The user allows control too.
+        composeRule.onNodeWithTag("debug_remote_control_switch").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("controlEnabled") == true }
+        assertEquals("on", nodes("""{"tag":"debug_remote_control_switch"}""").single()["toggle"])
+        assertTrue(
+            (activeDaemon.latestAppHello()!!["commands"] as List<String>)
+                .containsAll(listOf("ui", "tap", "long_press", "swipe", "scroll", "type", "key"))
+        )
+
+        // Scroll the settings list back up, by dragging it.
+        val scrolled = agent("scroll", """{"direction":"up"}""")
+        assertEquals("activity", (scrolled["window"] as Map<String, Any?>)["type"])
+        agentWaitsFor("the top of Settings") { nodes("""{"tag":"settings_back_button"}""").isNotEmpty() }
+
+        // Back leaves Settings.
+        assertEquals("handled", agent("key", """{"key":"back"}""")["outcome"])
+        agentWaitsFor("the workspace") { screen() == "workspace" }
+
+        // Open the overflow menu. It is a separate window, and shows up in the UI tree and screenshot.
+        agentTaps("overflow_menu_button")
+        agentWaitsFor("the overflow menu") { nodes("""{"tag":"menu_app_settings"}""").isNotEmpty() }
+        val menuItem = nodes("""{"tag":"menu_app_settings"}""").single()
+        assertTrue("the menu item should be in a window above the Activity", (menuItem["window"] as Number).toInt() >= 1)
+        val shot = agent("screenshot")
+        val png = android.util.Base64.decode(shot["pngBase64"] as String, android.util.Base64.DEFAULT)
+        val bitmap = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size)
+        val ui = agent("ui")
+        assertEquals("ui and screenshot share one coordinate space", bitmap.width, (ui["width"] as Number).toInt())
+        assertEquals(bitmap.height, (ui["height"] as Number).toInt())
+
+        // Back closes the menu and nothing else.
+        agent("key", """{"key":"back"}""")
+        agentWaitsFor("the menu to close") { nodes("""{"tag":"menu_app_settings"}""").isEmpty() }
+        assertEquals("workspace", screen())
+
+        // Tap a menu item by the position read from the UI tree, like an agent working from a screenshot.
+        agentTaps("overflow_menu_button")
+        agentWaitsFor("the overflow menu") { nodes("""{"tag":"menu_app_settings"}""").isNotEmpty() }
+        val center = nodes("""{"tag":"menu_app_settings"}""").single()["center"] as List<Number>
+        val tapped = agent("tap", """{"x":${center[0].toInt()},"y":${center[1].toInt()}}""")
+        assertEquals("popup", (tapped["window"] as Map<String, Any?>)["type"])
+        agentWaitsFor("Settings") { screen() == "settings" }
+        agentTaps("settings_back_button")
+        agentWaitsFor("the workspace") { screen() == "workspace" }
+
+        // Write a prompt and send it.
+        agentWaitsFor("the composer") { nodes("""{"tag":"composer_input"}""").isNotEmpty() }
+        val typed = agent("type", """{"tag":"composer_input","text":"Summarize the repo"}""")
+        assertEquals(18, (typed["chars"] as Number).toInt())
+        agentWaitsFor("the prompt in the composer") {
+            nodes("""{"tag":"composer_input"}""").singleOrNull()?.get("value") == "Summarize the repo"
+        }
+        agentTaps("send_button")
+        agentWaitsFor("the agent's reply") { nodes("""{"text":"Repository is clean on main branch."}""").isNotEmpty() }
+        waitForText("Repository is clean on main branch.")
+
+        // Every control action is in the app's debug log, and no frame leaked the token.
+        val logged = (agent("logs", """{"categories":["app_state"],"limit":200}""")["events"] as List<Map<String, Any?>>)
+            .map { it["detail"] as String }
+        assertTrue(logged.any { it.contains("'tap'") })
+        assertTrue(logged.any { it.contains("'type'") })
+        assertTrue(activeDaemon.receivedAppFrames.none { it.contains(activeDaemon.token) })
+
+        // Turning control off takes effect immediately; inspection keeps working.
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        composeRule.onNodeWithTag("menu_app_settings").performClick()
+        waitForTag("debug_sharing_switch")
+        composeRule.onNodeWithTag("debug_remote_control_switch").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("controlEnabled") == false }
+        assertEquals(false, activeDaemon.requestAppState("tap", """{"tag":"settings_back_button"}""")["ok"])
+        assertEquals("settings", screen())
+    }
+
+    @Test
     fun sshBootstrapWithFakeVmStreamsAgyAndConnectsToAgentWorkspace() {
         val activeDaemon = startDaemon()
         val context = InstrumentationRegistry.getInstrumentation().targetContext
