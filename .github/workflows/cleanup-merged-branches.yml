@@ -1,0 +1,67 @@
+name: Cleanup Merged Branches
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: cleanup-merged-branches
+  cancel-in-progress: false
+
+jobs:
+  delete-merged-branches:
+    name: Delete merged remote branches
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete remote branches merged into main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+          # Collect branches with open PRs or branch protection so we never delete them.
+          OPEN_PR_BRANCHES=$(gh pr list --state open --limit 100 --json headRefName --jq '.[].headRefName')
+          PROTECTED_BRANCHES=$(gh api --paginate "repos/${GH_REPO}/branches?protected=true" --jq '.[].name')
+
+          is_skipped() {
+            local branch="$1"
+            case "$branch" in
+              ""|HEAD|main|issue-assets) return 0 ;;
+            esac
+            if [ -n "$OPEN_PR_BRANCHES" ] && printf '%s\n' "$OPEN_PR_BRANCHES" | grep -Fxq -- "$branch"; then
+              return 0
+            fi
+            if [ -n "$PROTECTED_BRANCHES" ] && printf '%s\n' "$PROTECTED_BRANCHES" | grep -Fxq -- "$branch"; then
+              return 0
+            fi
+            return 1
+          }
+
+          DELETED=0
+          while IFS= read -r branch; do
+            if is_skipped "$branch"; then
+              echo "Skipping protected/excluded/open-PR branch: $branch"
+              continue
+            fi
+            echo "Deleting merged branch: $branch"
+            git push origin ":refs/heads/$branch"
+            DELETED=$((DELETED + 1))
+          done < <(git for-each-ref --merged=origin/main --format='%(refname:lstrip=3)' refs/remotes/origin)
+
+          echo "Done. Deleted ${DELETED} merged branch(es)."
