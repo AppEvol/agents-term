@@ -65,7 +65,7 @@ class FakeAgentsTermDaemon(
         val snapshot = activeSockets.toList()
         activeSockets.clear()
         for (ws in snapshot) {
-            runCatching { ws.cancel() }
+            runCatching { ws.close(1001, "Simulated network drop") }
         }
     }
 

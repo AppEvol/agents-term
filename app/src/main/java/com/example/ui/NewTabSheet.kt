@@ -35,6 +35,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -77,36 +78,30 @@ fun NewTabSheet(
         }
     }
 
-    var selectedAgent by remember {
-        mutableStateOf(effectiveAgents.firstOrNull { it.available }?.type ?: "agy")
-    }
-    var cwd by remember { mutableStateOf(defaultCwd) }
-    var permissionMode by remember { mutableStateOf("full-access") }
-    var customTitle by remember { mutableStateOf("") }
-    var fsListing by remember { mutableStateOf<FsListResponse?>(null) }
-    var fsError by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    LaunchedEffect(defaultCwd) {
-        fsError = null
-        var result = onLoadDirectories(defaultCwd)
-        if (result.isFailure) {
-            result = onLoadDirectories(defaultCwd)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        var selectedAgent by remember {
+            mutableStateOf(effectiveAgents.firstOrNull { it.available }?.type ?: "agy")
         }
-        result.onSuccess {
-            fsListing = it
-            cwd = it.path
+        var cwd by remember { mutableStateOf(defaultCwd) }
+        var permissionMode by remember { mutableStateOf("full-access") }
+        var customTitle by remember { mutableStateOf("") }
+        var fsListing by remember { mutableStateOf<FsListResponse?>(null) }
+        var fsError by remember { mutableStateOf<String?>(null) }
+        val scope = rememberCoroutineScope()
+
+        LaunchedEffect(defaultCwd) {
             fsError = null
-        }.onFailure { err ->
-            fsError = err.message ?: err::class.java.simpleName
-        }
-    }
-
-    fun browseTo(targetPath: String) {
-        cwd = targetPath
-        fsError = null
-        scope.launch {
-            onLoadDirectories(targetPath).onSuccess {
+            var result = onLoadDirectories(defaultCwd)
+            if (result.isFailure) {
+                result = onLoadDirectories(defaultCwd)
+            }
+            result.onSuccess {
                 fsListing = it
                 cwd = it.path
                 fsError = null
@@ -114,12 +109,21 @@ fun NewTabSheet(
                 fsError = err.message ?: err::class.java.simpleName
             }
         }
-    }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
+        fun browseTo(targetPath: String) {
+            cwd = targetPath
+            fsError = null
+            scope.launch {
+                onLoadDirectories(targetPath).onSuccess {
+                    fsListing = it
+                    cwd = it.path
+                    fsError = null
+                }.onFailure { err ->
+                    fsError = err.message ?: err::class.java.simpleName
+                }
+            }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
