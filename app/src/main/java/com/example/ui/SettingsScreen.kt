@@ -370,6 +370,17 @@ fun SettingsScreen(
                             testTag = "debug_autoupload_switch",
                         )
 
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.settings_debug_remote_inspection_title),
+                            subtitle = stringResource(R.string.settings_debug_remote_inspection_subtitle),
+                            checked = debugSettings.remoteInspectionEnabled,
+                            enabled = debugSettings.enabled,
+                            onCheckedChange = { checked ->
+                                onUpdateDebugSettings { it.copy(remoteInspectionEnabled = checked) }
+                            },
+                            testTag = "debug_remote_inspection_switch",
+                        )
+
                         // VM destination path indicator
                         Surface(
                             shape = RoundedCornerShape(12.dp),

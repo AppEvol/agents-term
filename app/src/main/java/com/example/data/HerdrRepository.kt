@@ -273,6 +273,10 @@ class HerdrRepository(
     private var socketGeneration = 0L
     private var lastConnectAttemptMs = 0L
 
+    /** Answers app state inspection requests from the VM; null disables the feature entirely. */
+    @Volatile
+    var appStateHandler: AppStateRequestHandler? = null
+
     fun initializeAutoConnect() {
         val cfg = settings.loadConnection()
         _state.update {
@@ -403,6 +407,10 @@ class HerdrRepository(
                 }
             },
             onEvent = { envelope ->
+                if (envelope.type == APP_STATE_REQUEST_TYPE) {
+                    handleAppStateRequest(envelope, generation)
+                    return@openWebSocket
+                }
                 var selectedAfter: String? = null
                 val applied = synchronized(socketLock) {
                     if (generation != socketGeneration || !shouldStayConnected) {
@@ -417,6 +425,9 @@ class HerdrRepository(
                     }
                 }
                 if (applied && envelope.type == "snapshot") {
+                    // The daemon sends `snapshot` first on every connection, so this is where the
+                    // app announces its reporter status (the socket is assigned by then).
+                    sendAppHello()
                     selectedAfter?.let { tabId ->
                         refreshTabMessages(tabId)
                     }
@@ -454,6 +465,37 @@ class HerdrRepository(
         }
         if (superseded) {
             newSocket.cancel()
+        }
+    }
+
+    /** Sends the current `app_hello` (e.g. after the user toggles remote inspection). */
+    fun sendAppHello() {
+        val handler = appStateHandler ?: return
+        val socket = synchronized(socketLock) { webSocket } ?: return
+        socket.send(handler.helloJson())
+    }
+
+    private fun handleAppStateRequest(envelope: WsServerEnvelope, generation: Long) {
+        val requestId = envelope.requestId ?: return
+        val handler = appStateHandler ?: return
+        scope.launch {
+            val response = handler.handleRequest(
+                requestId = requestId,
+                command = envelope.command.orEmpty(),
+                args = envelope.args.orEmpty(),
+            )
+            val socket = synchronized(socketLock) {
+                // If the socket was replaced, the daemon has already failed this request.
+                if (generation == socketGeneration) webSocket else null
+            }
+            val sent = socket?.send(response) ?: false
+            if (!sent) {
+                debugRecorder?.record(
+                    category = "app_state",
+                    event = "app_state_response_dropped",
+                    detail = "Could not send response for '${envelope.command}' (socket closed or replaced)",
+                )
+            }
         }
     }
 
@@ -724,5 +766,6 @@ class HerdrRepository(
         private const val DEFAULT_RECONNECT_BASE_DELAY_MS = 1_500L
         private const val DEFAULT_RECONNECT_MAX_DELAY_MS = 15_000L
         private const val FOREGROUND_CONNECT_GRACE_MS = 2_000L
+        const val APP_STATE_REQUEST_TYPE = "app_state_request"
     }
 }

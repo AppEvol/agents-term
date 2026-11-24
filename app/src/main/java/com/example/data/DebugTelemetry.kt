@@ -11,7 +11,11 @@ data class DebugSharingSettings(
     val includeScreenshot: Boolean = true,
     val includeLogcat: Boolean = true,
     val autoUploadOnError: Boolean = false,
-)
+    /** Lets agents on the connected VM query live app state (logs, state, screenshots) via the daemon. */
+    val remoteInspectionEnabled: Boolean = false,
+) {
+    val remoteInspectionActive: Boolean get() = enabled && remoteInspectionEnabled
+}
 
 data class DebugDumpUploadState(
     val isUploading: Boolean = false,

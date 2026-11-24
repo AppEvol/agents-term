@@ -358,6 +358,10 @@ data class WsServerEnvelope(
     val thinkingDelta: String? = null,
     val toolCall: ToolCallItem? = null,
     val ts: Long? = null,
+    // App state reporter requests (type = "app_state_request"); see AppStateReporter.kt.
+    val requestId: String? = null,
+    val command: String? = null,
+    val args: Map<String, Any?>? = null,
 )
 
 enum class ConnectionState {

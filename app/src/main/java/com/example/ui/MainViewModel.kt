@@ -1,9 +1,14 @@
 package com.example.ui
 
 import android.app.Application
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
+import com.example.R
+import com.example.data.AppStateCommandException
+import com.example.data.AppStateReporter
+import com.example.data.AppStateSources
 import com.example.data.BootstrapPhase
 import com.example.data.BootstrapUiState
 import com.example.data.ConnectionConfig
@@ -16,6 +21,7 @@ import com.example.data.DebugDumpUploadState
 import com.example.data.DebugEvent
 import com.example.data.DebugRecorder
 import com.example.data.DebugSharingSettings
+import com.example.data.ForegroundActivityTracker
 import com.example.data.FsListResponse
 import com.example.data.HerdrApiClient
 import com.example.data.HerdrRepository
@@ -29,12 +35,15 @@ import com.example.data.UpdateTabRequest
 import com.example.data.WorkspaceState
 import com.example.data.buildDeviceInfoSummary
 import com.example.data.buildSanitizedWorkspaceJson
+import com.example.data.captureWindowScreenshotBase64
 import com.example.data.cleanHost
 import com.example.data.collectAppLogcat
 import com.example.data.exportDebugBundleZip
 import com.example.data.generateDebugDumpId
 import com.example.data.parseSshSetupUri
+import com.example.data.sanitizeDebugText
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,6 +51,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
@@ -100,7 +110,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var bootstrapJob: Job? = null
 
+    private val appVersionLabel =
+        "${BuildConfig.VERSION_NAME} (code=${BuildConfig.VERSION_CODE}, debug=${BuildConfig.DEBUG})"
+
+    private val appStateReporter = AppStateReporter(
+        recorder = debugRecorder,
+        sources = ViewModelAppStateSources(),
+        isEnabled = { _debugSettings.value.remoteInspectionActive },
+        appVersion = appVersionLabel,
+        device = buildDeviceInfoSummary(),
+    )
+
     init {
+        repo.appStateHandler = appStateReporter
         latestDebugRecorder = debugRecorder
         CrashLogStore.install(application)
         _hasLastCrash.value = CrashLogStore.hasLastCrash(application)
@@ -175,14 +197,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateDebugSettings(transform: (DebugSharingSettings) -> DebugSharingSettings) {
-        val updated = transform(_debugSettings.value)
+        val previous = _debugSettings.value
+        val updated = transform(previous)
         _debugSettings.value = updated
         settings.saveDebugSharingSettings(updated)
         debugRecorder.record(
             category = "ui",
             event = "debug_settings_updated",
-            detail = "enabled=${updated.enabled} screenshot=${updated.includeScreenshot} logcat=${updated.includeLogcat} autoUpload=${updated.autoUploadOnError}",
+            detail = "enabled=${updated.enabled} screenshot=${updated.includeScreenshot} logcat=${updated.includeLogcat} " +
+                "autoUpload=${updated.autoUploadOnError} remoteInspection=${updated.remoteInspectionEnabled}",
         )
+        if (previous.remoteInspectionActive != updated.remoteInspectionActive) {
+            repo.sendAppHello()
+        }
     }
 
     fun clearDebugLogs() {
@@ -213,7 +240,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             dumpId = generateDebugDumpId(),
             createdAt = System.currentTimeMillis(),
             note = note?.trim()?.takeIf { it.isNotEmpty() },
-            appVersion = "${BuildConfig.VERSION_NAME} (code=${BuildConfig.VERSION_CODE}, debug=${BuildConfig.DEBUG})",
+            appVersion = appVersionLabel,
             deviceInfo = buildDeviceInfoSummary(),
             connectionSummary = connectionSummary,
             workspaceStateJson = buildSanitizedWorkspaceJson(wsState),
@@ -231,37 +258,136 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         if (_debugUploadState.value.isUploading) return
         viewModelScope.launch {
-            _debugUploadState.update { it.copy(isUploading = true, lastError = null) }
-            val result = runCatching {
-                val payload = buildDebugDumpRequest(note = note, screenshotBase64 = screenshotBase64)
-                repo.uploadDebugDump(payload).getOrThrow()
-            }
-            result.onSuccess { resp ->
-                val now = System.currentTimeMillis()
-                settings.saveLastDebugUpload(resp, now)
-                _debugUploadState.value = DebugDumpUploadState(
-                    isUploading = false,
-                    lastDumpId = resp.dumpId,
-                    lastRemoteDir = resp.remoteDir,
-                    lastLatestSymlink = resp.latestSymlink,
-                    lastUploadedAt = now,
-                    lastError = null,
-                )
-                debugRecorder.record(
-                    category = "ui",
-                    event = "debug_dump_uploaded",
-                    detail = "Uploaded dump ${resp.dumpId} to ${resp.remoteDir}",
-                )
-            }.onFailure { err ->
-                val msg = err.message ?: "Failed to upload debug dump to VM"
-                _debugUploadState.update { it.copy(isUploading = false, lastError = msg) }
-                debugRecorder.record(
-                    category = "error",
-                    event = "debug_dump_upload_failed",
-                    detail = msg,
-                )
-            }
+            val result = performDebugDumpUpload(note = note, screenshotBase64 = screenshotBase64)
             onComplete?.invoke(result)
+        }
+    }
+
+    /** Builds and uploads a dump, updating [debugUploadState]. Shared by the UI and app state reporter. */
+    private suspend fun performDebugDumpUpload(
+        note: String?,
+        screenshotBase64: String?,
+    ): Result<DebugDumpUploadResponse> {
+        _debugUploadState.update { it.copy(isUploading = true, lastError = null) }
+        val result = runCatching {
+            val payload = buildDebugDumpRequest(note = note, screenshotBase64 = screenshotBase64)
+            repo.uploadDebugDump(payload).getOrThrow()
+        }
+        result.onSuccess { resp ->
+            val now = System.currentTimeMillis()
+            settings.saveLastDebugUpload(resp, now)
+            _debugUploadState.value = DebugDumpUploadState(
+                isUploading = false,
+                lastDumpId = resp.dumpId,
+                lastRemoteDir = resp.remoteDir,
+                lastLatestSymlink = resp.latestSymlink,
+                lastUploadedAt = now,
+                lastError = null,
+            )
+            debugRecorder.record(
+                category = "ui",
+                event = "debug_dump_uploaded",
+                detail = "Uploaded dump ${resp.dumpId} to ${resp.remoteDir}",
+            )
+        }.onFailure { err ->
+            val msg = err.message ?: "Failed to upload debug dump to VM"
+            _debugUploadState.update { it.copy(isUploading = false, lastError = msg) }
+            debugRecorder.record(
+                category = "error",
+                event = "debug_dump_upload_failed",
+                detail = msg,
+            )
+        }
+        return result
+    }
+
+    /** Android-backed data for [AppStateReporter]; respects the user's debug sharing toggles. */
+    private inner class ViewModelAppStateSources : AppStateSources {
+        override fun uiState(): Map<String, Any?> {
+            val debug = _debugSettings.value
+            val bootstrap = _bootstrapState.value
+            return mapOf(
+                "screen" to when {
+                    _showSettingsScreen.value -> "settings"
+                    _showConnectScreen.value -> "connect"
+                    else -> "workspace"
+                },
+                "appInForeground" to (ForegroundActivityTracker.current() != null),
+                "isTestingConnection" to _isTestingConnection.value,
+                "hasPendingPairing" to (_pendingPairingConfig.value != null),
+                "bootstrap" to mapOf(
+                    "phase" to bootstrap.phase.name,
+                    "isRunning" to bootstrap.isRunning,
+                    "errorMessage" to bootstrap.errorMessage?.let { sanitizeDebugText(it) },
+                    "isHostKeyMismatch" to bootstrap.isHostKeyMismatch,
+                    "recentLogs" to bootstrap.logs.takeLast(20).map { sanitizeDebugText(it) },
+                ),
+                "debugSettings" to mapOf(
+                    "enabled" to debug.enabled,
+                    "includeScreenshot" to debug.includeScreenshot,
+                    "includeLogcat" to debug.includeLogcat,
+                    "autoUploadOnError" to debug.autoUploadOnError,
+                    "remoteInspectionEnabled" to debug.remoteInspectionEnabled,
+                ),
+                "debugEventCount" to debugRecorder.count,
+                "hasLastCrash" to CrashLogStore.hasLastCrash(getApplication()),
+                "lastDebugUpload" to _debugUploadState.value.let {
+                    mapOf(
+                        "isUploading" to it.isUploading,
+                        "lastDumpId" to it.lastDumpId,
+                        "lastRemoteDir" to it.lastRemoteDir,
+                        "lastUploadedAt" to it.lastUploadedAt,
+                        "lastError" to it.lastError?.let { e -> sanitizeDebugText(e) },
+                    )
+                },
+            )
+        }
+
+        override fun workspaceJson(): String = buildSanitizedWorkspaceJson(state.value)
+
+        override suspend fun logcat(lines: Int): String {
+            if (!_debugSettings.value.includeLogcat) {
+                throw AppStateCommandException("Logcat sharing is turned off in the app (Settings > Debug sharing).")
+            }
+            return collectAppLogcat(maxLines = lines)
+                ?: throw AppStateCommandException("Logcat is unavailable on this device.")
+        }
+
+        override fun lastCrash(): String? = CrashLogStore.readLastCrash(getApplication())
+
+        override suspend fun screenshotPngBase64(): String {
+            if (!_debugSettings.value.includeScreenshot) {
+                throw AppStateCommandException("Screenshot sharing is turned off in the app (Settings > Debug sharing).")
+            }
+            val activity = ForegroundActivityTracker.current()
+                ?: throw AppStateCommandException("The app is in the background; screenshots need it on screen.")
+            val shot = captureWindowScreenshotBase64(activity)
+                ?: throw AppStateCommandException("Screenshot capture failed.")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(activity, R.string.app_state_screenshot_toast, Toast.LENGTH_SHORT).show()
+            }
+            return shot
+        }
+
+        override suspend fun uploadDump(note: String?, includeScreenshot: Boolean): Map<String, Any?> {
+            val shot = if (includeScreenshot && _debugSettings.value.includeScreenshot) {
+                ForegroundActivityTracker.current()?.let { captureWindowScreenshotBase64(it) }
+            } else {
+                null
+            }
+            val resp = performDebugDumpUpload(
+                note = note?.trim()?.takeIf { it.isNotEmpty() } ?: "Requested by a VM agent (app_state_cli dump)",
+                screenshotBase64 = shot,
+            ).getOrElse { err ->
+                throw AppStateCommandException("Dump upload failed: ${err.message ?: err::class.java.simpleName}")
+            }
+            return mapOf(
+                "dumpId" to resp.dumpId,
+                "remoteDir" to resp.remoteDir,
+                "latestSymlink" to resp.latestSymlink,
+                "files" to resp.files,
+                "includedScreenshot" to (shot != null),
+            )
         }
     }
 
