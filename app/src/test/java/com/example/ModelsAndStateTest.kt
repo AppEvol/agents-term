@@ -348,7 +348,7 @@ class ModelsAndStateTest {
 
         // Reject shell-injection payloads and non-SSH schemes
         assertNull(parseSshSetupUri("agentsterm://ssh?host=100.1.2.3;rm&user=ned"))
-        assertNull(parseSshSetupUri("agentsterm://ssh?host=100.1.2.3&user=ned%20&&%20id"))
+        assertNull(parseSshSetupUri("agentsterm://ssh?host=100.1.2.3&user=ned%20%26%26%20id"))
         assertNull(parseSshSetupUri("herdr://connect?host=100.1.2.3&port=7501&token=abc"))
     }
 
