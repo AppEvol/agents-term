@@ -65,6 +65,7 @@ fun NewTabSheet(
     onLoadDirectories: suspend (String?) -> Result<FsListResponse>,
     onDismiss: () -> Unit,
     onCreate: (agent: String, cwd: String, permissionMode: String, title: String, model: String?) -> Unit,
+    onLoadInitialDirectories: (suspend (String?) -> Result<FsListResponse>)? = null,
 ) {
     val effectiveAgents = remember(agents) {
         if (agents.isNotEmpty()) {
@@ -86,24 +87,22 @@ fun NewTabSheet(
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
+        val initialCwd = remember { defaultCwd }
         var selectedAgent by remember {
             mutableStateOf(effectiveAgents.firstOrNull { it.available }?.type ?: "agy")
         }
         var selectedModel by remember { mutableStateOf<String?>(null) }
-        var cwd by remember { mutableStateOf(defaultCwd) }
+        var cwd by remember { mutableStateOf(initialCwd) }
         var permissionMode by remember { mutableStateOf("full-access") }
         var customTitle by remember { mutableStateOf("") }
         var fsListing by remember { mutableStateOf<FsListResponse?>(null) }
         var fsError by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
 
-        LaunchedEffect(defaultCwd) {
+        LaunchedEffect(initialCwd) {
             fsError = null
-            var result = onLoadDirectories(defaultCwd)
-            if (result.isFailure) {
-                result = onLoadDirectories(defaultCwd)
-            }
-            result.onSuccess {
+            val loader = onLoadInitialDirectories ?: onLoadDirectories
+            loader(initialCwd).onSuccess {
                 fsListing = it
                 cwd = it.path
                 fsError = null

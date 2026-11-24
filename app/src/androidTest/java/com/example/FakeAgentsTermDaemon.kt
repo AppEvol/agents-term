@@ -123,7 +123,7 @@ class FakeAgentsTermDaemon(
         tabs.firstOrNull { it.id == tabId }?.model
     }
 
-    private val fsListings = mapOf(
+    private val fsListings = mutableMapOf(
         "/home/ci" to FsListResponse(
             path = "/home/ci",
             parent = "/home",
@@ -152,6 +152,23 @@ class FakeAgentsTermDaemon(
             ),
         ),
     )
+
+    fun deleteDirectory(path: String) {
+        val normalized = path.trimEnd('/').ifEmpty { "/" }
+        synchronized(lock) {
+            fsListings.keys.filter { it == normalized || it.startsWith("$normalized/") }
+                .forEach { fsListings.remove(it) }
+            val parent = normalized.substringBeforeLast('/').ifBlank { "/" }
+            val parentListing = fsListings[parent]
+            if (parentListing != null) {
+                fsListings[parent] = parentListing.copy(
+                    directories = parentListing.directories.filterNot {
+                        it.path.trimEnd('/') == normalized
+                    },
+                )
+            }
+        }
+    }
 
     private val server = MockWebServer().apply {
         dispatcher = object : Dispatcher() {
@@ -211,9 +228,11 @@ class FakeAgentsTermDaemon(
 
         if (method == "GET" && path == "/api/fs") {
             val requestedPath = request.requestUrl?.queryParameter("path") ?: serverInfo.defaultCwd
-            val listing = fsListings[requestedPath] ?: FsListResponse(
+            val listing = synchronized(lock) {
+                fsListings[requestedPath]
+            } ?: FsListResponse(
                 path = requestedPath,
-                parent = "/home/ci",
+                parent = requestedPath.trimEnd('/').substringBeforeLast('/').ifBlank { "/" },
                 directories = emptyList(),
             )
             return jsonResponse(200, encodeHerdrJson(listing))

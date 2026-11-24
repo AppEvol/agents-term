@@ -650,4 +650,63 @@ class AgentsTermE2ETest {
             composeRule.onAllNodesWithTag("model_picker_chip").fetchSemanticsNodes().isEmpty(),
         )
     }
+
+    @Test
+    fun newTabDefaultsToLastFolderLocationAndFallsBackToHomeWhenDeleted() {
+        val activeDaemon = startDaemon()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForText("Connected to ci-test-vm")
+
+        // 1) Browse to /home/ci/projects/agents-term and create a tab there
+        composeRule.onNodeWithTag("empty_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        waitForText("projects")
+        composeRule.onNodeWithText("projects").performScrollTo().performClick()
+        waitForText("agents-term")
+        composeRule.onNodeWithText("agents-term").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodes(hasTestTag("new_tab_cwd_input") and hasText("/home/ci/projects/agents-term"))
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Worktree Tab")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+        waitForText("Worktree Tab")
+
+        // 2) Close the tab (returning to empty workspace) and open New Tab: must remember last folder
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        composeRule.onNodeWithText("Close tab").performClick()
+        waitForText("Connected to ci-test-vm")
+
+        composeRule.onNodeWithTag("empty_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodes(hasTestTag("new_tab_cwd_input") and hasText("/home/ci/projects/agents-term"))
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        composeRule.onNodeWithTag("new_tab_cwd_input").assertTextContains("/home/ci/projects/agents-term")
+
+        // Dismiss sheet before simulating folder deletion
+        Espresso.pressBack()
+        waitForTag("empty_new_tab_button")
+
+        // 3) Delete /home/ci/projects/agents-term on VM and open New Tab: must fall back to /home/ci
+        activeDaemon.deleteDirectory("/home/ci/projects/agents-term")
+        composeRule.onNodeWithTag("empty_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodes(hasTestTag("new_tab_cwd_input") and hasText("/home/ci"))
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        composeRule.onNodeWithTag("new_tab_cwd_input").assertTextContains("/home/ci")
+        waitForText("projects")
+        waitForText("scripts")
+    }
 }

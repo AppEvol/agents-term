@@ -7,6 +7,8 @@ interface ConnectionSettings {
     fun saveConnection(config: ConnectionConfig)
     fun loadLastTabId(): String?
     fun saveLastTabId(tabId: String?)
+    fun loadLastCwd(host: String): String? = null
+    fun saveLastCwd(host: String, cwd: String?) {}
 }
 
 class SettingsStore(context: Context) : ConnectionSettings {
@@ -32,6 +34,28 @@ class SettingsStore(context: Context) : ConnectionSettings {
 
     override fun saveLastTabId(tabId: String?) {
         prefs.edit().putString(KEY_LAST_TAB, tabId).apply()
+    }
+
+    override fun loadLastCwd(host: String): String? {
+        val normalizedHost = cleanHost(host)
+        if (normalizedHost.isBlank()) return null
+        return prefs.getString(lastCwdPrefKey(normalizedHost), null)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    override fun saveLastCwd(host: String, cwd: String?) {
+        val normalizedHost = cleanHost(host)
+        if (normalizedHost.isBlank()) return
+        val key = lastCwdPrefKey(normalizedHost)
+        val cleanedCwd = cwd?.trim()?.takeIf { it.isNotEmpty() }
+        val editor = prefs.edit()
+        if (cleanedCwd == null) {
+            editor.remove(key)
+        } else {
+            editor.putString(key, cleanedCwd)
+        }
+        editor.apply()
     }
 
     /**
@@ -132,11 +156,16 @@ class SettingsStore(context: Context) : ConnectionSettings {
         return "${KEY_HOST_KEY_PREFIX}${cleanHost(host)}:$port"
     }
 
+    private fun lastCwdPrefKey(normalizedHost: String): String {
+        return "${KEY_LAST_CWD_PREFIX}$normalizedHost"
+    }
+
     companion object {
         private const val KEY_HOST = "vm_host"
         private const val KEY_PORT = "vm_port"
         private const val KEY_TOKEN = "vm_token"
         private const val KEY_LAST_TAB = "last_tab_id"
+        private const val KEY_LAST_CWD_PREFIX = "last_cwd_"
         private const val KEY_SSH_HOST = "ssh_host"
         private const val KEY_SSH_PORT = "ssh_port"
         private const val KEY_SSH_USERNAME = "ssh_username"

@@ -121,7 +121,7 @@ open class HerdrApiClient(
         return executeJson(req)
     }
 
-    suspend fun createTab(config: ConnectionConfig, body: CreateTabRequest): TabRecord {
+    open suspend fun createTab(config: ConnectionConfig, body: CreateTabRequest): TabRecord {
         val json = encodeHerdrJson(body)
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs")
@@ -202,7 +202,7 @@ open class HerdrApiClient(
         client.newCall(req).execute().use { }
     }
 
-    suspend fun listDirectories(config: ConnectionConfig, path: String?): FsListResponse {
+    open suspend fun listDirectories(config: ConnectionConfig, path: String?): FsListResponse {
         val base = "${config.httpBaseUrl()}/api/fs".toHttpUrlOrNull()
             ?: throw IOException("Invalid host URL")
         val url = base.newBuilder().apply {

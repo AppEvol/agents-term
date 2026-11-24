@@ -7,6 +7,7 @@ import com.example.data.ConnectionConfig
 import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DebugRecorder
+import com.example.data.FsListResponse
 import com.example.data.ModelSlashCommand
 import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
@@ -23,6 +24,7 @@ import com.example.data.encodeBase64Utf8
 import com.example.data.encodeHerdrJson
 import com.example.data.extractPairingUriFromOutput
 import com.example.data.formatModelChipLabel
+import com.example.data.normalizeFsPath
 import com.example.data.parseAgyStreamJsonLine
 import com.example.data.parseModelSlashCommand
 import com.example.data.parseSshSetupInput
@@ -30,6 +32,7 @@ import com.example.data.parseSshSetupUri
 import com.example.data.reduceWorkspaceEvent
 import com.example.data.resolveAgentModelCatalog
 import com.example.data.resolveModelIdFromQuery
+import com.example.data.resolvePreferredNewTabCwd
 import com.example.data.sanitizeDebugText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -467,5 +470,50 @@ class ModelsAndStateTest {
         assertTrue(clearJson.contains("\"model\":\"\""))
         val renameJson = encodeHerdrJson(UpdateTabRequest(title = "Renamed"))
         assertFalse(renameJson.contains("\"model\""))
+    }
+
+    @Test
+    fun preferredNewTabCwdPrioritizesLastFolderThenActiveTabThenHome() {
+        assertEquals(
+            "/home/ned/projects/app",
+            resolvePreferredNewTabCwd(
+                lastCwd = "/home/ned/projects/app",
+                activeTabCwd = "/home/ned",
+                homeCwd = "/home/ned",
+            ),
+        )
+        assertEquals(
+            "/home/ned/projects/active",
+            resolvePreferredNewTabCwd(
+                lastCwd = "   ",
+                activeTabCwd = "/home/ned/projects/active",
+                homeCwd = "/home/ned",
+            ),
+        )
+        assertEquals(
+            "/home/ned",
+            resolvePreferredNewTabCwd(
+                lastCwd = null,
+                activeTabCwd = null,
+                homeCwd = "/home/ned",
+            ),
+        )
+        assertEquals(
+            "/home",
+            resolvePreferredNewTabCwd(lastCwd = null, activeTabCwd = null, homeCwd = null),
+        )
+
+        assertEquals("/", normalizeFsPath("/"))
+        assertEquals("/", normalizeFsPath("///"))
+        assertEquals("/home/ned/projects", normalizeFsPath(" /home/ned/projects/ "))
+
+        val legacyFs = decodeHerdrJson<FsListResponse>(
+            """{"path":"/home/ned","parent":"/home","directories":[]}"""
+        )
+        assertNull(legacyFs.exists)
+        val explicitFs = decodeHerdrJson<FsListResponse>(
+            """{"path":"/home/ned/gone","parent":"/home/ned","directories":[],"exists":false}"""
+        )
+        assertEquals(false, explicitFs.exists)
     }
 }

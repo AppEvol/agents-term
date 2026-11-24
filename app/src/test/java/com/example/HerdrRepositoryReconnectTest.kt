@@ -3,11 +3,17 @@ package com.example
 import com.example.data.ConnectionConfig
 import com.example.data.ConnectionSettings
 import com.example.data.ConnectionState
+import com.example.data.CreateTabRequest
+import com.example.data.FsDirectoryEntry
+import com.example.data.FsListResponse
 import com.example.data.HerdrApiClient
 import com.example.data.HerdrRepository
+import com.example.data.ServerInfo
 import com.example.data.TabMessagesResponse
 import com.example.data.TabRecord
 import com.example.data.WsServerEnvelope
+import com.example.data.resolveInitialDirectoryListing
+import java.io.IOException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -28,6 +34,7 @@ class HerdrRepositoryReconnectTest {
     private class InMemorySettings(
         private var connection: ConnectionConfig = ConnectionConfig(),
         private var lastTabId: String? = null,
+        private val lastCwdByHost: MutableMap<String, String> = mutableMapOf(),
     ) : ConnectionSettings {
         override fun loadConnection(): ConnectionConfig = connection
         override fun saveConnection(config: ConnectionConfig) {
@@ -36,6 +43,15 @@ class HerdrRepositoryReconnectTest {
         override fun loadLastTabId(): String? = lastTabId
         override fun saveLastTabId(tabId: String?) {
             lastTabId = tabId
+        }
+        override fun loadLastCwd(host: String): String? = lastCwdByHost[host.trim().lowercase()]
+        override fun saveLastCwd(host: String, cwd: String?) {
+            val key = host.trim().lowercase()
+            if (cwd.isNullOrBlank()) {
+                lastCwdByHost.remove(key)
+            } else {
+                lastCwdByHost[key] = cwd.trim()
+            }
         }
     }
 
@@ -75,8 +91,10 @@ class HerdrRepositoryReconnectTest {
     private class FakeApiClient(
         var fireClosedOnCancel: Boolean = true,
         var cancelReason: String = "Canceled",
+        private val fsMap: MutableMap<String, FsListResponse> = mutableMapOf(),
     ) : HerdrApiClient() {
         val sockets = mutableListOf<FakeWebSocketHandle>()
+        val listDirCalls = mutableListOf<String?>()
 
         override fun openWebSocket(
             config: ConnectionConfig,
@@ -94,6 +112,28 @@ class HerdrRepositoryReconnectTest {
             )
             sockets.add(handle)
             return handle
+        }
+
+        override suspend fun createTab(config: ConnectionConfig, body: CreateTabRequest): TabRecord {
+            val cwd = body.cwd ?: "/home/test"
+            return TabRecord(
+                id = "tab_created",
+                title = body.title ?: "Tab",
+                agent = body.agent,
+                cwd = cwd,
+                permissionMode = body.permissionMode,
+                model = body.model,
+            )
+        }
+
+        override suspend fun listDirectories(config: ConnectionConfig, path: String?): FsListResponse {
+            listDirCalls.add(path)
+            val resolved = path ?: "/home/test"
+            return fsMap[resolved] ?: FsListResponse(
+                path = resolved,
+                parent = resolved.substringBeforeLast('/').ifBlank { "/" },
+                directories = emptyList(),
+            )
         }
 
         override suspend fun getTabMessages(config: ConnectionConfig, tabId: String): TabMessagesResponse {
@@ -299,5 +339,137 @@ class HerdrRepositoryReconnectTest {
 
         assertEquals(1, api.sockets.size)
         assertEquals(ConnectionState.DISCONNECTED, repo.state.value.connectionState)
+    }
+
+    @Test
+    fun resolveInitialDirectoryKeepsExistingEmptyFolderAndFallsBackWhenDeleted() = runTest {
+        val homeListing = FsListResponse(
+            path = "/home/ned",
+            parent = "/home",
+            directories = listOf(FsDirectoryEntry("projects", "/home/ned/projects")),
+        )
+        val projectsListing = FsListResponse(
+            path = "/home/ned/projects",
+            parent = "/home/ned",
+            directories = listOf(FsDirectoryEntry("empty-repo", "/home/ned/projects/empty-repo")),
+        )
+        val emptyRepoListing = FsListResponse(
+            path = "/home/ned/projects/empty-repo",
+            parent = "/home/ned/projects",
+            directories = emptyList(),
+        )
+        val fs = mutableMapOf(
+            "/home/ned" to homeListing,
+            "/home/ned/projects" to projectsListing,
+            "/home/ned/projects/empty-repo" to emptyRepoListing,
+        )
+        suspend fun fetch(path: String?): Result<FsListResponse> {
+            val key = path ?: "/home/ned"
+            val listing = fs[key] ?: FsListResponse(
+                path = key,
+                parent = key.substringBeforeLast('/').ifBlank { "/" },
+                directories = emptyList(),
+            )
+            return Result.success(listing)
+        }
+
+        // 1) Existing folder with subdirs stays without fallback
+        val withSubdirs = resolveInitialDirectoryListing("/home/ned/projects", "/home/ned", ::fetch).getOrThrow()
+        assertEquals("/home/ned/projects", withSubdirs.listing.path)
+        assertFalse(withSubdirs.fellBackToHome)
+
+        // 2) Existing empty folder (verified via parent) stays without fallback
+        val emptyExisting = resolveInitialDirectoryListing("/home/ned/projects/empty-repo", "/home/ned", ::fetch).getOrThrow()
+        assertEquals("/home/ned/projects/empty-repo", emptyExisting.listing.path)
+        assertFalse(emptyExisting.fellBackToHome)
+
+        // 3) Deleted folder on legacy daemon (empty listing & missing from parent) falls back to home
+        val deletedLegacy = resolveInitialDirectoryListing("/home/ned/projects/deleted-repo", "/home/ned", ::fetch).getOrThrow()
+        assertEquals("/home/ned", deletedLegacy.listing.path)
+        assertTrue(deletedLegacy.fellBackToHome)
+
+        // 4) Daemon returning explicit exists=false falls back to home
+        val deletedExplicit = resolveInitialDirectoryListing("/home/ned/.hidden-gone", "/home/ned") { p ->
+            if (p == "/home/ned/.hidden-gone") {
+                Result.success(FsListResponse(path = p, parent = "/home/ned", directories = emptyList(), exists = false))
+            } else {
+                Result.success(homeListing)
+            }
+        }.getOrThrow()
+        assertEquals("/home/ned", deletedExplicit.listing.path)
+        assertTrue(deletedExplicit.fellBackToHome)
+
+        // 5) Daemon returning HTTP 404/error for missing dir falls back to home
+        val deletedError = resolveInitialDirectoryListing("/home/ned/projects/missing", "/home/ned") { p ->
+            if (p == "/home/ned/projects/missing") {
+                Result.failure(IOException("HTTP 404: Not Found"))
+            } else {
+                Result.success(homeListing)
+            }
+        }.getOrThrow()
+        assertEquals("/home/ned", deletedError.listing.path)
+        assertTrue(deletedError.fellBackToHome)
+    }
+
+    @Test
+    fun repositoryPersistsLastCwdOnCreateAndResetsToHomeWhenFolderDeleted() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val homeListing = FsListResponse(
+            path = "/home/test",
+            parent = "/home",
+            directories = listOf(FsDirectoryEntry("projects", "/home/test/projects")),
+        )
+        val projectsListing = FsListResponse(
+            path = "/home/test/projects",
+            parent = "/home/test",
+            directories = listOf(FsDirectoryEntry("worktree-a", "/home/test/projects/worktree-a")),
+        )
+        val worktreeListing = FsListResponse(
+            path = "/home/test/projects/worktree-a",
+            parent = "/home/test/projects",
+            directories = emptyList(),
+        )
+        val fsMap = mutableMapOf(
+            "/home/test" to homeListing,
+            "/home/test/projects" to projectsListing,
+            "/home/test/projects/worktree-a" to worktreeListing,
+        )
+        val api = FakeApiClient(fsMap = fsMap)
+        val settings = InMemorySettings(connection = testConfig)
+        val repo = HerdrRepository(api = api, settings = settings, ioDispatcher = dispatcher)
+
+        repo.connect(testConfig)
+        api.sockets[0].emitOpen()
+        api.sockets[0].emitEvent(
+            WsServerEnvelope(
+                type = "snapshot",
+                server = ServerInfo(version = "0.1.0", hostname = "vm", defaultCwd = "/home/test"),
+                tabs = emptyList(),
+            )
+        )
+
+        // Creating a tab persists lastCwd in both WorkspaceState and ConnectionSettings
+        val created = repo.createTab(CreateTabRequest(agent = "agy", cwd = "/home/test/projects/worktree-a"))
+        assertTrue(created.isSuccess)
+        assertEquals("/home/test/projects/worktree-a", repo.state.value.lastCwd)
+        assertEquals("/home/test/projects/worktree-a", settings.loadLastCwd(testConfig.host))
+
+        // New repository instance (simulating app restart) restores lastCwd from settings
+        val restartedRepo = HerdrRepository(api = api, settings = settings, ioDispatcher = dispatcher)
+        assertEquals("/home/test/projects/worktree-a", restartedRepo.state.value.lastCwd)
+
+        // While worktree-a still exists, loadInitialDirectories keeps it
+        val initialExisting = repo.loadInitialDirectories(repo.state.value.lastCwd).getOrThrow()
+        assertEquals("/home/test/projects/worktree-a", initialExisting.path)
+        assertEquals("/home/test/projects/worktree-a", repo.state.value.lastCwd)
+
+        // Delete worktree-a on the VM -> loadInitialDirectories falls back to home and updates lastCwd
+        fsMap.remove("/home/test/projects/worktree-a")
+        fsMap["/home/test/projects"] = projectsListing.copy(directories = emptyList())
+
+        val afterDelete = repo.loadInitialDirectories(repo.state.value.lastCwd).getOrThrow()
+        assertEquals("/home/test", afterDelete.path)
+        assertEquals("/home/test", repo.state.value.lastCwd)
+        assertEquals("/home/test", settings.loadLastCwd(testConfig.host))
     }
 }
