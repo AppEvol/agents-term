@@ -16,7 +16,7 @@ from urllib.parse import unquote
 
 from . import httpserver
 from .app_state import DEFAULT_COMMAND_TIMEOUT_MS, AppStateBroker, AppStateError
-from .config import SERVER_VERSION, build_server_info, home_dir
+from .config import SERVER_VERSION, build_server_info, daemon_commit, home_dir
 from .httpserver import Request, Response, WebSocket
 from .models import get_agent_models, warm_agent_models_cache
 from .runner import AgentRunner
@@ -222,14 +222,15 @@ class Daemon:
 
     async def start(self) -> None:
         warm_agent_models_cache()
+        commit = daemon_commit()  # resolve now: it must describe the code this process loaded
         self._server = await asyncio.start_server(
             lambda r, w: httpserver.serve_connection(r, w, self.handle, self.handle_upgrade),
             self.host, self.port, limit=httpserver.MAX_HEADER_BYTES,
         )
         self._ping_task = asyncio.get_running_loop().create_task(self._ping_loop())
         auth = "disabled" if self.no_auth else "bearer"
-        print(f"AgentsTerm daemon v{SERVER_VERSION} (python) listening on http://{self.host}:{self.port} (auth={auth})",
-              flush=True)
+        print(f"AgentsTerm daemon v{SERVER_VERSION} (python, commit {(commit or 'unknown')[:12]}) "
+              f"listening on http://{self.host}:{self.port} (auth={auth})", flush=True)
 
     async def _ping_loop(self) -> None:
         while True:

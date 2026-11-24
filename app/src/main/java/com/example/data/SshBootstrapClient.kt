@@ -241,6 +241,18 @@ class SshBootstrapClient(
             val combinedOutput = synchronized(fullOutput) { fullOutput.toString() }
             val extracted = extractPairingUriFromOutput(combinedOutput)
 
+            // The script's last step verifies that the latest daemon is running, so a clean non-zero
+            // exit means "not verified" even if a pairing URI was printed earlier in the output.
+            if (bootstrapExitIsFailure(exitCode)) {
+                val debugHint = agyConversationId?.let {
+                    " (VM session: ~/.gemini/antigravity-cli/brain/$it/)"
+                }.orEmpty()
+                throw IOException(
+                    "Bootstrap exited with code $exitCode: the latest daemon could not be verified. " +
+                        "Check the live output above for details.$debugHint"
+                )
+            }
+
             if (extracted != null) {
                 val (rawUri, parsedConfig) = extracted
                 onLog("Detected pairing URI for ${parsedConfig.host}:${parsedConfig.port}")
@@ -259,13 +271,6 @@ class SshBootstrapClient(
                     "SSH connection dropped before bootstrap finished (remote agy may still be running on $host). " +
                         "Keep the screen awake and tap Retry to connect once the daemon is up.$debugHint"
                 )
-            }
-
-            if (exitCode != 0) {
-                val debugHint = agyConversationId?.let {
-                    " (VM session: ~/.gemini/antigravity-cli/brain/$it/)"
-                }.orEmpty()
-                throw IOException("Bootstrap exited with code $exitCode. Check the live output above for details.$debugHint")
             }
 
             // Fallback if agy started daemon with --no-auth and did not print a herdr:// URI

@@ -75,7 +75,15 @@ Every push to `main` that passes both `Build APK & Unit Tests` and `End-to-End A
 
 ## 2. Agent Guide: Setting Up the VM Space for AgentsTerm
 
-The VM daemon is the Python 3 program in [`daemon/`](daemon/) (standard library only, no build step). The app's first-run SSH bootstrap installs it automatically: it SSHes into the VM and runs `agy --dangerously-skip-permissions` with a prompt that tells Antigravity to run `daemon/install.sh` and fix whatever that script reports. You can also run the same steps by hand.
+The VM daemon is the Python 3 program in [`daemon/`](daemon/) (standard library only, no build step).
+
+**Every SSH bootstrap from the app leaves the latest daemon running.** The bootstrap command:
+
+1. Clones the repo if needed and runs `daemon/install.sh`. The script updates the checkout to the latest `main`, restarts the daemon unless it is already running that exact commit, and verifies the commit the running daemon reports.
+2. Only if that fails (python3 or git missing, Tailscale down, ...) invokes `agy --dangerously-skip-permissions` with a prompt telling Antigravity to repair the VM.
+3. Runs `install.sh` again as the authoritative check. A non-zero exit fails the bootstrap in the app, even if a pairing URI was printed along the way.
+
+So to update a VM, run the SSH bootstrap again from the app (or run the commands below by hand).
 
 ### Prerequisites on the VM
 1. **Tailscale active** on the same tailnet as the phone: `tailscale ip -4` must print a `100.x.y.z` address.
@@ -91,11 +99,12 @@ else git clone --depth 1 https://github.com/nedn/agents-term.git "$DIR" && bash 
 
 `install.sh` does the following:
 - Updates the checkout (`--ref <branch>`, default `main`; `--no-update` skips this step).
+- Restarts the daemon unless it is already running the checkout's exact commit (`--force-restart` always restarts). A restart ends agent turns that are in progress, so an up-to-date daemon is left alone.
 - Installs `~/.config/systemd/user/herdr-mobile.service` and enables linger. Without `systemd --user` it starts a detached process logging to `~/.config/herdr-mobile/daemon.log`.
 - Replaces the legacy Node daemon (`~/agent-terminal`) if one is running. Config, token, and tab history in `~/.config/herdr-mobile/` are reused as-is.
-- Health-checks `http://<tailscale-ip>:<port>/api/info` and prints the `herdr://connect?...` pairing URI.
+- Health-checks `http://<tailscale-ip>:<port>/api/info`, requires it to report the commit that was just installed, and prints the `herdr://connect?...` pairing URI.
 
-Exit codes: `3` means a prerequisite is missing (python3, git, or Tailscale), and `4` means the daemon started but failed its health check (see `systemctl --user status herdr-mobile.service` or the log).
+Exit codes: `3` means a prerequisite is missing (python3, git, or Tailscale), and `4` means the daemon is not healthy on the expected commit (see `systemctl --user status herdr-mobile.service` or the log).
 
 > **Don't run `install.sh` from an AgentsTerm agent tab.** Agent sessions are child processes of the daemon, so restarting the daemon ends them, including the session running the script. Run it over SSH instead.
 
@@ -103,6 +112,7 @@ Exit codes: `3` means a prerequisite is missing (python3, git, or Tailscale), an
 ```bash
 D="$HOME/.local/share/agentsterm/agents-term/daemon/agentsterm-daemon"
 python3 "$D" pairing --port 7501      # print host, port, token and the pairing URI
+python3 "$D" version                  # daemon version and the git commit of the checkout
 python3 "$D" rotate-token             # new bearer token (restart the daemon to apply)
 systemctl --user restart herdr-mobile.service
 python3 -m unittest discover -s daemon/tests   # daemon tests (from a repo checkout)
@@ -118,7 +128,7 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 
 | Endpoint | Purpose |
 | :--- | :--- |
-| `GET /api/info` | Returns server version, hostname, Tailscale IP, `defaultCwd`, and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
+| `GET /api/info` | Returns server version, the git `commit` the daemon is running, hostname, Tailscale IP, `defaultCwd`, and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
 | `GET /api/agents/:agent/models` | Returns (and optionally refreshes via `?refresh=1`) available models for an agent CLI (`agy`, `claude`, `codex`). |
 | `GET /api/tabs` | Lists all persistent agent tabs and `activeTabId`. |
 | `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`). |

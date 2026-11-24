@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Installs (or updates) the AgentsTerm VM daemon and starts it persistently on the Tailscale IPv4.
 #
+# Every run leaves the latest daemon code running: it updates the checkout, restarts the daemon
+# unless it is already running that exact commit, and verifies the commit the daemon reports.
 # Idempotent: safe to re-run. Replaces the legacy Node daemon (~/agent-terminal) if it is running.
 # Run it from an SSH session (the app's bootstrap does this), not from an AgentsTerm agent tab:
 # restarting the daemon ends every agent session it is running, including the one running this.
 #
-#   bash daemon/install.sh [--port 7501] [--ref main] [--no-update]
+#   bash daemon/install.sh [--port 7501] [--ref main] [--no-update] [--force-restart]
 #
 # Environment overrides:
 #   AGENTSTERM_REPO_URL     git URL (default https://github.com/nedn/agents-term.git)
@@ -27,6 +29,7 @@ REF="${AGENTSTERM_REF:-main}"
 REPO_URL="${AGENTSTERM_REPO_URL:-https://github.com/nedn/agents-term.git}"
 INSTALL_DIR="${AGENTSTERM_INSTALL_DIR:-$HOME/.local/share/agentsterm/agents-term}"
 UPDATE=1
+FORCE_RESTART=0
 CONFIG_DIR="$HOME/.config/herdr-mobile"
 UNIT_NAME="herdr-mobile.service"   # same unit name as the legacy Node daemon, so it is replaced in place
 
@@ -40,7 +43,8 @@ while [ $# -gt 0 ]; do
     --ref) REF="${2:?--ref needs a value}"; shift 2 ;;
     --ref=*) REF="${1#--ref=}"; shift ;;
     --no-update) UPDATE=0; shift ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --force-restart) FORCE_RESTART=1; shift ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
   esac
 done
@@ -80,6 +84,27 @@ DAEMON="$INSTALL_DIR/daemon/agentsterm-daemon"
 
 mkdir -p "$CONFIG_DIR" && chmod 700 "$CONFIG_DIR"
 
+# --- is the running daemon already this exact code? ---------------------------------------------
+# The daemon reports the commit it was started from. A healthy daemon that still runs older code
+# must be restarted; one that already runs TARGET_COMMIT is left alone (a restart ends agent turns).
+TARGET_COMMIT="$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)"
+running_commit() {
+  "$PYTHON" - "$TS_IP" "$PORT" "$CONFIG_DIR/config.json" <<'PY' 2>/dev/null || true
+import json, sys, urllib.request
+host, port, cfg_path = sys.argv[1:4]
+token = json.load(open(cfg_path)).get("token", "")
+req = urllib.request.Request(f"http://{host}:{port}/api/info", headers={"Authorization": f"Bearer {token}"})
+with urllib.request.urlopen(req, timeout=3) as resp:
+    print(json.load(resp).get("commit") or "")
+PY
+}
+NEED_RESTART=1
+if [ "$FORCE_RESTART" != 1 ] && [ -n "$TARGET_COMMIT" ] && [ "$(running_commit)" = "$TARGET_COMMIT" ]; then
+  NEED_RESTART=0
+  MODE="unchanged (already running the latest commit ${TARGET_COMMIT:0:12}; not restarted)"
+  log "Daemon is already running the latest commit ${TARGET_COMMIT:0:12}"
+fi
+
 # --- stop the legacy Node daemon / previous detached instance -----------------------------------
 stop_detached() {
   if [ "${AGENTSTERM_KEEP_LEGACY:-0}" = 1 ]; then
@@ -99,7 +124,9 @@ stop_detached() {
 }
 
 # --- start --------------------------------------------------------------------------------------
-if [ "${AGENTSTERM_NO_SYSTEMD:-0}" != 1 ] && systemctl --user show-environment >/dev/null 2>&1; then
+if [ "$NEED_RESTART" != 1 ]; then
+  :
+elif [ "${AGENTSTERM_NO_SYSTEMD:-0}" != 1 ] && systemctl --user show-environment >/dev/null 2>&1; then
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
   cat > "$UNIT_DIR/$UNIT_NAME" <<EOF
@@ -138,9 +165,9 @@ fi
 
 # --- health check -------------------------------------------------------------------------------
 log "Waiting for the daemon on http://$TS_IP:$PORT ..."
-if ! "$PYTHON" - "$TS_IP" "$PORT" "$CONFIG_DIR/config.json" <<'PY'
+if ! "$PYTHON" - "$TS_IP" "$PORT" "$CONFIG_DIR/config.json" "$TARGET_COMMIT" <<'PY'
 import json, sys, time, urllib.request
-host, port, cfg_path = sys.argv[1], sys.argv[2], sys.argv[3]
+host, port, cfg_path, target = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 deadline = time.time() + 20
 last = "no response"
 while time.time() < deadline:
@@ -149,12 +176,19 @@ while time.time() < deadline:
         req = urllib.request.Request(f"http://{host}:{port}/api/info", headers={"Authorization": f"Bearer {token}"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             info = json.load(resp)
-            print(f">>> Daemon v{info.get('version')} healthy on {host}:{port} (hostname {info.get('hostname')})")
-            sys.exit(0)
+            commit = info.get("commit") or ""
+            # A previous instance may still be answering while it shuts down: keep waiting until
+            # the daemon on this port reports the commit that was just installed.
+            if target and commit != target:
+                last = f"daemon reports commit {commit[:12] or 'unknown'}, expected {target[:12]}"
+            else:
+                print(f">>> Daemon v{info.get('version')} (commit {commit[:12] or 'unknown'}) healthy on "
+                      f"{host}:{port} (hostname {info.get('hostname')})")
+                sys.exit(0)
     except Exception as err:  # noqa: BLE001
         last = str(err)
     time.sleep(0.5)
-print(f"ERROR: daemon did not become healthy: {last}", file=sys.stderr)
+print(f"ERROR: daemon is not healthy on the expected code: {last}", file=sys.stderr)
 sys.exit(1)
 PY
 then
