@@ -109,7 +109,7 @@ else git clone --depth 1 https://github.com/nedn/agents-term.git "$DIR" && bash 
 `install.sh` does the following:
 - Updates the checkout (`--ref <branch>`, default `main`; `--no-update` skips this step).
 - Restarts the daemon unless it is already running the checkout's exact commit (`--force-restart` always restarts). A restart ends agent turns that are in progress, so an up-to-date daemon is left alone.
-- Installs `~/.config/systemd/user/herdr-mobile.service` and enables linger. Without `systemd --user` it starts a detached process logging to `~/.config/herdr-mobile/daemon.log`.
+- Enables linger (`loginctl enable-linger`) and installs `~/.config/systemd/user/herdr-mobile.service`. Without `systemd --user` it starts a detached process logging to `~/.config/herdr-mobile/daemon.log` and installs an `@reboot` crontab entry so the daemon survives a reboot. Output always states whether the daemon will survive a reboot.
 - Replaces the legacy Node daemon (`~/agent-terminal`) if one is running. Config, token, and tab history in `~/.config/herdr-mobile/` are reused as-is.
 - Health-checks `http://<tailscale-ip>:<port>/api/info`, requires it to report the commit that was just installed, and prints the `herdr://connect?...` pairing URI.
 

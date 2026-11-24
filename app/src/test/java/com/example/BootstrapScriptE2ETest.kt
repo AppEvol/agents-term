@@ -102,6 +102,7 @@ class BootstrapScriptE2ETest {
         put("PATH", "${localBin.path}:/usr/local/bin:/usr/bin:/bin")
         put("AGENTSTERM_KEEP_LEGACY", "1") // never touch a real daemon on the machine running the tests
         put("AGENTSTERM_NO_SYSTEMD", "1")
+        put("AGENTSTERM_NO_CRON", "1") // never touch the real crontab on the machine running the tests
         if (withHost) put("AGENTSTERM_HOST", "127.0.0.1")
     }
 

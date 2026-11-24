@@ -240,6 +240,7 @@ class ModelsAndStateTest {
         assertTrue(prompt.contains("git clone --depth 1 --branch main https://github.com/nedn/agents-term.git"))
         assertTrue(prompt.contains("bash \"\$HOME/.local/share/agentsterm/agents-term/daemon/install.sh\" --port 7600 --ref main"))
         assertTrue(prompt.contains("Do not write your own daemon"))
+        assertTrue(prompt.contains("sudo loginctl enable-linger"))
         assertFalse(prompt.contains("Node.js"))
     }
 

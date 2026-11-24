@@ -167,10 +167,23 @@ fun defaultAgyBootstrapPrompt(
         appendLine("The VM daemon is the Python 3 program in `daemon/` of $repoUrl, installed by its `daemon/install.sh`. Do not write your own daemon.")
         appendLine("1. Run the installer to see the failure:")
         appendLine("   if [ -d \"$dir/.git\" ]; then $install; else git clone --depth 1 --branch $ref $repoUrl \"$dir\" && $install; fi")
-        appendLine("   install.sh is idempotent: it updates the checkout to the latest $ref, installs the herdr-mobile.service systemd --user unit (or a detached process), restarts the daemon unless it already runs that commit, replaces any legacy Node daemon, verifies http://<tailscale-ip>:$daemonPort/api/info reports that commit, and prints a herdr://connect pairing URI.")
+        appendLine(
+            "   install.sh is idempotent: it updates the checkout to the latest $ref, " +
+                "enables lingering and installs the herdr-mobile.service systemd --user unit " +
+                "(or falls back to a detached process with an @reboot crontab entry), " +
+                "restarts the daemon unless it already runs that commit, replaces any legacy Node daemon, " +
+                "verifies http://<tailscale-ip>:$daemonPort/api/info reports that commit, " +
+                "and prints a herdr://connect pairing URI.",
+        )
         appendLine("2. If it exits non-zero, read its ERROR line, fix the root cause, and run step 1 again:")
         appendLine("   - exit 3 (missing prerequisite): install python3 (>= 3.9) or git with the system package manager, or bring Tailscale up (`sudo tailscale up`). If GitHub is unreachable, say so clearly.")
         appendLine("   - exit 4 (daemon unhealthy): inspect `systemctl --user status herdr-mobile.service` or ~/.config/herdr-mobile/daemon.log (for example, another process holding port $daemonPort).")
+        appendLine(
+            "   - reboot persistence: if install.sh reports it could not enable linger or fell back " +
+                "from systemd --user, enable lingering with `sudo loginctl enable-linger \"\$(id -un)\"` " +
+                "(so systemd --user starts at boot without an interactive login) and re-run install.sh " +
+                "with `--force-restart`.",
+        )
         appendLine("3. End your final response with the exact `herdr://connect?host=...&port=$daemonPort&token=...` line that install.sh printed, on its own line.")
     }.trim()
 }
