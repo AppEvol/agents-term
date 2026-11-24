@@ -1,8 +1,19 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +26,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -28,6 +40,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -35,11 +48,13 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
@@ -50,6 +65,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
@@ -63,15 +79,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -82,6 +107,7 @@ import com.example.R
 import com.example.data.AssistantDisplayBlock
 import com.example.data.ChatMessage
 import com.example.data.DeniedAction
+import com.example.data.QueuedMessage
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
 import com.example.data.UsageStats
@@ -109,6 +135,8 @@ fun ChatWorkspace(
     onOpenModelPicker: (() -> Unit)? = null,
     onSendMessage: (String) -> Unit,
     onInterrupt: () -> Unit,
+    onForceInterrupt: (String?) -> Unit = { onInterrupt() },
+    onRemoveQueuedMessage: (String) -> Unit = {},
     onRetryFullAccess: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -216,14 +244,20 @@ fun ChatWorkspace(
         ChatComposer(
             draft = draft,
             onDraftChange = { draft = it },
-            placeholder = if (tab.agent == "shell") {
-                stringResource(R.string.composer_shell_placeholder, tab.folderName)
-            } else {
-                stringResource(R.string.composer_agent_placeholder, tab.agentLabel)
+            placeholder = when {
+                isWorking && tab.agent == "shell" ->
+                    stringResource(R.string.composer_queue_shell_placeholder)
+                isWorking ->
+                    stringResource(R.string.composer_queue_agent_placeholder)
+                tab.agent == "shell" ->
+                    stringResource(R.string.composer_shell_placeholder, tab.folderName)
+                else ->
+                    stringResource(R.string.composer_agent_placeholder, tab.agentLabel)
             },
             isWorking = isWorking,
             isConnected = isConnected,
             statusDetail = if (isWorking) tab.statusDetail else null,
+            queuedMessages = tab.queuedMessages,
             modelLabel = modelLabel,
             hasCustomModel = hasCustomModel,
             onOpenModelPicker = onOpenModelPicker,
@@ -234,7 +268,13 @@ fun ChatWorkspace(
                     onSendMessage(text)
                 }
             },
-            onInterrupt = onInterrupt,
+            onForceInterrupt = { draftText ->
+                if (!draftText.isNullOrBlank()) {
+                    draft = ""
+                }
+                onForceInterrupt(draftText)
+            },
+            onRemoveQueuedMessage = onRemoveQueuedMessage,
         )
     }
 }
@@ -376,11 +416,28 @@ private fun AssistantMessageItem(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             if (message.status == "streaming") {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(13.dp),
-                    strokeWidth = 1.8.dp,
-                    color = HerdrBlue,
-                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = HerdrBlue.copy(alpha = 0.14f),
+                    modifier = Modifier.testTag("streaming_working_badge"),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        WorkingPulseDots(
+                            color = HerdrBlue,
+                            dotSize = 4.dp,
+                        )
+                        Text(
+                            text = stringResource(R.string.status_working_badge),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = HerdrBlue,
+                        )
+                    }
+                }
             }
         }
 
@@ -421,6 +478,30 @@ private fun AssistantMessageItem(
                         }
                     }
                 }
+            }
+        } else if (
+            message.status == "streaming" &&
+            message.thinking.isNullOrBlank()
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .padding(vertical = 2.dp)
+                    .testTag("streaming_activity_indicator"),
+            ) {
+                WorkingPulseDots(
+                    color = HerdrBlue,
+                    dotSize = 5.dp,
+                )
+                Text(
+                    text = tab.statusDetail?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.status_working_fallback),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         } else if (
             message.status == "complete" &&
@@ -946,6 +1027,105 @@ private fun BlockedPermissionCard(
 }
 
 @Composable
+private fun QueuedMessagesTray(
+    queuedMessages: List<QueuedMessage>,
+    isWorking: Boolean,
+    onRemove: (String) -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, HerdrBlue.copy(alpha = 0.35f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("queued_messages_tray"),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Schedule,
+                    contentDescription = null,
+                    tint = HerdrBlue,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = stringResource(R.string.queue_header_count, queuedMessages.size),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = HerdrBlue,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = if (isWorking) {
+                        stringResource(R.string.queue_hint_hold_to_run)
+                    } else {
+                        stringResource(R.string.queue_hint_tap_to_run)
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 128.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                queuedMessages.forEachIndexed { idx, item ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("queued_message_item_${item.id}"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "${idx + 1}.",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = MonoFontFamily,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = item.text,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .clickable { onRemove(item.id) }
+                                .testTag("remove_queued_${item.id}"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = stringResource(R.string.action_remove_queued),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(15.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ChatComposer(
     draft: String,
     onDraftChange: (String) -> Unit,
@@ -953,12 +1133,44 @@ private fun ChatComposer(
     isWorking: Boolean,
     isConnected: Boolean,
     statusDetail: String?,
+    queuedMessages: List<QueuedMessage> = emptyList(),
     modelLabel: String? = null,
     hasCustomModel: Boolean = false,
     onOpenModelPicker: (() -> Unit)? = null,
     onSend: () -> Unit,
-    onInterrupt: () -> Unit,
+    onForceInterrupt: (String?) -> Unit,
+    onRemoveQueuedMessage: (String) -> Unit = {},
 ) {
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    val viewConfiguration = LocalViewConfiguration.current
+    var isHolding by remember { mutableStateOf(false) }
+    val holdProgress = remember { Animatable(0f) }
+    var holdHintCounter by remember { mutableStateOf(0) }
+    var showHoldHint by remember { mutableStateOf(false) }
+
+    LaunchedEffect(holdHintCounter) {
+        if (holdHintCounter > 0) {
+            showHoldHint = true
+            delay(2_400L)
+            showHoldHint = false
+        }
+    }
+
+    LaunchedEffect(isWorking) {
+        if (!isWorking) {
+            isHolding = false
+            showHoldHint = false
+            holdProgress.snapTo(0f)
+        }
+    }
+
+    val currentDraft by rememberUpdatedState(draft)
+    val currentHasQueued by rememberUpdatedState(queuedMessages.isNotEmpty())
+    val currentOnSend by rememberUpdatedState(onSend)
+    val currentOnForceInterrupt by rememberUpdatedState(onForceInterrupt)
+    val currentOnShowHoldHint by rememberUpdatedState({ holdHintCounter++ })
+
     Surface(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 4.dp,
@@ -966,11 +1178,35 @@ private fun ChatComposer(
             .fillMaxWidth()
             .navigationBarsPadding(),
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            if (onOpenModelPicker != null && !modelLabel.isNullOrBlank() || !statusDetail.isNullOrBlank()) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (isWorking) {
+                LinearProgressIndicator(
+                    color = if (isHolding) HerdrRed else HerdrBlue,
+                    trackColor = (if (isHolding) HerdrRed else HerdrBlue).copy(alpha = 0.14f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .testTag("working_progress_bar"),
+                )
+            }
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+            if (queuedMessages.isNotEmpty()) {
+                QueuedMessagesTray(
+                    queuedMessages = queuedMessages,
+                    isWorking = isWorking,
+                    onRemove = onRemoveQueuedMessage,
+                )
+            }
+
+            if (
+                (onOpenModelPicker != null && !modelLabel.isNullOrBlank()) ||
+                !statusDetail.isNullOrBlank() ||
+                isHolding ||
+                showHoldHint
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1037,7 +1273,38 @@ private fun ChatComposer(
                         }
                     }
 
-                    if (!statusDetail.isNullOrBlank()) {
+                    if (isHolding) {
+                        val hasPendingToRun = draft.isNotBlank() || queuedMessages.isNotEmpty()
+                        Text(
+                            text = if (hasPendingToRun) {
+                                stringResource(R.string.holding_interrupt_run_status)
+                            } else {
+                                stringResource(R.string.holding_interrupt_status)
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = HerdrRed,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    } else if (showHoldHint) {
+                        Text(
+                            text = if (queuedMessages.isNotEmpty()) {
+                                stringResource(R.string.hold_hint_interrupt_run)
+                            } else {
+                                stringResource(R.string.hold_hint_stop)
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = HerdrAmber,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("hold_to_interrupt_hint"),
+                        )
+                    } else if (!statusDetail.isNullOrBlank()) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1061,10 +1328,30 @@ private fun ChatComposer(
                 }
             }
 
+            val workingBorderAlpha = if (isWorking) {
+                val borderTransition = rememberInfiniteTransition(label = "composer_working_border")
+                borderTransition.animateFloat(
+                    initialValue = 0.30f,
+                    targetValue = 0.80f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "composer_border_alpha",
+                ).value
+            } else {
+                0f
+            }
+            val composerBorderColor = when {
+                isWorking && isHolding -> HerdrRed.copy(alpha = 0.85f)
+                isWorking -> HerdrBlue.copy(alpha = workingBorderAlpha)
+                else -> MaterialTheme.colorScheme.outlineVariant
+            }
+
             Surface(
                 shape = RoundedCornerShape(26.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                border = BorderStroke(if (isWorking) 1.25.dp else 1.dp, composerBorderColor),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(
@@ -1105,57 +1392,176 @@ private fun ChatComposer(
 
                     Spacer(Modifier.width(4.dp))
 
-                    if (isWorking) {
+                    val hasDraft = draft.isNotBlank()
+                    val hasQueued = queuedMessages.isNotEmpty()
+                    val canSendIdle = !isWorking && (hasDraft || hasQueued) && isConnected
+                    val showStopIcon = isWorking && !hasDraft && !hasQueued
+                    val buttonBg = when {
+                        !isConnected -> MaterialTheme.colorScheme.surfaceContainerHighest
+                        isWorking && isHolding -> HerdrRed.copy(alpha = 0.22f + 0.78f * holdProgress.value)
+                        isWorking && hasDraft -> MaterialTheme.colorScheme.primary
+                        isWorking && hasQueued -> MaterialTheme.colorScheme.primaryContainer
+                        isWorking -> HerdrRed.copy(alpha = 0.14f)
+                        canSendIdle -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                    }
+                    val buttonBorder = when {
+                        !isConnected -> null
+                        isWorking && !isHolding && !hasDraft && hasQueued ->
+                            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+                        isWorking && !isHolding && !hasDraft && !hasQueued ->
+                            BorderStroke(1.dp, HerdrRed.copy(alpha = 0.45f))
+                        else -> null
+                    }
+                    val iconTint = when {
+                        !isConnected -> MaterialTheme.colorScheme.onSurfaceVariant
+                        isWorking && isHolding -> if (holdProgress.value > 0.35f) Color.White else HerdrRed
+                        isWorking && hasDraft -> MaterialTheme.colorScheme.onPrimary
+                        isWorking && hasQueued -> MaterialTheme.colorScheme.onPrimaryContainer
+                        isWorking -> HerdrRed
+                        canSendIdle -> MaterialTheme.colorScheme.onPrimary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    val buttonDescription = when {
+                        isWorking && hasDraft -> stringResource(R.string.action_queue_message)
+                        isWorking && hasQueued -> stringResource(R.string.action_hold_interrupt_queue)
+                        isWorking -> stringResource(R.string.action_stop_agent)
+                        else -> stringResource(R.string.action_send)
+                    }
+                    val holdActionLabel = stringResource(R.string.action_hold_interrupt_queue)
+
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .padding(bottom = 2.dp)
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .semantics {
+                                contentDescription = buttonDescription
+                                if (isConnected) {
+                                    onClick(label = buttonDescription) {
+                                        if (!isWorking) {
+                                            if (currentDraft.isNotBlank()) {
+                                                currentOnSend()
+                                                true
+                                            } else if (currentHasQueued) {
+                                                currentOnForceInterrupt(null)
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        } else if (currentDraft.isNotBlank()) {
+                                            currentOnSend()
+                                            true
+                                        } else {
+                                            currentOnShowHoldHint()
+                                            true
+                                        }
+                                    }
+                                    if (isWorking) {
+                                        onLongClick(label = holdActionLabel) {
+                                            val textToInclude = currentDraft.trim().takeIf { it.isNotEmpty() }
+                                            currentOnForceInterrupt(textToInclude)
+                                            true
+                                        }
+                                    }
+                                }
+                            }
+                            .pointerInput(isWorking, isConnected) {
+                                if (!isConnected) return@pointerInput
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    if (!isWorking) {
+                                        val up = waitForUpOrCancellation()
+                                        if (up != null) {
+                                            if (currentDraft.isNotBlank()) {
+                                                currentOnSend()
+                                            } else if (currentHasQueued) {
+                                                currentOnForceInterrupt(null)
+                                            }
+                                        }
+                                        return@awaitEachGesture
+                                    }
+
+                                    val holdMs = viewConfiguration.longPressTimeoutMillis.coerceAtLeast(400L)
+                                    isHolding = true
+                                    val progressJob = scope.launch {
+                                        holdProgress.snapTo(0f)
+                                        holdProgress.animateTo(
+                                            targetValue = 1f,
+                                            animationSpec = tween(
+                                                durationMillis = holdMs.toInt(),
+                                                easing = LinearEasing,
+                                            ),
+                                        )
+                                    }
+                                    val slop = viewConfiguration.touchSlop
+                                    val releasedBeforeTimeout = withTimeoutOrNull(holdMs) {
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes.firstOrNull { it.id == down.id }
+                                            if (change == null || !change.pressed) {
+                                                return@withTimeoutOrNull true
+                                            }
+                                            val pos = change.position
+                                            if (pos.x < -slop || pos.y < -slop ||
+                                                pos.x > size.width + slop || pos.y > size.height + slop
+                                            ) {
+                                                return@withTimeoutOrNull false
+                                            }
+                                        }
+                                    }
+                                    progressJob.cancel()
+                                    isHolding = false
+                                    scope.launch { holdProgress.snapTo(0f) }
+
+                                    when (releasedBeforeTimeout) {
+                                        null -> {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            val textToInclude = currentDraft.trim().takeIf { it.isNotEmpty() }
+                                            currentOnForceInterrupt(textToInclude)
+                                            waitForUpOrCancellation()
+                                        }
+                                        true -> {
+                                            if (currentDraft.isNotBlank()) {
+                                                currentOnSend()
+                                            } else {
+                                                currentOnShowHoldHint()
+                                            }
+                                        }
+                                        false -> Unit
+                                    }
+                                }
+                            }
+                            .testTag("send_button"),
+                    ) {
                         Surface(
                             shape = CircleShape,
-                            color = HerdrRed,
-                            modifier = Modifier
-                                .padding(bottom = 2.dp)
-                                .size(48.dp)
-                                .clip(CircleShape)
-                                .clickable(onClick = onInterrupt)
-                                .testTag("stop_agent_button"),
+                            color = buttonBg,
+                            border = buttonBorder,
+                            modifier = Modifier.fillMaxSize(),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Rounded.Stop,
-                                    contentDescription = stringResource(R.string.action_stop_agent),
-                                    tint = Color.White,
+                                    imageVector = if (showStopIcon) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward,
+                                    contentDescription = null,
+                                    tint = iconTint,
                                     modifier = Modifier.size(22.dp),
                                 )
                             }
                         }
-                    } else {
-                        val canSend = draft.isNotBlank() && isConnected
-                        Surface(
-                            shape = CircleShape,
-                            color = if (canSend) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerHighest
-                            },
-                            modifier = Modifier
-                                .padding(bottom = 2.dp)
-                                .size(48.dp)
-                                .clip(CircleShape)
-                                .clickable(enabled = canSend, onClick = onSend)
-                                .testTag("send_button"),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ArrowUpward,
-                                    contentDescription = stringResource(R.string.action_send),
-                                    tint = if (canSend) {
-                                        MaterialTheme.colorScheme.onPrimary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    modifier = Modifier.size(22.dp),
-                                )
-                            }
+                        if (isWorking && holdProgress.value > 0f) {
+                            CircularProgressIndicator(
+                                progress = { holdProgress.value },
+                                color = HerdrRed,
+                                trackColor = HerdrRed.copy(alpha = 0.22f),
+                                strokeWidth = 3.dp,
+                                modifier = Modifier.fillMaxSize(),
+                            )
                         }
                     }
                 }
+            }
             }
         }
     }

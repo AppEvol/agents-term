@@ -12,8 +12,12 @@ import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DebugRecorder
 import com.example.data.FsListResponse
+import com.example.data.InterruptTabRequest
 import com.example.data.MessageSegment
 import com.example.data.ModelSlashCommand
+import com.example.data.QueueActionResponse
+import com.example.data.QueuedMessage
+import com.example.data.SendMessageResponse
 import com.example.data.ServerInfo
 import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
@@ -802,5 +806,58 @@ class ModelsAndStateTest {
         assertTrue(clearJson.contains("\"systemPrompt\":\"\""))
         val titleOnlyJson = encodeHerdrJson(UpdateTabRequest(title = "Renamed"))
         assertFalse(titleOnlyJson.contains("\"systemPrompt\""))
+    }
+
+    @Test
+    fun queuedMessagesSerializationAndWorkspaceReductionRemainBackwardCompatible() {
+        // Legacy tab JSON without queuedMessages decodes with an empty queue
+        val legacyTab = decodeHerdrJson<TabRecord>(
+            """{"id":"tab_legacy","title":"Agy","agent":"agy","cwd":"/home/ned","status":"working"}"""
+        )
+        assertTrue(legacyTab.queuedMessages.isEmpty())
+
+        // Queued SendMessageResponse decodes cleanly without userMessage/assistantMessage
+        val queuedResp = decodeHerdrJson<SendMessageResponse>(
+            """
+            {
+              "queued": true,
+              "queuedMessage": {"id": "q_1", "text": "Follow up", "createdAt": 1700000001000},
+              "tab": {
+                "id": "tab_1",
+                "title": "Agy",
+                "agent": "agy",
+                "cwd": "/home/ned",
+                "status": "working",
+                "queuedMessages": [{"id": "q_1", "text": "Follow up", "createdAt": 1700000001000}]
+              }
+            }
+            """.trimIndent()
+        )
+        assertTrue(queuedResp.queued)
+        assertNull(queuedResp.userMessage)
+        assertEquals("q_1", queuedResp.queuedMessage?.id)
+        assertEquals(listOf("Follow up"), queuedResp.tab?.queuedMessages?.map { it.text })
+
+        // InterruptTabRequest and QueueActionResponse round-trip cleanly (including legacy {"ok":true})
+        val intrJson = encodeHerdrJson(InterruptTabRequest(processQueue = true, text = "Run now"))
+        assertTrue(intrJson.contains("\"processQueue\":true"))
+        assertTrue(intrJson.contains("\"text\":\"Run now\""))
+        val legacyOk = decodeHerdrJson<QueueActionResponse>("""{"ok":true}""")
+        assertTrue(legacyOk.ok)
+        assertNull(legacyOk.tab)
+
+        // reduceWorkspaceEvent propagates queuedMessages updates via tab_updated
+        val initial = reduceWorkspaceEvent(
+            WorkspaceState(),
+            WsServerEnvelope(type = "snapshot", tabs = listOf(legacyTab), activeTabId = "tab_legacy"),
+        )
+        val withQueue = legacyTab.copy(
+            queuedMessages = listOf(QueuedMessage(id = "q_1", text = "Second prompt")),
+        )
+        val afterUpdate = reduceWorkspaceEvent(
+            initial,
+            WsServerEnvelope(type = "tab_updated", tab = withQueue),
+        )
+        assertEquals(listOf("Second prompt"), afterUpdate.activeTab?.queuedMessages?.map { it.text })
     }
 }

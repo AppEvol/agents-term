@@ -385,6 +385,70 @@ ws.on("error", (e) => {{ console.log("ERROR", e.message); process.exit(1); }});
         self.assertIn("PONG", r.stdout)
         self.assertIn("CLOSED 1000", r.stdout)
 
+    def test_message_queue_and_force_interrupt_via_rest_and_ws(self):
+        d = self.daemon
+
+        async def go():
+            ws = await self.ws()
+            msgs = ws.messages()
+            await msgs.__anext__()  # snapshot
+
+            status, body = await asyncio.to_thread(d.api, "POST", "/api/tabs", {"agent": "shell", "cwd": str(self.home)})
+            self.assertEqual(status, 200)
+            tab_id = body["tab"]["id"]
+
+            # Start a slow shell turn
+            status, _ = await asyncio.to_thread(
+                d.api, "POST", f"/api/tabs/{tab_id}/messages", {"text": "echo first; sleep 10"}
+            )
+            self.assertEqual(status, 200)
+
+            # Queue two follow-ups while the first turn is still running (must return 200, not 409)
+            status, q1 = await asyncio.to_thread(
+                d.api, "POST", f"/api/tabs/{tab_id}/messages", {"text": "echo second"}
+            )
+            self.assertEqual((status, q1["queued"]), (200, True))
+            status, q2 = await asyncio.to_thread(
+                d.api, "POST", f"/api/tabs/{tab_id}/messages", {"text": "echo drop_me"}
+            )
+            self.assertEqual((status, q2["queued"], len(q2["tab"]["queuedMessages"])), (200, True, 2))
+
+            # Remove the second queued message via DELETE /api/tabs/:id/queue/:queuedId
+            status, removed = await asyncio.to_thread(
+                d.api, "DELETE", f"/api/tabs/{tab_id}/queue/{q2['queuedMessage']['id']}"
+            )
+            self.assertEqual((status, removed["ok"]), (200, True))
+            self.assertEqual([m["text"] for m in removed["tab"]["queuedMessages"]], ["echo second"])
+
+            # Force interrupt & process queue + current draft text
+            status, intr = await asyncio.to_thread(
+                d.api, "POST", f"/api/tabs/{tab_id}/interrupt",
+                {"processQueue": True, "text": "echo third"},
+            )
+            self.assertEqual((status, intr["ok"]), (200, True))
+
+            # Wait for the combined queued turn to complete over WebSocket
+            completed = None
+            while completed is None:
+                env = json.loads(await asyncio.wait_for(msgs.__anext__(), timeout=15))
+                if env["type"] == "message_updated" and env["message"]["role"] == "assistant" \
+                        and env["message"]["status"] == "complete":
+                    completed = env["message"]
+            ws.close()
+            return tab_id, completed
+
+        tab_id, completed = run_async(go(), 30)
+        self.assertIn("second", completed["text"])
+        self.assertIn("third", completed["text"])
+        self.assertNotIn("drop_me", completed["text"])
+        status, res = d.api("GET", f"/api/tabs/{tab_id}/messages")
+        self.assertEqual(status, 200)
+        self.assertEqual(res["tab"]["queuedMessages"], [])
+        self.assertEqual(len(res["messages"]), 4)
+        self.assertEqual(res["messages"][1]["status"], "interrupted")
+        self.assertEqual(res["messages"][2]["text"], "echo second\n\necho third")
+        self.assertEqual(res["messages"][3]["status"], "complete")
+
 
 if __name__ == "__main__":
     unittest.main()
