@@ -19,9 +19,9 @@ import java.security.MessageDigest
 import java.util.Properties
 
 /**
- * Connects to a Tailscale VM over SSH and invokes `agy --dangerously-skip-permissions`
- * so the VM's Antigravity agent bootstraps the AgentsTerm daemon environment autonomously,
- * streaming live tool and response progress back to the mobile UI.
+ * Connects to a Tailscale VM over SSH to install or update the AgentsTerm daemon via
+ * `daemon/install.sh` (falling back to `agy --dangerously-skip-permissions` to repair missing
+ * prerequisites if needed), streaming live progress back to the mobile UI.
  */
 class SshBootstrapClient(
     private val settings: SettingsStore,
@@ -266,9 +266,10 @@ class SshBootstrapClient(
             if (exitCode == -1) {
                 val debugHint = agyConversationId?.let {
                     " VM session log: ~/.gemini/antigravity-cli/brain/$it/"
-                } ?: " Check ~/.gemini/antigravity-cli/log/ on the VM."
+                }.orEmpty()
+                val remoteProcess = if (agyConversationId != null) "remote repair agent" else "remote setup"
                 throw IOException(
-                    "SSH connection dropped before bootstrap finished (remote agy may still be running on $host). " +
+                    "SSH connection dropped before bootstrap finished ($remoteProcess may still be running on $host). " +
                         "Keep the screen awake and tap Retry to connect once the daemon is up.$debugHint"
                 )
             }

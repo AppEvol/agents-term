@@ -1,6 +1,6 @@
 {
   "name": "AgentsTerm",
-  "description": "Mobile control center for persistent coding agents (Antigravity, Claude Code, Codex, and Shell) over Tailscale, with zero-touch VM bootstrapping via SSH and agy.",
+  "description": "Mobile control center for persistent coding agents (Antigravity, Claude Code, Codex, and Shell) over Tailscale, with zero-touch VM bootstrapping over SSH.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

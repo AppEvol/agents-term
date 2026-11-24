@@ -594,7 +594,7 @@ fun SettingsScreen(
                                         color = MaterialTheme.colorScheme.onSurface,
                                     )
                                     Text(
-                                        text = stringResource(R.string.settings_debug_agy_tip),
+                                        text = stringResource(R.string.settings_debug_agent_tip),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
