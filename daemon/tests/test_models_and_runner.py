@@ -1,0 +1,291 @@
+"""Ports of the TS daemon's models/agy-stream tests plus runner coverage for shell/claude/codex/interrupt."""
+
+import asyncio
+import json
+import os
+import unittest
+from pathlib import Path
+
+from helpers import TempHomeTestCase, run_async
+
+from agentsterm_daemon.models import (
+    clear_models_cache_for_tests,
+    parse_agy_models_output,
+    read_claude_models_from_disk,
+    read_codex_models_from_disk,
+)
+from agentsterm_daemon.runner import AgentRunner
+from agentsterm_daemon.store import StateStore
+
+
+class ModelsTest(TempHomeTestCase):
+    def test_parse_agy_models_output_strips_spinner_and_ansi(self):
+        sample = "\n".join([
+            "\r\x1b[36m⠋ Fetching available models...\x1b[0m\r\x1b[2Kgemini-4-neon-high             Gemini 4 Neon (High)",
+            "gemini-4-neon-medium           Gemini 4 Neon (Medium)",
+            "claude-opus-5-5-high           Claude Opus 5.5 (High)",
+            "gemini-4-neon-high             Duplicate Should Be Ignored",
+            "",
+        ])
+        self.assertEqual(parse_agy_models_output(sample), [
+            {"id": "gemini-4-neon-high", "name": "Gemini 4 Neon (High)"},
+            {"id": "gemini-4-neon-medium", "name": "Gemini 4 Neon (Medium)"},
+            {"id": "claude-opus-5-5-high", "name": "Claude Opus 5.5 (High)"},
+        ])
+
+    def test_claude_models_from_catalog_and_settings_with_alias_fallback(self):
+        fallback = read_claude_models_from_disk(self.tmp)
+        self.assertIsNone(fallback["defaultModel"])
+        self.assertEqual([m["id"] for m in fallback["models"]], ["opus", "sonnet", "haiku"])
+
+        catalog_dir = self.tmp / ".claude" / "cache" / "model-catalog"
+        catalog_dir.mkdir(parents=True)
+        (self.tmp / ".claude" / "settings.json").write_text(json.dumps({"model": "claude-sonnet-5-5"}))
+        (catalog_dir / "catalog.json").write_text(json.dumps({"catalog": {"config": {"models": [
+            {"id": "claude-opus-5-5", "name": "Opus 5.5", "description": "Complex work"},
+            {"id": "claude-sonnet-5-5", "name": "Sonnet 5.5", "description": "Fast & balanced"},
+        ]}}}))
+        found = read_claude_models_from_disk(self.tmp)
+        self.assertEqual(found["defaultModel"], "claude-sonnet-5-5")
+        self.assertEqual([(m["id"], m["isDefault"]) for m in found["models"]],
+                         [("claude-opus-5-5", False), ("claude-sonnet-5-5", True)])
+
+    def test_codex_models_filter_hidden_sort_by_priority_read_toml_default(self):
+        codex = self.tmp / ".codex"
+        codex.mkdir()
+        (codex / "config.toml").write_text('model = "gpt-6-astra"\n')
+        (codex / "models_cache.json").write_text(json.dumps({"models": [
+            {"slug": "gpt-6-astra", "display_name": "GPT-6-Astra", "visibility": "list", "supported_in_api": True, "priority": 5},
+            {"slug": "gpt-hidden", "display_name": "Hidden", "visibility": "hide", "supported_in_api": True, "priority": 1},
+            {"slug": "gpt-6.2-sol", "display_name": "GPT-6.2-Sol", "visibility": "list", "supported_in_api": True, "priority": 2},
+        ]}))
+        found = read_codex_models_from_disk(self.tmp)
+        self.assertEqual(found["defaultModel"], "gpt-6-astra")
+        self.assertEqual([m["id"] for m in found["models"]], ["gpt-6.2-sol", "gpt-6-astra"])
+        self.assertTrue(found["models"][1]["isDefault"])
+
+
+class RunnerTest(TempHomeTestCase):
+    def setUp(self):
+        super().setUp()
+        clear_models_cache_for_tests()
+        self.events = []
+
+    def make(self):
+        store = StateStore()
+        return store, AgentRunner(store, self.events.append)
+
+    def run_turn(self, runner, store, tab, prompt, timeout=15.0):
+        async def go():
+            res = runner.start_turn(tab, prompt)
+            await runner.wait_idle(tab["id"], timeout)
+            return res
+        res = run_async(go(), timeout + 5)
+        return res, store.get_message(tab["id"], res["assistantMessage"]["id"])
+
+    def test_agy_native_stream_json_init_tool_text_and_result(self):
+        self.fake_binary("agy", self.emit_lines_script([
+            {"event": "init", "conversation_id": "conv-agy-e2e-99", "init": {"permission_mode": "always-proceed"}},
+            {"event": "step_update", "step_update": {"conversation_id": "conv-agy-e2e-99", "step_index": 0,
+                                                     "state": "DONE", "step_type": "user_input"}},
+            {"event": "step_update", "step_update": {
+                "conversation_id": "conv-agy-e2e-99", "step_index": 1, "state": "ACTIVE", "step_type": "tool",
+                "tool_name": "run_command",
+                "tool_info": {"name": "run_command", "parameters": {"CommandLine": "git status", "toolSummary": "Check git status"}}}},
+            {"event": "step_update", "step_update": {
+                "conversation_id": "conv-agy-e2e-99", "step_index": 1, "state": "DONE", "step_type": "tool",
+                "tool_name": "run_command", "duration_seconds": 0.42,
+                "tool_info": {"name": "run_command", "parameters": {"CommandLine": "git status"},
+                              "output": "On branch main\nnothing to commit"}}},
+            {"event": "step_update", "step_update": {"conversation_id": "conv-agy-e2e-99", "step_index": 2,
+                                                     "state": "ACTIVE", "step_type": "agent_response",
+                                                     "text_delta": "Loud and clear! "}},
+            {"event": "step_update", "step_update": {
+                "conversation_id": "conv-agy-e2e-99", "step_index": 2, "state": "DONE", "step_type": "agent_response",
+                "text_delta": "AgentsTerm is working.\n", "duration_seconds": 1.5,
+                "usage": {"input_tokens": 9127, "output_tokens": 73, "thinking_tokens": 14}}},
+            {"event": "result", "result": {
+                "conversation_id": "conv-agy-e2e-99", "status": "SUCCESS",
+                "response": "Loud and clear! AgentsTerm is working.\n", "duration_seconds": 1.95, "num_turns": 1,
+                "usage": {"input_tokens": 9127, "output_tokens": 73, "thinking_tokens": 14}}},
+        ]))
+        store, runner = self.make()
+        tab = store.create_tab("agy", title="agents-term", cwd=str(self.tmp), permission_mode="full-access")
+        _, msg = self.run_turn(runner, store, tab, "Can you say something?")
+
+        self.assertEqual(msg["status"], "complete")
+        self.assertEqual(msg["text"].strip(), "Loud and clear! AgentsTerm is working.")
+        self.assertEqual(len(msg["toolCalls"]), 1)
+        tool = msg["toolCalls"][0]
+        self.assertEqual((tool["id"], tool["name"], tool["status"], tool["durationMs"]),
+                         ("agy_step_1", "run_command", "done", 420))
+        self.assertIn("On branch main", tool["output"])
+        self.assertEqual(tool["inputSummary"], "git status")
+        self.assertEqual((msg["usage"]["inputTokens"], msg["usage"]["outputTokens"], msg["usage"]["thinkingTokens"],
+                          msg["usage"]["durationMs"]), (9127, 73, 14, 1950))
+        self.assertEqual(store.get_tab(tab["id"])["sessionRef"], {"kind": "agy", "value": "conv-agy-e2e-99"})
+        self.assertTrue(any(e["type"] == "message_delta" and "Loud and clear!" in e.get("textDelta", "")
+                            for e in self.events))
+        self.assertTrue(any(e["type"] == "tool_update" and e["toolCall"]["name"] == "run_command" for e in self.events))
+
+    def test_agy_falls_back_to_result_response_and_resumes_conversation(self):
+        args_log = self.tmp / "args.log"
+        self.fake_binary("agy", self.emit_lines_script([
+            {"event": "init", "conversation_id": "conv-resumed-77"},
+            {"event": "result", "result": {"conversation_id": "conv-resumed-77", "status": "SUCCESS",
+                                           "response": "Fallback response text from result event.",
+                                           "duration_seconds": 0.8, "usage": {"input_tokens": 500, "output_tokens": 25}}},
+        ], args_log))
+        store, runner = self.make()
+        tab = store.create_tab("agy", title="resume-test", cwd=str(self.tmp), permission_mode="full-access")
+        _, msg1 = self.run_turn(runner, store, tab, "First turn")
+        self.assertEqual(msg1["text"], "Fallback response text from result event.")
+        updated = store.get_tab(tab["id"])
+        self.assertEqual(updated["sessionRef"]["value"], "conv-resumed-77")
+        _, msg2 = self.run_turn(runner, store, updated, "Second turn")
+        self.assertEqual(msg2["text"], "Fallback response text from result event.")
+        calls = [json.loads(line) for line in args_log.read_text().splitlines()]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][-1], "--print=First turn")
+        self.assertIn("--dangerously-skip-permissions", calls[0])
+        self.assertIn("--conversation", calls[1])
+        self.assertIn("conv-resumed-77", calls[1])
+
+    def test_model_slash_command_is_local_and_passes_model_on_next_turn(self):
+        args_log = self.tmp / "args.log"
+        self.fake_binary("agy", self.emit_lines_script(
+            [{"event": "result", "result": {"status": "SUCCESS", "response": "ok"}}], args_log))
+        store, runner = self.make()
+        tab = store.create_tab("agy", title="model-test", cwd=str(self.tmp))
+        res = runner.start_turn(tab, "/model gemini-4-neon-xhigh")
+        self.assertEqual(res["assistantMessage"]["status"], "complete")
+        self.assertIn("gemini-4-neon-xhigh", res["assistantMessage"]["text"])
+        self.assertEqual(store.get_tab(tab["id"])["model"], "gemini-4-neon-xhigh")
+
+        self.run_turn(runner, store, store.get_tab(tab["id"]), "Hello")
+        calls = [json.loads(line) for line in args_log.read_text().splitlines()]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][calls[0].index("--model") + 1], "gemini-4-neon-xhigh")
+
+        reset = runner.start_turn(store.get_tab(tab["id"]), "/model default")
+        self.assertRegex(reset["assistantMessage"]["text"].lower(), "reset to cli default")
+        self.assertIsNone(store.get_tab(tab["id"])["model"])
+
+    def test_shell_turn_fences_output_tracks_cwd_and_reports_failures(self):
+        store, runner = self.make()
+        sub = self.tmp / "work"
+        sub.mkdir()
+        tab = store.create_tab("shell", cwd=str(self.tmp))
+        _, msg = self.run_turn(runner, store, tab, f"echo hello; cd {sub}")
+        # The wrapper's printf "\n<marker>" adds a blank line before the fence (same as the TS daemon).
+        self.assertEqual(msg["text"], "```text\nhello\n\n```")
+        self.assertEqual(msg["status"], "complete")
+        self.assertEqual(store.get_tab(tab["id"])["cwd"], str(sub))
+
+        _, msg = self.run_turn(runner, store, store.get_tab(tab["id"]), "true")
+        # Parity with the TS daemon: the wrapper's leading "\n" opens a fence even with no output.
+        self.assertEqual(msg["text"], "```text\n\n```")
+
+        _, msg = self.run_turn(runner, store, store.get_tab(tab["id"]), "echo oops >&2; exit 3")
+        self.assertTrue(msg["text"].startswith("```text\n") and "oops" in msg["text"], msg["text"])
+        self.assertEqual(msg["error"], "Exited with code 3: oops")
+        self.assertEqual(store.get_tab(tab["id"])["status"], "idle")
+
+    def test_claude_stream_json_partials_tools_usage_and_denials(self):
+        args_log = self.tmp / "args.log"
+        self.fake_binary("claude", self.emit_lines_script([
+            {"type": "system", "session_id": "sess-1"},
+            {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "hmm"}}},
+            {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hi "}}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "tu1", "name": "Bash", "input": {"command": "ls -la"}},
+                {"type": "text", "text": "ignored because partial deltas were seen"}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "tu1", "content": [{"type": "text", "text": "file.txt"}]}]}},
+            {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "there"}}},
+            {"type": "result", "result": "Hi there", "usage": {"input_tokens": 10, "output_tokens": 2},
+             "total_cost_usd": 0.01, "duration_ms": 1234,
+             "permission_denials": [{"tool_name": "Write", "tool_input": {"file_path": "/etc/x"}}]},
+        ], args_log))
+        store, runner = self.make()
+        tab = store.create_tab("claude", cwd=str(self.tmp), permission_mode="accept-edits", model="opus")
+        _, msg = self.run_turn(runner, store, tab, "hello")
+        self.assertEqual(msg["text"], "Hi there")
+        self.assertEqual(msg["thinking"], "hmm")
+        self.assertEqual(msg["toolCalls"][0]["output"], "file.txt")
+        self.assertEqual(msg["toolCalls"][0]["inputSummary"], "ls -la")
+        self.assertEqual(msg["usage"], {"inputTokens": 10, "outputTokens": 2, "thinkingTokens": None,
+                                        "costUsd": 0.01, "durationMs": 1234})
+        self.assertEqual(msg["deniedActions"], [{"action": "Write", "displayName": "Write", "detail": "/etc/x"}])
+        t = store.get_tab(tab["id"])
+        self.assertEqual((t["status"], t["statusDetail"]), ("blocked", "Waiting for approval"))
+        self.assertEqual(t["sessionRef"], {"kind": "claude", "value": "sess-1"})
+        argv = json.loads(args_log.read_text().splitlines()[0])
+        self.assertEqual(argv[:2], ["-p", "hello"])
+        self.assertIn("acceptEdits", argv)
+        self.assertEqual(argv[argv.index("--model") + 1], "opus")
+
+    def test_codex_exec_json_items_and_resume_args(self):
+        args_log = self.tmp / "args.log"
+        self.fake_binary("codex", self.emit_lines_script([
+            {"type": "thread.started", "thread_id": "th-9"},
+            {"type": "item.completed", "item": {"id": "r1", "type": "reasoning", "text": "thinking it over"}},
+            {"type": "item.started", "item": {"id": "c1", "type": "command_execution", "command": "ls"}},
+            {"type": "item.completed", "item": {"id": "c1", "type": "command_execution", "command": "ls",
+                                                "aggregated_output": "a\nb", "exit_code": 1}},
+            {"type": "item.completed", "item": {"id": "m1", "type": "agent_message", "text": "Done."}},
+            {"type": "turn.completed", "usage": {"input_tokens": 7, "output_tokens": 3}},
+        ], args_log))
+        store, runner = self.make()
+        tab = store.create_tab("codex", cwd=str(self.tmp), permission_mode="plan")
+        _, msg = self.run_turn(runner, store, tab, "go")
+        self.assertEqual(msg["text"], "Done.")
+        self.assertEqual(msg["thinking"], "thinking it over")
+        self.assertEqual((msg["toolCalls"][0]["status"], msg["toolCalls"][0]["output"]), ("error", "a\nb"))
+        self.assertEqual(msg["usage"]["inputTokens"], 7)
+        _, _ = self.run_turn(runner, store, store.get_tab(tab["id"]), "again")
+        first, second = [json.loads(line) for line in args_log.read_text().splitlines()]
+        self.assertEqual(first, ["exec", "--json", "--skip-git-repo-check", "-C", str(self.tmp), "-s", "read-only", "go"])
+        self.assertEqual(second, ["exec", "resume", "--json", "--skip-git-repo-check", "th-9", "again"])
+
+    def test_interrupt_stops_turn_and_marks_message_interrupted(self):
+        self.fake_binary("agy", "sys.stdout.write(json.dumps({'event':'step_update','step_update':"
+                                "{'step_type':'agent_response','text_delta':'partial'}})+'\\n'); sys.stdout.flush()\n"
+                                "time.sleep(30)\n")
+        store, runner = self.make()
+        tab = store.create_tab("agy", cwd=str(self.tmp))
+
+        async def go():
+            res = runner.start_turn(tab, "long task")
+            for _ in range(200):
+                m = store.get_message(tab["id"], res["assistantMessage"]["id"])
+                if m["text"]:
+                    break
+                await asyncio.sleep(0.02)
+            self.assertTrue(runner.interrupt(tab["id"]))
+            await runner.wait_idle(tab["id"], 10)
+            return res
+
+        res = run_async(go())
+        msg = store.get_message(tab["id"], res["assistantMessage"]["id"])
+        self.assertEqual(msg["status"], "interrupted")
+        self.assertEqual(msg["text"], "partial")
+        self.assertEqual(store.get_tab(tab["id"])["status"], "idle")
+
+    def test_missing_binary_and_state_persistence_roundtrip(self):
+        os.environ["PATH"] = str(self.bin_dir)  # no claude anywhere
+        store, runner = self.make()
+        tab = store.create_tab("claude", cwd=str(self.tmp))
+        res = runner.start_turn(tab, "hi")
+        msg = store.get_message(tab["id"], res["assistantMessage"]["id"])
+        if msg["status"] != "error":
+            self.skipTest("a real claude binary is installed in a system dir")
+        self.assertIn("not found", msg["error"])
+        store.save_now()
+        reloaded = StateStore()
+        self.assertEqual(reloaded.get_tab(tab["id"])["status"], "error")
+        self.assertEqual(len(reloaded.get_messages(tab["id"])), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

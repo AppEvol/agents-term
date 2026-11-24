@@ -206,6 +206,25 @@ class ModelsAndStateTest {
     }
 
     @Test
+    fun bootstrapTargetsPythonDaemonInstaller() {
+        val cmd = buildAgyBootstrapCommand(prompt = "p", daemonPort = 7600)
+        val script = String(
+            Base64.getDecoder().decode(cmd.removePrefix("printf '%s' '").removeSuffix("' | base64 -d | bash -s")),
+            Charsets.UTF_8,
+        )
+        assertTrue(script.contains("\$HOME/.local/share/agentsterm/agents-term/daemon/agentsterm-daemon"))
+        assertTrue(script.contains("python3 \"\$AGENTSTERM_DAEMON\" pairing --host \"\$TS_IP\" --port 7600"))
+        assertFalse(script.contains("agent-terminal/server"))
+        assertFalse(script.contains("node "))
+
+        val prompt = com.example.data.defaultAgyBootstrapPrompt(daemonPort = 7600)
+        assertTrue(prompt.contains("git clone --depth 1 --branch main https://github.com/nedn/agents-term.git"))
+        assertTrue(prompt.contains("bash \"\$HOME/.local/share/agentsterm/agents-term/daemon/install.sh\" --port 7600 --ref main"))
+        assertTrue(prompt.contains("Do not write your own daemon"))
+        assertFalse(prompt.contains("Node.js"))
+    }
+
+    @Test
     fun parseAgyStreamJsonLineHandlesInitToolsDeltasAndResult() {
         assertNull(parseAgyStreamJsonLine(">>> plain shell output"))
 
