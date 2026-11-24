@@ -6,6 +6,7 @@ import com.example.data.AvailableAgentInfo
 import com.example.data.ChatMessage
 import com.example.data.CreateTabRequest
 import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
+import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DeniedAction
@@ -115,6 +116,7 @@ class FakeAgentsTermDaemon(
         tailscaleIp = "127.0.0.1",
         defaultCwd = "/home/ci",
         defaultSystemPrompt = DEFAULT_AGENT_SYSTEM_PROMPT,
+        defaultSystemPromptFullAccess = DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT,
         agents = listOf(
             AvailableAgentInfo(
                 type = "agy",

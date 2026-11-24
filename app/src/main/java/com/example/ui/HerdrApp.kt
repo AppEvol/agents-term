@@ -168,8 +168,15 @@ fun HerdrApp(viewModel: MainViewModel) {
     var showModelPicker by remember { mutableStateOf(false) }
     var showQuickDebugDialog by remember { mutableStateOf(false) }
     var pendingScreenshotBase64 by remember { mutableStateOf<String?>(null) }
-    val defaultSystemPrompt = remember(state.serverInfo?.defaultSystemPrompt) {
-        resolveDefaultSystemPrompt(state.serverInfo)
+    val activeTabDefaultSystemPrompt = remember(
+        state.serverInfo?.defaultSystemPrompt,
+        state.serverInfo?.defaultSystemPromptFullAccess,
+        state.activeTab?.permissionMode,
+    ) {
+        resolveDefaultSystemPrompt(
+            state.serverInfo,
+            permissionMode = state.activeTab?.permissionMode ?: "full-access",
+        )
     }
 
     fun openModelPickerForActiveTab() {
@@ -220,7 +227,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 onChangePermission = { showPermissionDialog = true },
                 onChangeSystemPrompt = { showSystemPromptDialog = true },
                 onChangeModel = { openModelPickerForActiveTab() },
-                defaultSystemPrompt = defaultSystemPrompt,
+                defaultSystemPrompt = activeTabDefaultSystemPrompt,
                 onDeleteTab = { viewModel.deleteTab(it) },
                 onOpenSettings = { viewModel.openConnectionSettings() },
                 onOpenAppSettings = { viewModel.openAppSettings() },
@@ -331,7 +338,9 @@ fun HerdrApp(viewModel: MainViewModel) {
                 activeTabCwd = state.activeTab?.cwd,
                 homeCwd = state.serverInfo?.defaultCwd,
             ),
-            defaultSystemPrompt = defaultSystemPrompt,
+            defaultSystemPromptForMode = { mode ->
+                resolveDefaultSystemPrompt(state.serverInfo, permissionMode = mode)
+            },
             onLoadInitialDirectories = { path -> viewModel.loadInitialDirectories(path) },
             onLoadDirectories = { path -> viewModel.loadDirectories(path) },
             onDismiss = { showNewTabSheet = false },
@@ -456,6 +465,7 @@ fun HerdrApp(viewModel: MainViewModel) {
 
     if (showSystemPromptDialog && state.activeTab != null && state.activeTab!!.agent != "shell") {
         val current = state.activeTab!!
+        val tabDefaultPrompt = resolveDefaultSystemPrompt(state.serverInfo, permissionMode = current.permissionMode)
         var includePrompt by remember(current.id, current.systemPrompt) {
             mutableStateOf(!current.systemPrompt.isNullOrBlank())
         }
@@ -492,7 +502,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                             onCheckedChange = { checked ->
                                 includePrompt = checked
                                 if (checked && promptInput.isBlank()) {
-                                    promptInput = defaultSystemPrompt
+                                    promptInput = tabDefaultPrompt
                                 }
                             },
                             modifier = Modifier.testTag("edit_tab_system_prompt_switch"),
@@ -513,9 +523,9 @@ fun HerdrApp(viewModel: MainViewModel) {
                                 .fillMaxWidth()
                                 .testTag("edit_tab_system_prompt_input"),
                         )
-                        if (promptInput.trim() != defaultSystemPrompt.trim()) {
+                        if (promptInput.trim() != tabDefaultPrompt.trim()) {
                             TextButton(
-                                onClick = { promptInput = defaultSystemPrompt },
+                                onClick = { promptInput = tabDefaultPrompt },
                                 modifier = Modifier.testTag("edit_tab_system_prompt_reset"),
                             ) {
                                 Text(stringResource(R.string.new_tab_system_prompt_reset))

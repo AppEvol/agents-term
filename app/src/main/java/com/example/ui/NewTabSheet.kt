@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.AvailableAgentInfo
 import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
+import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.FsListResponse
 import com.example.data.resolveAgentModelCatalog
 import com.example.ui.theme.MonoFontFamily
@@ -68,7 +69,9 @@ import kotlinx.coroutines.launch
 fun NewTabSheet(
     agents: List<AvailableAgentInfo>,
     defaultCwd: String,
-    defaultSystemPrompt: String = DEFAULT_AGENT_SYSTEM_PROMPT,
+    defaultSystemPromptForMode: (String) -> String = { mode ->
+        if (mode == "full-access") DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT else DEFAULT_AGENT_SYSTEM_PROMPT
+    },
     onLoadDirectories: suspend (String?) -> Result<FsListResponse>,
     onDismiss: () -> Unit,
     onCreate: (
@@ -110,7 +113,7 @@ fun NewTabSheet(
         var permissionMode by remember { mutableStateOf("full-access") }
         var customTitle by remember { mutableStateOf("") }
         var includeSystemPrompt by remember { mutableStateOf(true) }
-        var systemPromptText by remember { mutableStateOf(defaultSystemPrompt) }
+        var systemPromptText by remember { mutableStateOf(defaultSystemPromptForMode("full-access")) }
         var showSystemPromptEditor by remember { mutableStateOf(false) }
         var fsListing by remember { mutableStateOf<FsListResponse?>(null) }
         var fsError by remember { mutableStateOf<String?>(null) }
@@ -362,8 +365,17 @@ fun NewTabSheet(
                         for ((value, label) in modes) {
                             FilterChip(
                                 selected = permissionMode == value,
-                                onClick = { permissionMode = value },
+                                onClick = {
+                                    if (permissionMode != value) {
+                                        val prevDefault = defaultSystemPromptForMode(permissionMode).trim()
+                                        permissionMode = value
+                                        if (systemPromptText.trim() == prevDefault) {
+                                            systemPromptText = defaultSystemPromptForMode(value)
+                                        }
+                                    }
+                                },
                                 label = { Text(label) },
+                                modifier = Modifier.testTag("new_tab_permission_$value"),
                             )
                         }
                     }
@@ -372,9 +384,10 @@ fun NewTabSheet(
 
             // System prompt (coding agents only)
             if (selectedAgent != "shell") {
+                val activeDefaultSystemPrompt = defaultSystemPromptForMode(permissionMode)
                 val trimmedPrompt = systemPromptText.trim()
                 val isEmptyEffective = !includeSystemPrompt || trimmedPrompt.isEmpty()
-                val isDefaultPrompt = includeSystemPrompt && trimmedPrompt == defaultSystemPrompt.trim()
+                val isDefaultPrompt = includeSystemPrompt && trimmedPrompt == activeDefaultSystemPrompt.trim()
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surfaceContainer,
@@ -411,7 +424,7 @@ fun NewTabSheet(
                                 onCheckedChange = { checked ->
                                     includeSystemPrompt = checked
                                     if (checked && systemPromptText.isBlank()) {
-                                        systemPromptText = defaultSystemPrompt
+                                        systemPromptText = activeDefaultSystemPrompt
                                     }
                                     if (!checked) {
                                         showSystemPromptEditor = false
@@ -451,7 +464,7 @@ fun NewTabSheet(
                                 }
                                 if (!isDefaultPrompt) {
                                     TextButton(
-                                        onClick = { systemPromptText = defaultSystemPrompt },
+                                        onClick = { systemPromptText = activeDefaultSystemPrompt },
                                         modifier = Modifier.testTag("new_tab_system_prompt_reset"),
                                     ) {
                                         Text(stringResource(R.string.new_tab_system_prompt_reset))

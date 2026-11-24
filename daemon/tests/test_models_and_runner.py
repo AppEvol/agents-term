@@ -467,10 +467,15 @@ class RunnerTest(TempHomeTestCase):
     def test_default_system_prompt_references_embedded_live_debugging_doc(self):
         doc_path = live_debugging_doc_path()
         self.assertTrue(doc_path.is_file(), f"Missing live debugging doc: {doc_path}")
-        prompt = default_system_prompt()
+        prompt = default_system_prompt("default")
         self.assertIn("mobile", prompt.lower())
         self.assertIn("app_state_cli", prompt)
         self.assertIn(str(doc_path), prompt)
+        self.assertNotIn("close this tab", prompt.lower())
+
+        full_access_prompt = default_system_prompt("full-access")
+        self.assertTrue(full_access_prompt.startswith(prompt))
+        self.assertIn("close this tab", full_access_prompt.lower())
 
     def test_system_prompt_passed_to_claude_codex_agy_and_supports_empty(self):
         import tomllib

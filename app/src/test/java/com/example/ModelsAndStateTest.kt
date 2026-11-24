@@ -7,6 +7,7 @@ import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
 import com.example.data.CreateTabRequest
 import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
+import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DebugRecorder
@@ -741,13 +742,32 @@ class ModelsAndStateTest {
         assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("mobile", ignoreCase = true))
         assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("app_state_cli"))
         assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("docs/live-debugging.md"))
+        assertFalse(DEFAULT_AGENT_SYSTEM_PROMPT.contains("close this tab", ignoreCase = true))
+        assertTrue(DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT.contains("close this tab", ignoreCase = true))
 
-        assertEquals(DEFAULT_AGENT_SYSTEM_PROMPT, resolveDefaultSystemPrompt(null))
-        assertEquals(DEFAULT_AGENT_SYSTEM_PROMPT, resolveDefaultSystemPrompt(ServerInfo(defaultSystemPrompt = "   ")))
+        assertEquals(DEFAULT_AGENT_SYSTEM_PROMPT, resolveDefaultSystemPrompt(null, "default"))
+        assertEquals(DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT, resolveDefaultSystemPrompt(null, "full-access"))
+        assertEquals(DEFAULT_AGENT_SYSTEM_PROMPT, resolveDefaultSystemPrompt(ServerInfo(defaultSystemPrompt = "   "), "plan"))
         assertEquals(
             "Daemon custom default",
-            resolveDefaultSystemPrompt(ServerInfo(defaultSystemPrompt = "  Daemon custom default  ")),
+            resolveDefaultSystemPrompt(ServerInfo(defaultSystemPrompt = "  Daemon custom default  "), "accept-edits"),
         )
+        assertEquals(
+            "Daemon full access default",
+            resolveDefaultSystemPrompt(
+                ServerInfo(
+                    defaultSystemPrompt = "Daemon custom default",
+                    defaultSystemPromptFullAccess = "  Daemon full access default  ",
+                ),
+                "full-access",
+            ),
+        )
+        val fallbackFullAccess = resolveDefaultSystemPrompt(
+            ServerInfo(defaultSystemPrompt = "Daemon custom default"),
+            "full-access",
+        )
+        assertTrue(fallbackFullAccess.startsWith("Daemon custom default"))
+        assertTrue(fallbackFullAccess.contains("close this tab", ignoreCase = true))
 
         val snapshotWithPrompt = decodeHerdrJson<WsServerEnvelope>(
             """
@@ -756,7 +776,8 @@ class ModelsAndStateTest {
               "server": {
                 "version": "0.2.0",
                 "hostname": "vm",
-                "defaultSystemPrompt": "From daemon"
+                "defaultSystemPrompt": "From daemon",
+                "defaultSystemPromptFullAccess": "From daemon full access"
               },
               "tabs": [
                 {
@@ -771,6 +792,7 @@ class ModelsAndStateTest {
             """.trimIndent()
         )
         assertEquals("From daemon", snapshotWithPrompt.server?.defaultSystemPrompt)
+        assertEquals("From daemon full access", snapshotWithPrompt.server?.defaultSystemPromptFullAccess)
         assertEquals("Per-tab prompt", snapshotWithPrompt.tabs?.single()?.systemPrompt)
 
         val createEmptyJson = encodeHerdrJson(CreateTabRequest(agent = "claude", systemPrompt = ""))

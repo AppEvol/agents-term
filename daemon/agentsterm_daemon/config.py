@@ -32,16 +32,25 @@ def live_debugging_doc_path() -> Path:
     return repo_root() / "docs" / "live-debugging.md"
 
 
-def default_system_prompt() -> str:
+FULL_ACCESS_COMPLETION_INSTRUCTION = (
+    "When the user asks you to accomplish a task in this tab, once the task is complete "
+    "clearly let them know it is finished and that they can close this tab."
+)
+
+
+def default_system_prompt(permission_mode: Optional[str] = None) -> str:
     """Default system prompt offered for new coding-agent tabs."""
     doc_path = live_debugging_doc_path()
-    return (
+    base = (
         "You are responding inside AgentsTerm, a mobile app terminal/chat view on a phone or tablet. "
         "Keep formatting mobile-friendly (concise paragraphs, short lists, avoid overly wide tables or ASCII art).\n\n"
         "Live app debugging: when troubleshooting AgentsTerm itself, you can inspect the live phone app "
         "(state, logs, logcat, crash traces, screenshots) via `app_state_cli` or check uploaded dumps in "
         f"`~/.config/herdr-mobile/debug-dumps/latest/`. For commands, prerequisites, and rules, read `{doc_path}`."
     )
+    if permission_mode == "full-access":
+        return f"{base}\n\n{FULL_ACCESS_COMPLETION_INSTRUCTION}"
+    return base
 
 
 def daemon_commit() -> Optional[str]:
@@ -246,6 +255,7 @@ def build_server_info(bind_host: Optional[str] = None) -> Dict[str, Any]:
         "hostname": socket.gethostname(),
         "tailscaleIp": tailscale_ip,
         "defaultCwd": str(home_dir()),
-        "defaultSystemPrompt": default_system_prompt(),
+        "defaultSystemPrompt": default_system_prompt("default"),
+        "defaultSystemPromptFullAccess": default_system_prompt("full-access"),
         "agents": detect_available_agents(),
     }

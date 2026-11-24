@@ -134,6 +134,8 @@ class DaemonE2ETest(unittest.TestCase):
         status, info = d.api("GET", "/api/info")
         self.assertEqual((status, info["version"]), (200, "0.2.0"))
         self.assertIn("docs/live-debugging.md", info["defaultSystemPrompt"])
+        self.assertNotIn("close this tab", info["defaultSystemPrompt"].lower())
+        self.assertIn("close this tab", info["defaultSystemPromptFullAccess"].lower())
         self.assertEqual({a["type"] for a in info["agents"]}, {"agy", "claude", "codex", "shell"})
         self.assertEqual(d.api("POST", "/api/tabs", {})[1], {"error": "Missing required field: agent"})
 
