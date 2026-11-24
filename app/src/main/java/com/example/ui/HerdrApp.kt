@@ -91,6 +91,7 @@ fun HerdrApp(viewModel: MainViewModel) {
     val showSettings by viewModel.showSettingsScreen.collectAsStateWithLifecycle()
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val pendingPairing by viewModel.pendingPairingConfig.collectAsStateWithLifecycle()
+    val pendingSshAutofill by viewModel.pendingSshAutofill.collectAsStateWithLifecycle()
     val sshProfile by viewModel.sshProfile.collectAsStateWithLifecycle()
     val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle()
     val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
@@ -101,6 +102,7 @@ fun HerdrApp(viewModel: MainViewModel) {
         val hasLastCrash by viewModel.hasLastCrash.collectAsStateWithLifecycle()
         SettingsScreen(
             workspaceState = state,
+            sshProfile = sshProfile,
             debugSettings = debugSettings,
             uploadState = debugUploadState,
             eventCount = debugEventCount,
@@ -126,6 +128,7 @@ fun HerdrApp(viewModel: MainViewModel) {
             sshProfile = sshProfile,
             bootstrapState = bootstrapState,
             pendingPairing = pendingPairing,
+            pendingSshAutofill = pendingSshAutofill,
             isTesting = isTesting,
             errorMessage = state.connectionError,
             canCancel = state.config.isValid,
@@ -135,6 +138,7 @@ fun HerdrApp(viewModel: MainViewModel) {
             onCancelSshBootstrap = { viewModel.cancelSshBootstrap() },
             onTrustNewHostKeyAndRetry = { viewModel.trustChangedHostKeyAndRetry(it) },
             onConsumedPendingPairing = { viewModel.clearPendingPairingConfig() },
+            onConsumedPendingSshAutofill = { viewModel.clearPendingSshAutofill() },
             onOpenAppSettings = { viewModel.openAppSettings() },
         )
         return

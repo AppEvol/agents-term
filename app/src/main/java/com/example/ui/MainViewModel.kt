@@ -24,6 +24,7 @@ import com.example.data.SettingsStore
 import com.example.data.SshBootstrapClient
 import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
+import com.example.data.SshSetupAutofill
 import com.example.data.UpdateTabRequest
 import com.example.data.WorkspaceState
 import com.example.data.buildDeviceInfoSummary
@@ -32,6 +33,7 @@ import com.example.data.cleanHost
 import com.example.data.collectAppLogcat
 import com.example.data.exportDebugBundleZip
 import com.example.data.generateDebugDumpId
+import com.example.data.parseSshSetupUri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -72,6 +74,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _pendingPairingConfig = MutableStateFlow<ConnectionConfig?>(null)
     val pendingPairingConfig: StateFlow<ConnectionConfig?> = _pendingPairingConfig.asStateFlow()
 
+    private val _pendingSshAutofill = MutableStateFlow<SshSetupAutofill?>(null)
+    val pendingSshAutofill: StateFlow<SshSetupAutofill?> = _pendingSshAutofill.asStateFlow()
+
     private val _sshProfile = MutableStateFlow(settings.loadSshProfile())
     val sshProfile: StateFlow<SshProfile> = _sshProfile.asStateFlow()
 
@@ -111,6 +116,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun handleIncomingPairingUri(uri: String) {
+        val sshAutofill = parseSshSetupUri(uri)
+        if (sshAutofill != null) {
+            debugRecorder.record(
+                category = "ui",
+                event = "ssh_setup_uri_received",
+                detail = "Parsed SSH setup URI for ${sshAutofill.username ?: "(no-user)"}@${sshAutofill.host}",
+            )
+            _pendingSshAutofill.value = sshAutofill
+            _showSettingsScreen.value = false
+            _showConnectScreen.value = true
+            return
+        }
         val parsed = ConnectionConfig.parsePairingUri(uri) ?: return
         debugRecorder.record("ui", "pairing_uri_received", "Parsed pairing URI for ${parsed.host}:${parsed.port}")
         _pendingPairingConfig.value = parsed
@@ -121,6 +138,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearPendingPairingConfig() {
         _pendingPairingConfig.value = null
+    }
+
+    fun clearPendingSshAutofill() {
+        _pendingSshAutofill.value = null
     }
 
     fun openConnectionSettings() {

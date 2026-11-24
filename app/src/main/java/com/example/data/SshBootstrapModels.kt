@@ -1,5 +1,7 @@
 package com.example.data
 
+import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.Locale
 
 enum class SshAuthMethod(val storageKey: String) {
@@ -25,6 +27,42 @@ data class SshProfile(
     val authMethod: SshAuthMethod = SshAuthMethod.TAILSCALE_SSH,
     val daemonPort: Int = 7501,
     val isBootstrapped: Boolean = false,
+) {
+    /**
+     * Builds a non-secret `agentsterm://ssh?...` setup link that can be bookmarked or pasted
+     * after a fresh reinstall to autofill the initial SSH setup fields.
+     */
+    fun toSetupUri(scheme: String = "agentsterm"): String? {
+        val cleanedHost = cleanHost(host)
+        if (cleanedHost.isBlank()) return null
+        val params = buildList {
+            add("host=${URLEncoder.encode(cleanedHost, "UTF-8")}")
+            val cleanUser = username.trim()
+            if (cleanUser.isNotBlank()) {
+                add("user=${URLEncoder.encode(cleanUser, "UTF-8")}")
+            }
+            if (sshPort in 1..65535 && sshPort != 22) {
+                add("sshPort=$sshPort")
+            }
+            if (daemonPort in 1..65535 && daemonPort != 7501) {
+                add("daemonPort=$daemonPort")
+            }
+            add("auth=${URLEncoder.encode(authMethod.storageKey, "UTF-8")}")
+        }
+        return "$scheme://ssh?${params.joinToString("&")}"
+    }
+}
+
+/**
+ * Parsed initial SSH setup values for autofilling ConnectScreen from a deep link,
+ * clipboard `ssh` command, or `user@host[:port]` target string.
+ */
+data class SshSetupAutofill(
+    val host: String,
+    val username: String? = null,
+    val sshPort: Int? = null,
+    val daemonPort: Int? = null,
+    val authMethod: SshAuthMethod? = null,
 )
 
 data class SshBootstrapConfig(
@@ -347,4 +385,160 @@ fun extractPairingUriFromOutput(output: String): Pair<String, ConnectionConfig>?
         }
     }
     return null
+}
+
+/**
+ * Parses an `agentsterm://ssh?...` or `herdr://ssh?...` deep link for autofilling SSH setup.
+ */
+fun parseSshSetupUri(raw: String): SshSetupAutofill? {
+    val trimmed = raw.trim()
+    val validPrefix = trimmed.startsWith("agentsterm://ssh?", ignoreCase = true) ||
+        trimmed.startsWith("herdr://ssh?", ignoreCase = true)
+    if (!validPrefix) return null
+    val queryIdx = trimmed.indexOf('?')
+    if (queryIdx < 0) return null
+
+    val query = trimmed.substring(queryIdx + 1)
+    val params = mutableMapOf<String, String>()
+    for (part in query.split('&')) {
+        val eq = part.indexOf('=')
+        if (eq > 0) {
+            val k = runCatching { URLDecoder.decode(part.substring(0, eq), "UTF-8") }.getOrNull() ?: continue
+            val v = runCatching { URLDecoder.decode(part.substring(eq + 1), "UTF-8") }.getOrNull() ?: continue
+            params[k] = v
+        }
+    }
+
+    val host = cleanHost(params["host"].orEmpty())
+    if (!isValidHost(host)) return null
+
+    val rawUser = (params["user"] ?: params["username"])?.trim()?.takeIf { it.isNotBlank() }
+    if (rawUser != null && !isValidUsername(rawUser)) return null
+
+    val sshPort = (params["sshPort"] ?: params["port"])?.toIntOrNull()?.takeIf { it in 1..65535 }
+    val daemonPort = params["daemonPort"]?.toIntOrNull()?.takeIf { it in 1..65535 }
+    val rawAuth = (params["auth"] ?: params["authMethod"])?.trim()?.takeIf { it.isNotBlank() }
+    val authMethod = rawAuth?.let { key ->
+        SshAuthMethod.entries.firstOrNull { it.storageKey.equals(key, ignoreCase = true) }
+    }
+
+    return SshSetupAutofill(
+        host = host,
+        username = rawUser,
+        sshPort = sshPort,
+        daemonPort = daemonPort,
+        authMethod = authMethod,
+    )
+}
+
+/**
+ * Parses common SSH setup inputs for one-tap clipboard autofill or smart host-field paste:
+ * - `agentsterm://ssh?host=...&user=...&sshPort=22&daemonPort=7501&auth=tailscale_ssh`
+ * - `herdr://ssh?...`
+ * - `ssh://user@host:2222`
+ * - `ssh [-p 2222] [-l user] [user@]host`
+ * - `user@host` or `user@host:2222`
+ */
+fun parseSshSetupInput(raw: String): SshSetupAutofill? {
+    val trimmed = raw.trim().trim('`', '"', '\'')
+    if (trimmed.isBlank()) return null
+
+    parseSshSetupUri(trimmed)?.let { return it }
+
+    // Standard ssh://[user@]host[:port] URI
+    if (trimmed.startsWith("ssh://", ignoreCase = true)) {
+        val remainder = trimmed.substring(6).substringBefore('/').substringBefore('?').trim()
+        return parseUserHostTarget(remainder, requireUserOrPort = false)
+    }
+
+    // CLI form: ssh [options] [user@]host
+    val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+    if (tokens.isNotEmpty() && tokens.first().equals("ssh", ignoreCase = true)) {
+        var sshPort: Int? = null
+        var flagUser: String? = null
+        var targetToken: String? = null
+
+        val flagsWithValue = setOf(
+            "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J",
+            "-L", "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w",
+        )
+
+        var idx = 1
+        while (idx < tokens.size) {
+            val tok = tokens[idx]
+            when {
+                tok == "-p" && idx + 1 < tokens.size -> {
+                    sshPort = tokens[idx + 1].toIntOrNull()?.takeIf { it in 1..65535 }
+                    idx += 2
+                }
+                tok.startsWith("-p") && tok.length > 2 -> {
+                    sshPort = tok.substring(2).toIntOrNull()?.takeIf { it in 1..65535 }
+                    idx++
+                }
+                tok == "-l" && idx + 1 < tokens.size -> {
+                    flagUser = tokens[idx + 1].trim()
+                    idx += 2
+                }
+                tok.startsWith("-l") && tok.length > 2 -> {
+                    flagUser = tok.substring(2).trim()
+                    idx++
+                }
+                tok in flagsWithValue && idx + 1 < tokens.size -> {
+                    idx += 2
+                }
+                tok.startsWith("-") -> {
+                    idx++
+                }
+                targetToken == null -> {
+                    targetToken = tok
+                    idx++
+                }
+                else -> idx++
+            }
+        }
+
+        val target = targetToken ?: return null
+        val parsed = parseUserHostTarget(target, requireUserOrPort = false) ?: return null
+        val resolvedUser = parsed.username ?: flagUser?.takeIf { isValidUsername(it) }
+        return parsed.copy(
+            username = resolvedUser,
+            sshPort = sshPort ?: parsed.sshPort,
+        )
+    }
+
+    // Shorthand user@host or user@host:port
+    return parseUserHostTarget(trimmed, requireUserOrPort = true)
+}
+
+private fun parseUserHostTarget(raw: String, requireUserOrPort: Boolean): SshSetupAutofill? {
+    val cleaned = raw.trim()
+    if (cleaned.isBlank() || cleaned.any { it.isWhitespace() }) return null
+
+    val atIdx = cleaned.lastIndexOf('@')
+    val username = if (atIdx >= 0) cleaned.substring(0, atIdx).trim() else null
+    val hostAndPort = if (atIdx >= 0) cleaned.substring(atIdx + 1).trim() else cleaned
+
+    if (username != null && !isValidUsername(username)) return null
+
+    var host = hostAndPort
+    var sshPort: Int? = null
+    val colonCount = hostAndPort.count { it == ':' }
+    if (colonCount == 1) {
+        val candidateHost = hostAndPort.substringBefore(':')
+        val candidatePort = hostAndPort.substringAfter(':').toIntOrNull()
+        if (candidatePort != null && candidatePort in 1..65535) {
+            host = candidateHost
+            sshPort = candidatePort
+        }
+    }
+
+    host = cleanHost(host)
+    if (!isValidHost(host)) return null
+    if (requireUserOrPort && username == null) return null
+
+    return SshSetupAutofill(
+        host = host,
+        username = username,
+        sshPort = sshPort,
+    )
 }

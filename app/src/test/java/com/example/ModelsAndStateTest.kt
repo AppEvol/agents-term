@@ -5,7 +5,9 @@ import com.example.data.ConnectionConfig
 import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DebugRecorder
+import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
+import com.example.data.SshProfile
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
 import com.example.data.WorkspaceState
@@ -16,6 +18,8 @@ import com.example.data.decodeHerdrJson
 import com.example.data.encodeBase64Utf8
 import com.example.data.extractPairingUriFromOutput
 import com.example.data.parseAgyStreamJsonLine
+import com.example.data.parseSshSetupInput
+import com.example.data.parseSshSetupUri
 import com.example.data.reduceWorkspaceEvent
 import com.example.data.sanitizeDebugText
 import org.junit.Assert.assertEquals
@@ -308,5 +312,80 @@ class ModelsAndStateTest {
         assertTrue(resp.ok)
         assertEquals("abcd1234", resp.dumpId)
         assertEquals(2, resp.files.size)
+    }
+
+    @Test
+    fun sshSetupUriRoundTripAndDoesNotCollideWithPairingUri() {
+        val profile = SshProfile(
+            host = "100.71.219.26",
+            sshPort = 2222,
+            username = "ned",
+            authMethod = SshAuthMethod.PRIVATE_KEY,
+            daemonPort = 7502,
+        )
+        val uri = profile.toSetupUri()
+        assertNotNull(uri)
+        assertTrue(uri!!.startsWith("agentsterm://ssh?"))
+        assertNull(ConnectionConfig.parsePairingUri(uri))
+
+        val parsed = parseSshSetupUri(uri)
+        assertNotNull(parsed)
+        assertEquals("100.71.219.26", parsed!!.host)
+        assertEquals("ned", parsed.username)
+        assertEquals(2222, parsed.sshPort)
+        assertEquals(7502, parsed.daemonPort)
+        assertEquals(SshAuthMethod.PRIVATE_KEY, parsed.authMethod)
+
+        val herdrUri = parseSshSetupUri(
+            "herdr://ssh?host=ned-vm&username=ubuntu&port=2200&daemonPort=7505&authMethod=password"
+        )
+        assertNotNull(herdrUri)
+        assertEquals("ned-vm", herdrUri!!.host)
+        assertEquals("ubuntu", herdrUri.username)
+        assertEquals(2200, herdrUri.sshPort)
+        assertEquals(7505, herdrUri.daemonPort)
+        assertEquals(SshAuthMethod.PASSWORD, herdrUri.authMethod)
+
+        // Reject shell-injection payloads and non-SSH schemes
+        assertNull(parseSshSetupUri("agentsterm://ssh?host=100.1.2.3;rm&user=ned"))
+        assertNull(parseSshSetupUri("agentsterm://ssh?host=100.1.2.3&user=ned%20&&%20id"))
+        assertNull(parseSshSetupUri("herdr://connect?host=100.1.2.3&port=7501&token=abc"))
+    }
+
+    @Test
+    fun parseSshSetupInputHandlesCliCommandsSshUriAndUserAtHost() {
+        val cliSimple = parseSshSetupInput("ssh ned@100.71.219.26")
+        assertNotNull(cliSimple)
+        assertEquals("100.71.219.26", cliSimple!!.host)
+        assertEquals("ned", cliSimple.username)
+        assertNull(cliSimple.sshPort)
+
+        val cliWithFlags = parseSshSetupInput("ssh -p 2222 -i ~/.ssh/id_ed25519 ned@ned-vm.tail1234.ts.net")
+        assertNotNull(cliWithFlags)
+        assertEquals("ned-vm.tail1234.ts.net", cliWithFlags!!.host)
+        assertEquals("ned", cliWithFlags.username)
+        assertEquals(2222, cliWithFlags.sshPort)
+
+        val cliCompactFlags = parseSshSetupInput("ssh -p2200 -l ubuntu 100.71.219.26")
+        assertNotNull(cliCompactFlags)
+        assertEquals("100.71.219.26", cliCompactFlags!!.host)
+        assertEquals("ubuntu", cliCompactFlags.username)
+        assertEquals(2200, cliCompactFlags.sshPort)
+
+        val sshScheme = parseSshSetupInput("ssh://ned@100.71.219.26:2222")
+        assertNotNull(sshScheme)
+        assertEquals("100.71.219.26", sshScheme!!.host)
+        assertEquals("ned", sshScheme.username)
+        assertEquals(2222, sshScheme.sshPort)
+
+        val shorthand = parseSshSetupInput("ned@100.71.219.26:2201")
+        assertNotNull(shorthand)
+        assertEquals("100.71.219.26", shorthand!!.host)
+        assertEquals("ned", shorthand.username)
+        assertEquals(2201, shorthand.sshPort)
+
+        // Plain hostname/IP without user@ or ssh prefix should not trigger false autofill
+        assertNull(parseSshSetupInput("100.71.219.26"))
+        assertNull(parseSshSetupInput("ned-vm"))
     }
 }

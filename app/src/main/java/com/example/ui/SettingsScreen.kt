@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Hub
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -81,6 +82,7 @@ import com.example.data.ConnectionState
 import com.example.data.DebugDumpUploadState
 import com.example.data.DebugEvent
 import com.example.data.DebugSharingSettings
+import com.example.data.SshProfile
 import com.example.data.WorkspaceState
 import com.example.data.captureWindowScreenshotBase64
 import com.example.data.shareDebugBundleFile
@@ -104,6 +106,7 @@ internal tailrec fun Context.findActivityOrNull(): Activity? = when (this) {
 @Composable
 fun SettingsScreen(
     workspaceState: WorkspaceState,
+    sshProfile: SshProfile = SshProfile(),
     debugSettings: DebugSharingSettings,
     uploadState: DebugDumpUploadState,
     eventCount: Int,
@@ -253,6 +256,36 @@ fun SettingsScreen(
                                 .testTag("settings_open_vm_connection"),
                         ) {
                             Text(stringResource(R.string.settings_vm_open_button))
+                        }
+
+                        val setupAutofillLink = remember(sshProfile, workspaceState.config) {
+                            sshProfile.toSetupUri()
+                                ?: workspaceState.config.takeIf { it.isValid }?.let {
+                                    SshProfile(host = it.host, daemonPort = it.port).toSetupUri()
+                                }
+                        }
+                        if (!setupAutofillLink.isNullOrBlank()) {
+                            val copiedLinkMsg = stringResource(R.string.settings_vm_copy_setup_link_copied)
+                            OutlinedButton(
+                                onClick = {
+                                    clipboard.setText(AnnotatedString(setupAutofillLink))
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar(copiedLinkMsg)
+                                    }
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("settings_copy_setup_link_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Link,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(17.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.settings_vm_copy_setup_link))
+                            }
                         }
                     }
                 }

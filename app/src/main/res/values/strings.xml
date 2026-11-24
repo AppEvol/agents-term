@@ -93,10 +93,17 @@
     <string name="ssh_phase_verifying">Pairing with AgentsTerm VM daemon…</string>
     <string name="ssh_phase_succeeded">VM ready — opening workspace</string>
     <string name="ssh_already_bootstrapped">Previously bootstrapped via agy</string>
+    <string name="ssh_paste_autofill">Autofill from Clipboard</string>
+    <string name="ssh_paste_success">Autofilled SSH setup from clipboard</string>
+    <string name="ssh_paste_switched_direct">Detected pairing URI — switched to Direct mode</string>
+    <string name="ssh_paste_invalid">Clipboard does not contain an agentsterm://ssh? URI, ssh user@host command, or user@host target</string>
+    <string name="ssh_inline_autofilled">Autofilled host &amp; username from pasted target</string>
     <string name="action_app_settings">Settings &amp; Debug</string>
     <string name="settings_title">Settings</string>
     <string name="settings_vm_section_title">VM Connection</string>
     <string name="settings_vm_open_button">Edit VM Connection</string>
+    <string name="settings_vm_copy_setup_link">Copy Setup Autofill Link</string>
+    <string name="settings_vm_copy_setup_link_copied">Copied setup autofill link — bookmark or paste after reinstalling</string>
     <string name="settings_debug_section_title">Debug Log Sharing</string>
     <string name="settings_debug_enable_title">Share debug logs to VM</string>
     <string name="settings_debug_enable_subtitle">Record WebSocket, HTTP, UI, and crash diagnostics so you can upload dumps straight to your connected VM for Antigravity (agy) to inspect.</string>

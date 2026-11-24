@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
@@ -368,6 +369,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("overflow_menu_button").performClick()
         composeRule.onNodeWithTag("menu_app_settings").performClick()
         waitForTag("debug_sharing_switch")
+        composeRule.onNodeWithTag("settings_copy_setup_link_button").performScrollTo().assertIsDisplayed()
 
         // Enable Debug Sharing to VM and upload a dump with a note
         composeRule.onNodeWithTag("debug_sharing_switch").performScrollTo().performClick()
@@ -476,5 +478,35 @@ class AgentsTermE2ETest {
 
         waitForText("Can you say something?")
         waitForText("Repository is clean on main branch.")
+    }
+
+    @Test
+    fun sshSetupDeepLinkAndSmartPasteAutofillConnectScreen() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val sshDeepLink = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("agentsterm://ssh?host=100.71.219.26&user=ned&sshPort=2222&daemonPort=7502&auth=password"),
+        ).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(sshDeepLink)
+
+        // Deep link opens ConnectScreen in SSH mode with every field autofilled
+        waitForTag("ssh_host_input")
+        composeRule.onNodeWithTag("ssh_autofill_clipboard_button").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("ssh_host_input").performScrollTo().assertTextContains("100.71.219.26")
+        composeRule.onNodeWithTag("ssh_username_input").performScrollTo().assertTextContains("ned")
+        composeRule.onNodeWithTag("ssh_port_input").performScrollTo().assertTextContains("2222")
+        composeRule.onNodeWithTag("ssh_daemon_port_input").performScrollTo().assertTextContains("7502")
+        composeRule.onNodeWithTag("ssh_password_input").performScrollTo().assertIsDisplayed()
+
+        // Pasting an ssh CLI target directly into the host field splits and autofills host, user, and port
+        composeRule.onNodeWithTag("ssh_host_input")
+            .performScrollTo()
+            .performTextReplacement("ssh -p 2200 alice@dev-vm.ts.net")
+
+        composeRule.onNodeWithTag("ssh_host_input").performScrollTo().assertTextContains("dev-vm.ts.net")
+        composeRule.onNodeWithTag("ssh_username_input").performScrollTo().assertTextContains("alice")
+        composeRule.onNodeWithTag("ssh_port_input").performScrollTo().assertTextContains("2200")
     }
 }

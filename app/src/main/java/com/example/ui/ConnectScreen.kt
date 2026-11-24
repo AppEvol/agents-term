@@ -69,17 +69,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalAutofillManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -94,7 +99,9 @@ import com.example.data.ConnectionConfig
 import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
+import com.example.data.SshSetupAutofill
 import com.example.data.defaultAgyBootstrapPrompt
+import com.example.data.parseSshSetupInput
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkOnSurface
 import com.example.ui.theme.HerdrAmber
@@ -115,6 +122,7 @@ fun ConnectScreen(
     sshProfile: SshProfile,
     bootstrapState: BootstrapUiState,
     pendingPairing: ConnectionConfig?,
+    pendingSshAutofill: SshSetupAutofill? = null,
     isTesting: Boolean,
     errorMessage: String?,
     canCancel: Boolean,
@@ -124,6 +132,7 @@ fun ConnectScreen(
     onCancelSshBootstrap: () -> Unit,
     onTrustNewHostKeyAndRetry: (SshBootstrapConfig) -> Unit,
     onConsumedPendingPairing: () -> Unit,
+    onConsumedPendingSshAutofill: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
 ) {
     if (canCancel) {
@@ -132,6 +141,7 @@ fun ConnectScreen(
 
     // Keep the screen awake during SSH bootstrap so Android does not suspend the SSH socket.
     val view = LocalView.current
+    val autofillManager = LocalAutofillManager.current
     DisposableEffect(view, bootstrapState.isRunning) {
         val prevKeepScreenOn = view.keepScreenOn
         if (bootstrapState.isRunning) {
@@ -144,10 +154,10 @@ fun ConnectScreen(
 
     var mode by remember {
         mutableStateOf(
-            if (initialConfig.isValid || pendingPairing != null) {
-                ConnectMode.DIRECT_URI
-            } else {
-                ConnectMode.SSH_BOOTSTRAP
+            when {
+                pendingSshAutofill != null -> ConnectMode.SSH_BOOTSTRAP
+                initialConfig.isValid || pendingPairing != null -> ConnectMode.DIRECT_URI
+                else -> ConnectMode.SSH_BOOTSTRAP
             }
         )
     }
@@ -174,9 +184,28 @@ fun ConnectScreen(
     var bootstrapPrompt by remember {
         mutableStateOf(defaultAgyBootstrapPrompt(sshProfile.daemonPort))
     }
+    var sshAutofillFeedback by remember { mutableStateOf<String?>(null) }
 
     val pasteSuccessMsg = stringResource(R.string.connect_paste_success)
     val pasteInvalidMsg = stringResource(R.string.connect_paste_invalid)
+    val sshPasteSuccessMsg = stringResource(R.string.ssh_paste_success)
+    val sshPasteSwitchedDirectMsg = stringResource(R.string.ssh_paste_switched_direct)
+    val sshPasteInvalidMsg = stringResource(R.string.ssh_paste_invalid)
+    val sshInlineAutofilledMsg = stringResource(R.string.ssh_inline_autofilled)
+
+    fun applySshAutofill(autofill: SshSetupAutofill) {
+        mode = ConnectMode.SSH_BOOTSTRAP
+        sshHost = autofill.host
+        autofill.username?.let { sshUsername = it }
+        autofill.sshPort?.let { sshPortText = it.toString() }
+        autofill.daemonPort?.let { dPort ->
+            daemonPortText = dPort.toString()
+            if (!showPromptEditor) {
+                bootstrapPrompt = defaultAgyBootstrapPrompt(dPort)
+            }
+        }
+        autofill.authMethod?.let { sshAuthMethod = it }
+    }
 
     LaunchedEffect(pendingPairing) {
         if (pendingPairing != null) {
@@ -185,6 +214,14 @@ fun ConnectScreen(
             portText = pendingPairing.port.toString()
             token = pendingPairing.token
             onConsumedPendingPairing()
+        }
+    }
+
+    LaunchedEffect(pendingSshAutofill) {
+        if (pendingSshAutofill != null) {
+            applySshAutofill(pendingSshAutofill)
+            sshAutofillFeedback = sshPasteSuccessMsg
+            onConsumedPendingSshAutofill()
         }
     }
 
@@ -413,19 +450,80 @@ fun ConnectScreen(
                                     )
                                 }
                             }
+                            OutlinedButton(
+                                enabled = !bootstrapState.isRunning,
+                                onClick = {
+                                    val clip = clipboard.getText()?.text.orEmpty()
+                                    val parsedSsh = parseSshSetupInput(clip)
+                                    if (parsedSsh != null) {
+                                        applySshAutofill(parsedSsh)
+                                        sshAutofillFeedback = sshPasteSuccessMsg
+                                    } else {
+                                        val parsedPairing = ConnectionConfig.parsePairingUri(clip)
+                                        if (parsedPairing != null) {
+                                            mode = ConnectMode.DIRECT_URI
+                                            host = parsedPairing.host
+                                            portText = parsedPairing.port.toString()
+                                            token = parsedPairing.token
+                                            pasteFeedback = sshPasteSwitchedDirectMsg
+                                            sshAutofillFeedback = null
+                                        } else {
+                                            sshAutofillFeedback = sshPasteInvalidMsg
+                                        }
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .testTag("ssh_autofill_clipboard_button"),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ContentPaste,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(17.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.ssh_paste_autofill))
+                            }
+                            if (!sshAutofillFeedback.isNullOrBlank()) {
+                                Text(
+                                    text = sshAutofillFeedback!!,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
                         }
                     }
 
                     OutlinedTextField(
                         value = sshHost,
-                        onValueChange = { sshHost = it },
+                        onValueChange = { next ->
+                            val isSingleCharEdit = kotlin.math.abs(next.length - sshHost.length) <= 1 &&
+                                (next.startsWith(sshHost) || sshHost.startsWith(next))
+                            val parsed = if (!isSingleCharEdit) parseSshSetupInput(next) else null
+                            if (parsed != null) {
+                                applySshAutofill(parsed)
+                                sshAutofillFeedback = sshInlineAutofilledMsg
+                            } else {
+                                sshHost = next
+                            }
+                        },
                         label = { Text(stringResource(R.string.connect_host_label)) },
                         placeholder = { Text(stringResource(R.string.connect_host_placeholder)) },
                         singleLine = true,
                         enabled = !bootstrapState.isRunning,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            autoCorrectEnabled = false,
+                            imeAction = ImeAction.Next,
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .semantics {
+                                contentType = ContentType("ssh_host") + ContentType("hostname")
+                            }
                             .testTag("ssh_host_input"),
                         shape = RoundedCornerShape(14.dp),
                     )
@@ -438,8 +536,16 @@ fun ConnectScreen(
                         singleLine = true,
                         enabled = !bootstrapState.isRunning,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Ascii,
+                            autoCorrectEnabled = false,
+                            imeAction = ImeAction.Next,
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .semantics {
+                                contentType = ContentType.Username
+                            }
                             .testTag("ssh_username_input"),
                         shape = RoundedCornerShape(14.dp),
                     )
@@ -527,6 +633,11 @@ fun ConnectScreen(
                             label = { Text(stringResource(R.string.ssh_password_label)) },
                             singleLine = true,
                             enabled = !bootstrapState.isRunning,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                                autoCorrectEnabled = false,
+                                imeAction = ImeAction.Done,
+                            ),
                             visualTransformation = if (showSshPassword) {
                                 VisualTransformation.None
                             } else {
@@ -542,6 +653,9 @@ fun ConnectScreen(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .semantics {
+                                    contentType = ContentType.Password
+                                }
                                 .testTag("ssh_password_input"),
                             shape = RoundedCornerShape(14.dp),
                         )
@@ -566,9 +680,17 @@ fun ConnectScreen(
                             label = { Text(stringResource(R.string.ssh_passphrase_label)) },
                             singleLine = true,
                             enabled = !bootstrapState.isRunning,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                                autoCorrectEnabled = false,
+                                imeAction = ImeAction.Done,
+                            ),
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .semantics {
+                                    contentType = ContentType.Password
+                                }
                                 .testTag("ssh_passphrase_input"),
                             shape = RoundedCornerShape(14.dp),
                         )
@@ -688,7 +810,10 @@ fun ConnectScreen(
                             SshAuthMethod.PASSWORD -> sshPassword.isNotEmpty()
                         }
                         Button(
-                            onClick = { onStartSshBootstrap(candidateConfig) },
+                            onClick = {
+                                autofillManager?.commit()
+                                onStartSshBootstrap(candidateConfig)
+                            },
                             enabled = candidateConfig.isValid && authReady,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -769,13 +894,33 @@ fun ConnectScreen(
 
                     OutlinedTextField(
                         value = host,
-                        onValueChange = { host = it },
+                        onValueChange = { next ->
+                            val isSingleCharEdit = kotlin.math.abs(next.length - host.length) <= 1 &&
+                                (next.startsWith(host) || host.startsWith(next))
+                            val parsed = if (!isSingleCharEdit) ConnectionConfig.parsePairingUri(next) else null
+                            if (parsed != null) {
+                                host = parsed.host
+                                portText = parsed.port.toString()
+                                token = parsed.token
+                                pasteFeedback = pasteSuccessMsg
+                            } else {
+                                host = next
+                            }
+                        },
                         label = { Text(stringResource(R.string.connect_host_label)) },
                         placeholder = { Text(stringResource(R.string.connect_host_placeholder)) },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            autoCorrectEnabled = false,
+                            imeAction = ImeAction.Next,
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .semantics {
+                                contentType = ContentType("vm_host") + ContentType("hostname")
+                            }
                             .testTag("host_input"),
                         shape = RoundedCornerShape(14.dp),
                     )
@@ -800,6 +945,11 @@ fun ConnectScreen(
                         label = { Text(stringResource(R.string.connect_token_label)) },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            autoCorrectEnabled = false,
+                            imeAction = ImeAction.Done,
+                        ),
                         visualTransformation = if (showToken) {
                             VisualTransformation.None
                         } else {
@@ -822,6 +972,9 @@ fun ConnectScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
+                            .semantics {
+                                contentType = ContentType.Password
+                            }
                             .testTag("token_input"),
                         shape = RoundedCornerShape(14.dp),
                     )
@@ -843,6 +996,7 @@ fun ConnectScreen(
 
                     Button(
                         onClick = {
+                            autofillManager?.commit()
                             val port = portText.toIntOrNull()?.takeIf { it in 1..65535 } ?: 7501
                             onConnect(
                                 ConnectionConfig(

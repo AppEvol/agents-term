@@ -28,7 +28,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Support agentsterm://connect and herdr://connect pairing links -->
+            <!-- Support agentsterm://connect, herdr://connect, agentsterm://ssh, and herdr://ssh links -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
@@ -40,6 +40,12 @@
                     android:scheme="agentsterm" />
                 <data
                     android:host="connect"
+                    android:scheme="herdr" />
+                <data
+                    android:host="ssh"
+                    android:scheme="agentsterm" />
+                <data
+                    android:host="ssh"
                     android:scheme="herdr" />
             </intent-filter>
         </activity>

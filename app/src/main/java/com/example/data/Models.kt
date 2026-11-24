@@ -45,9 +45,9 @@ data class ConnectionConfig(
          */
         fun parsePairingUri(raw: String): ConnectionConfig? {
             val trimmed = raw.trim()
-            val validScheme = trimmed.startsWith("herdr://", ignoreCase = true) ||
-                trimmed.startsWith("agentsterm://", ignoreCase = true)
-            if (!validScheme) return null
+            val validPrefix = trimmed.startsWith("herdr://connect?", ignoreCase = true) ||
+                trimmed.startsWith("agentsterm://connect?", ignoreCase = true)
+            if (!validPrefix) return null
             val queryIdx = trimmed.indexOf('?')
             if (queryIdx < 0) return null
             val query = trimmed.substring(queryIdx + 1)
