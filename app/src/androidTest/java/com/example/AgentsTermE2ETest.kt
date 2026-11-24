@@ -255,6 +255,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("send_button").performClick()
 
         waitForTag("stop_agent_button")
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("stop_agent_button").performClick()
 
         waitForText("Interrupted by user")

@@ -524,7 +524,7 @@ fun SettingsScreen(
                                         )
                                         IconButton(
                                             onClick = {
-                                                val pathToCopy = uploadState.lastRemoteDir!!
+                                                val pathToCopy = uploadState.lastRemoteDir
                                                 clipboard.setText(AnnotatedString(pathToCopy))
                                                 copiedPath = true
                                                 scope.launch {
