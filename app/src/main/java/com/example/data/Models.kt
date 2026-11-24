@@ -227,6 +227,14 @@ data class AgentSessionRef(
 )
 
 @JsonClass(generateAdapter = true)
+data class QueuedMessage(
+    val id: String,
+    val text: String,
+    val overridePermissionMode: String? = null,
+    val createdAt: Long = 0L,
+)
+
+@JsonClass(generateAdapter = true)
 data class TabRecord(
     val id: String,
     val title: String,
@@ -240,6 +248,7 @@ data class TabRecord(
     val sessionRef: AgentSessionRef? = null,
     val unread: Boolean = false,
     val lastMessagePreview: String? = null,
+    val queuedMessages: List<QueuedMessage> = emptyList(),
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
 ) {
@@ -384,8 +393,24 @@ data class SendMessageRequest(
 
 @JsonClass(generateAdapter = true)
 data class SendMessageResponse(
-    val userMessage: ChatMessage,
-    val assistantMessage: ChatMessage,
+    val userMessage: ChatMessage? = null,
+    val assistantMessage: ChatMessage? = null,
+    val queued: Boolean = false,
+    val queuedMessage: QueuedMessage? = null,
+    val tab: TabRecord? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class InterruptTabRequest(
+    val processQueue: Boolean = false,
+    val text: String? = null,
+    val overridePermissionMode: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class QueueActionResponse(
+    val ok: Boolean = true,
+    val tab: TabRecord? = null,
 )
 
 @JsonClass(generateAdapter = true)

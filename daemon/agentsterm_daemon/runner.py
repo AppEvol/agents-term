@@ -131,6 +131,8 @@ class _ActiveTurn:
         self.assistant_msg_id = assistant_msg_id
         self.proc: Optional[asyncio.subprocess.Process] = None
         self.interrupted = False
+        self.drain_queue_on_exit = False
+        self.kill_scheduled = False
         self.signal_on_spawn: Optional[int] = None
         self.kill_handles: List[asyncio.TimerHandle] = []
 
@@ -226,32 +228,113 @@ class AgentRunner:
             self._finish_turn_with_error(tab["id"], assistant_message, f"Unsupported agent type: {agent}")
         return result
 
-    def interrupt(self, tab_id: str) -> bool:
+    def enqueue_message(
+        self, tab_id: str, prompt_text: str, override_permission_mode: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        enqueued = self.store.enqueue_message(tab_id, prompt_text, override_permission_mode)
+        if not enqueued:
+            return None
+        updated_tab, queued_item = enqueued
+        self.broadcast({"type": "tab_updated", "tab": updated_tab})
+        return {"queued": True, "queuedMessage": queued_item, "tab": updated_tab}
+
+    def remove_queued_message(self, tab_id: str, queued_id: str) -> Optional[Dict[str, Any]]:
+        updated_tab = self.store.remove_queued_message(tab_id, queued_id)
+        if updated_tab:
+            self.broadcast({"type": "tab_updated", "tab": updated_tab})
+        return updated_tab
+
+    @staticmethod
+    def _combine_queued_messages(items: List[Dict[str, Any]]) -> tuple[str, Optional[str]]:
+        texts = [m["text"].strip() for m in items if isinstance(m.get("text"), str) and m["text"].strip()]
+        overrides = [
+            m["overridePermissionMode"].strip()
+            for m in items
+            if isinstance(m.get("overridePermissionMode"), str) and m["overridePermissionMode"].strip()
+        ]
+        combined_override = "full-access" if "full-access" in overrides else (overrides[-1] if overrides else None)
+        return "\n\n".join(texts), combined_override
+
+    def drain_and_start_queued(self, tab_id: str) -> Optional[Dict[str, Any]]:
+        popped_res = self.store.pop_queued_messages(tab_id)
+        if not popped_res:
+            return None
+        updated_tab, popped = popped_res
+        if not popped:
+            return None
+        combined_text, combined_override = self._combine_queued_messages(popped)
+        if not combined_text:
+            self.broadcast({"type": "tab_updated", "tab": updated_tab})
+            return None
+        return self.start_turn(updated_tab, combined_text, combined_override)
+
+    def submit_message(
+        self, tab: Dict[str, Any], prompt_text: str, override_permission_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        tab_id = tab["id"]
+        if self.is_running(tab_id):
+            enqueued = self.enqueue_message(tab_id, prompt_text, override_permission_mode)
+            assert enqueued is not None
+            return enqueued
+        if tab.get("queuedMessages"):
+            self.enqueue_message(tab_id, prompt_text, override_permission_mode)
+            drained = self.drain_and_start_queued(tab_id)
+            assert drained is not None
+            return drained
+        return self.start_turn(tab, prompt_text, override_permission_mode)
+
+    def interrupt(
+        self,
+        tab_id: str,
+        *,
+        process_queue: bool = False,
+        text: Optional[str] = None,
+        override_permission_mode: Optional[str] = None,
+    ) -> bool:
+        if isinstance(text, str) and text.strip():
+            self.enqueue_message(tab_id, text.strip(), override_permission_mode)
+
         active = self._active.get(tab_id)
         if not active:
+            if process_queue and self.drain_and_start_queued(tab_id) is not None:
+                return True
             idle = self.store.update_tab(tab_id, {"status": "idle", "statusDetail": None})
             if idle:
                 self.broadcast({"type": "tab_updated", "tab": idle})
             return False
 
         active.interrupted = True
-        active.send_signal(signal.SIGINT)
-        loop = asyncio.get_running_loop()
+        tab = self.store.get_tab(tab_id)
+        if process_queue and tab and tab.get("queuedMessages"):
+            active.drain_queue_on_exit = True
 
-        def escalate_term() -> None:
-            active.send_signal(signal.SIGTERM)
-            active.kill_handles.append(loop.call_later(2.0, lambda: active.send_signal(signal.SIGKILL)))
+        if not active.kill_scheduled:
+            active.kill_scheduled = True
+            active.send_signal(signal.SIGINT)
+            loop = asyncio.get_running_loop()
 
-        active.kill_handles.append(loop.call_later(1.5, escalate_term))
+            def escalate_term() -> None:
+                active.send_signal(signal.SIGTERM)
+                active.kill_handles.append(loop.call_later(2.0, lambda: active.send_signal(signal.SIGKILL)))
+
+            active.kill_handles.append(loop.call_later(1.5, escalate_term))
 
         existing = self.store.get_message(tab_id, active.assistant_msg_id)
         if existing and existing.get("status") == "streaming":
             interrupted_msg = {**existing, "status": "interrupted", "updatedAt": now_ms()}
             self.store.replace_message(tab_id, interrupted_msg)
             self.broadcast({"type": "message_updated", "tabId": tab_id, "message": interrupted_msg})
-        idle_tab = self.store.update_tab(tab_id, {"status": "idle", "statusDetail": None})
-        if idle_tab:
-            self.broadcast({"type": "tab_updated", "tab": idle_tab})
+
+        if active.drain_queue_on_exit:
+            pending_tab = self.store.update_tab(
+                tab_id, {"status": "working", "statusDetail": "Interrupting to run queued messages…"}
+            )
+            if pending_tab:
+                self.broadcast({"type": "tab_updated", "tab": pending_tab})
+        else:
+            idle_tab = self.store.update_tab(tab_id, {"status": "idle", "statusDetail": None})
+            if idle_tab:
+                self.broadcast({"type": "tab_updated", "tab": idle_tab})
         return True
 
     def kill_if_running(self, tab_id: str) -> None:
@@ -464,6 +547,13 @@ class AgentRunner:
         self.broadcast({"type": "message_updated", "tabId": tab_id, "message": final_msg})
         if updated_tab:
             self.broadcast({"type": "tab_updated", "tab": updated_tab})
+
+        should_drain = (
+            (not interrupted and tab_status == "idle")
+            or (interrupted and active is not None and active.drain_queue_on_exit)
+        )
+        if should_drain and updated_tab and updated_tab.get("queuedMessages"):
+            self.drain_and_start_queued(tab_id)
 
     # ---------------------------------------------------------------- process plumbing
 

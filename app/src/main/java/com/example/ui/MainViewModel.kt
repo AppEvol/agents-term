@@ -652,10 +652,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun interruptActiveTab() {
+    fun interruptActiveTab(processQueue: Boolean = false, text: String? = null) {
         val tabId = state.value.activeTab?.id ?: return
         viewModelScope.launch {
-            repo.interruptTab(tabId)
+            repo.interruptTab(tabId, processQueue = processQueue, text = text)
+        }
+    }
+
+    fun removeQueuedMessage(queuedId: String) {
+        val tabId = state.value.activeTab?.id ?: return
+        viewModelScope.launch {
+            repo.removeQueuedMessage(tabId, queuedId)
         }
     }
 

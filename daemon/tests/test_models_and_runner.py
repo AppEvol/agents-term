@@ -544,6 +544,125 @@ class RunnerTest(TempHomeTestCase):
         sh = store.create_tab("shell", cwd=str(self.tmp), system_prompt="Should be ignored")
         self.assertIsNone(sh["systemPrompt"])
 
+    def test_queued_messages_auto_drain_combined_when_turn_completes(self):
+        args_log = self.tmp / "queue_args.log"
+        gate = self.tmp / "release_turn1"
+        self.fake_binary("agy", f"""
+with open({str(args_log)!r}, "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\\n")
+prompt = sys.argv[-1]
+if "Turn one" in prompt:
+    sys.stdout.write(json.dumps({{"event": "init", "conversation_id": "conv-q-1"}}) + "\\n")
+    sys.stdout.write(json.dumps({{"event": "step_update", "step_update": {{"step_type": "agent_response", "text_delta": "Working on 1"}}}}) + "\\n")
+    sys.stdout.flush()
+    while not os.path.exists({str(gate)!r}):
+        time.sleep(0.02)
+    sys.stdout.write(json.dumps({{"event": "result", "result": {{"conversation_id": "conv-q-1", "status": "SUCCESS", "response": "Done 1"}}}}) + "\\n")
+else:
+    sys.stdout.write(json.dumps({{"event": "result", "result": {{"conversation_id": "conv-q-1", "status": "SUCCESS", "response": "Done queued"}}}}) + "\\n")
+sys.stdout.flush()
+""")
+        store, runner = self.make()
+        tab = store.create_tab("agy", cwd=str(self.tmp))
+
+        async def go():
+            r1 = runner.submit_message(tab, "Turn one")
+            self.assertIn("assistantMessage", r1)
+            for _ in range(200):
+                if store.get_message(tab["id"], r1["assistantMessage"]["id"])["text"]:
+                    break
+                await asyncio.sleep(0.02)
+            q1 = runner.submit_message(store.get_tab(tab["id"]), "Follow-up 1")
+            q2 = runner.submit_message(store.get_tab(tab["id"]), "Follow-up 2")
+            self.assertTrue(q1["queued"] and q2["queued"])
+            self.assertEqual([m["text"] for m in store.get_tab(tab["id"])["queuedMessages"]],
+                             ["Follow-up 1", "Follow-up 2"])
+            # Release Turn 1; daemon must automatically drain both queued messages into Turn 2.
+            gate.write_text("go")
+            for _ in range(300):
+                msgs = store.get_messages(tab["id"])
+                if len(msgs) == 4 and msgs[-1]["status"] == "complete" and not runner.is_running(tab["id"]):
+                    break
+                await asyncio.sleep(0.02)
+            await runner.wait_idle(tab["id"], 10)
+
+        run_async(go())
+        msgs = store.get_messages(tab["id"])
+        self.assertEqual(len(msgs), 4)
+        self.assertEqual(msgs[1]["status"], "complete")
+        self.assertEqual(msgs[2]["role"], "user")
+        self.assertEqual(msgs[2]["text"], "Follow-up 1\n\nFollow-up 2")
+        self.assertEqual(msgs[3]["status"], "complete")
+        self.assertEqual(msgs[3]["text"], "Done queued")
+        self.assertEqual(store.get_tab(tab["id"])["queuedMessages"], [])
+        calls = [json.loads(line) for line in args_log.read_text().splitlines()]
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--conversation", calls[1])
+        self.assertIn("conv-q-1", calls[1])
+        self.assertEqual(calls[1][-1], "--print=Follow-up 1\n\nFollow-up 2")
+
+    def test_force_interrupt_processes_queued_messages_and_draft_while_plain_interrupt_keeps_queue(self):
+        args_log = self.tmp / "force_args.log"
+        self.fake_binary("agy", f"""
+with open({str(args_log)!r}, "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\\n")
+prompt = sys.argv[-1]
+if "Slow turn" in prompt:
+    sys.stdout.write(json.dumps({{"event": "step_update", "step_update": {{"step_type": "agent_response", "text_delta": "partial"}}}}) + "\\n")
+    sys.stdout.flush()
+    time.sleep(30)
+else:
+    sys.stdout.write(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response": "Processed: " + prompt}}}}) + "\\n")
+    sys.stdout.flush()
+""")
+        store, runner = self.make()
+        tab = store.create_tab("agy", cwd=str(self.tmp))
+
+        async def go_force():
+            r1 = runner.submit_message(tab, "Slow turn 1")
+            for _ in range(200):
+                if store.get_message(tab["id"], r1["assistantMessage"]["id"])["text"]:
+                    break
+                await asyncio.sleep(0.02)
+            q1 = runner.submit_message(store.get_tab(tab["id"]), "Queued A")
+            q2 = runner.submit_message(store.get_tab(tab["id"]), "Queued B")
+            runner.remove_queued_message(tab["id"], q2["queuedMessage"]["id"])
+            self.assertEqual([m["text"] for m in store.get_tab(tab["id"])["queuedMessages"]], ["Queued A"])
+            self.assertTrue(runner.interrupt(tab["id"], process_queue=True, text="Draft C"))
+            for _ in range(300):
+                msgs = store.get_messages(tab["id"])
+                if len(msgs) == 4 and msgs[-1]["status"] == "complete" and not runner.is_running(tab["id"]):
+                    break
+                await asyncio.sleep(0.02)
+            await runner.wait_idle(tab["id"], 10)
+
+        run_async(go_force())
+        msgs = store.get_messages(tab["id"])
+        self.assertEqual(len(msgs), 4)
+        self.assertEqual(msgs[1]["status"], "interrupted")
+        self.assertEqual(msgs[2]["text"], "Queued A\n\nDraft C")
+        self.assertEqual(msgs[3]["status"], "complete")
+        self.assertIn("Queued A\n\nDraft C", msgs[3]["text"])
+        self.assertEqual(store.get_tab(tab["id"])["queuedMessages"], [])
+
+        # Plain interrupt (process_queue=False) stops without draining queued messages, and queue persists.
+        async def go_plain():
+            r3 = runner.submit_message(store.get_tab(tab["id"]), "Slow turn 2")
+            for _ in range(200):
+                if store.get_message(tab["id"], r3["assistantMessage"]["id"])["text"]:
+                    break
+                await asyncio.sleep(0.02)
+            runner.submit_message(store.get_tab(tab["id"]), "Wait for me")
+            self.assertTrue(runner.interrupt(tab["id"]))
+            await runner.wait_idle(tab["id"], 10)
+
+        run_async(go_plain())
+        self.assertEqual(store.get_tab(tab["id"])["status"], "idle")
+        self.assertEqual([m["text"] for m in store.get_tab(tab["id"])["queuedMessages"]], ["Wait for me"])
+        store.save_now()
+        reloaded = StateStore()
+        self.assertEqual([m["text"] for m in reloaded.get_tab(tab["id"])["queuedMessages"]], ["Wait for me"])
+
 
 if __name__ == "__main__":
     unittest.main()

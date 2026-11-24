@@ -163,7 +163,7 @@ open class HerdrApiClient(
         return executeJson(req)
     }
 
-    suspend fun sendMessage(
+    open suspend fun sendMessage(
         config: ConnectionConfig,
         tabId: String,
         text: String,
@@ -180,17 +180,39 @@ open class HerdrApiClient(
         return executeJson(req)
     }
 
-    suspend fun interruptTab(config: ConnectionConfig, tabId: String) = withContext(Dispatchers.IO) {
+    open suspend fun interruptTab(
+        config: ConnectionConfig,
+        tabId: String,
+        processQueue: Boolean = false,
+        text: String? = null,
+        overridePermissionMode: String? = null,
+    ): TabRecord? {
+        val json = encodeHerdrJson(
+            InterruptTabRequest(
+                processQueue = processQueue,
+                text = text?.trim()?.takeIf { it.isNotEmpty() },
+                overridePermissionMode = overridePermissionMode,
+            )
+        )
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs/$tabId/interrupt")
             .withAuth(config)
-            .post("{}".toRequestBody(jsonMediaType))
+            .post(json.toRequestBody(jsonMediaType))
             .build()
-        client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) {
-                throw IOException("Failed to interrupt tab (HTTP ${resp.code})")
-            }
-        }
+        return executeJson<QueueActionResponse>(req).tab
+    }
+
+    open suspend fun removeQueuedMessage(
+        config: ConnectionConfig,
+        tabId: String,
+        queuedId: String,
+    ): TabRecord? {
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/tabs/$tabId/queue/$queuedId")
+            .withAuth(config)
+            .delete()
+            .build()
+        return executeJson<QueueActionResponse>(req).tab
     }
 
     suspend fun markRead(config: ConnectionConfig, tabId: String) = withContext(Dispatchers.IO) {

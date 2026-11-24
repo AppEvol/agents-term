@@ -11,6 +11,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -19,6 +20,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
@@ -297,19 +299,64 @@ class AgentsTermE2ETest {
         waitForText("Antigravity · app")
         waitForTag("composer_input")
 
-        // 1) Trigger a long-running working turn and interrupt it via Stop button
+        // 1) Trigger a long-running working turn; tapping send while empty shows hint and does NOT interrupt
         composeRule.onNodeWithTag("composer_input").performTextInput("hold_working long job")
         composeRule.onNodeWithTag("send_button").performClick()
 
-        waitForTag("stop_agent_button")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("stop_agent_button").performClick()
+        waitForText("Processing prompt...")
+        waitForTag("working_progress_bar")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForTag("hold_to_interrupt_hint")
+        assertTrue("Accidental tap must not interrupt active turn", activeDaemon.interruptedTabIds.isEmpty())
+
+        // 2) Typing while working queues messages by default; queued items can be inspected and removed
+        composeRule.onNodeWithTag("composer_input").performTextInput("First queued follow-up")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForTag("queued_messages_tray")
+        waitForText("Queued (1)")
+        waitForText("First queued follow-up")
+        assertTrue("Queueing must not interrupt active turn", activeDaemon.interruptedTabIds.isEmpty())
+
+        composeRule.onNodeWithTag("composer_input").performTextInput("Drop this queued item")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForText("Queued (2)")
+        waitForText("Drop this queued item")
+
+        // Remove the second queued item via its close button
+        composeRule.onAllNodesWithTag("remove_queued_q_104").let { nodes ->
+            if (nodes.fetchSemanticsNodes().isNotEmpty()) {
+                nodes[0].performClick()
+            } else {
+                // Fallback by content description if counter shifts
+                composeRule.onAllNodes(
+                    androidx.compose.ui.test.hasContentDescription("Remove queued message")
+                )[1].performClick()
+            }
+        }
+        waitForText("Queued (1)")
+
+        // 3) Press & hold send button with a draft to force interrupt AND process all queued messages + draft
+        composeRule.onNodeWithTag("composer_input").performTextInput("Final urgent follow-up")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("send_button").performTouchInput { longClick() }
 
         waitForText("Interrupted by user")
-        waitForTag("send_button")
+        waitForText("First queued follow-up\n\nFinal urgent follow-up")
+        waitForText("Repository is clean on main branch.")
         assertTrue(activeDaemon.interruptedTabIds.contains("tab_seed"))
+        assertTrue(composeRule.onAllNodesWithTag("queued_messages_tray").fetchSemanticsNodes().isEmpty())
 
-        // 2) Trigger a permission-blocked turn and retry with Full Access
+        // 4) Trigger another working turn and press & hold empty send button to stop cleanly
+        composeRule.onNodeWithTag("composer_input").performTextInput("hold_working stop only")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForText("Processing prompt...")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("send_button").performTouchInput { longClick() }
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithText("Processing prompt...").fetchSemanticsNodes().isEmpty()
+        }
+
+        // 5) Trigger a permission-blocked turn and retry with Full Access
         composeRule.onNodeWithTag("composer_input").performTextInput("needs_permission run tests")
         composeRule.onNodeWithTag("send_button").performClick()
 

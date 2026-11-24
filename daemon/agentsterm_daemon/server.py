@@ -25,7 +25,7 @@ from .util import now_ms
 
 PING_INTERVAL_S = 25.0
 _AGENT_MODELS_RE = re.compile(r"^/api/agents/([^/]+)/models$")
-_TAB_RE = re.compile(r"^/api/tabs/([^/]+)(?:/(messages|interrupt|read))?$")
+_TAB_RE = re.compile(r"^/api/tabs/([^/]+)(?:/(messages|interrupt|read|queue)(?:/([^/]+))?)?$")
 _DUMP_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -352,12 +352,17 @@ class Daemon:
 
         m = _TAB_RE.match(path)
         if m:
-            return await self._route_tab(req, unquote(m.group(1)), m.group(2) or "")
+            item_id = unquote(m.group(3)) if m.group(3) else None
+            return await self._route_tab(req, unquote(m.group(1)), m.group(2) or "", item_id)
 
         return Response.json(404, {"error": f"Unknown endpoint {method} {path}"})
 
-    async def _route_tab(self, req: Request, tab_id: str, sub: str) -> Response:
+    async def _route_tab(
+        self, req: Request, tab_id: str, sub: str, item_id: Optional[str] = None
+    ) -> Response:
         method = req.method
+        if item_id is not None and sub != "queue":
+            return Response.json(404, {"error": f"Unknown endpoint {method} {req.path}"})
         if not sub:
             if method == "PATCH":
                 body = await req.json()
@@ -404,21 +409,38 @@ class Daemon:
             if method == "GET":
                 return Response.json(200, {"tab": tab, "messages": self.store.get_messages(tab_id)})
             if method == "POST":
-                if self.runner.is_running(tab_id):
-                    return Response.json(409, {"error": "Agent is already running a turn on this tab"})
                 body = await req.json()
                 body = body if isinstance(body, dict) else {}
                 text = body["text"].strip() if isinstance(body.get("text"), str) else ""
                 if not text:
                     return Response.json(400, {"error": "Message text cannot be empty"})
                 override = body.get("overridePermissionMode")
-                result = self.runner.start_turn(tab, text, override if isinstance(override, str) else None)
+                result = self.runner.submit_message(tab, text, override if isinstance(override, str) else None)
                 return Response.json(200, result)
             return Response.json(405, {"error": "Method not allowed"})
 
+        if sub == "queue":
+            tab = self.store.get_tab(tab_id)
+            if not tab:
+                return Response.json(404, {"error": "Tab not found"})
+            if item_id and method == "DELETE":
+                updated = self.runner.remove_queued_message(tab_id, item_id)
+                return Response.json(200, {"ok": True, "tab": updated})
+            return Response.json(405, {"error": "Method not allowed"})
+
         if sub == "interrupt" and method == "POST":
-            self.runner.interrupt(tab_id)
-            return Response.json(200, {"ok": True})
+            body = await req.json()
+            body = body if isinstance(body, dict) else {}
+            process_queue = bool(body.get("processQueue"))
+            text = body["text"].strip() if isinstance(body.get("text"), str) and body["text"].strip() else None
+            override = body.get("overridePermissionMode") if isinstance(body.get("overridePermissionMode"), str) else None
+            self.runner.interrupt(
+                tab_id,
+                process_queue=process_queue,
+                text=text,
+                override_permission_mode=override,
+            )
+            return Response.json(200, {"ok": True, "tab": self.store.get_tab(tab_id)})
 
         if sub == "read" and method == "POST":
             updated = self.store.update_tab(tab_id, {"unread": False})

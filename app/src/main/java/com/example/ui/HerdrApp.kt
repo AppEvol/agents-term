@@ -269,6 +269,12 @@ fun HerdrApp(viewModel: MainViewModel) {
                     }
                 },
                 onInterrupt = { viewModel.interruptActiveTab() },
+                onForceInterrupt = { draftText ->
+                    viewModel.interruptActiveTab(processQueue = true, text = draftText)
+                },
+                onRemoveQueuedMessage = { queuedId ->
+                    viewModel.removeQueuedMessage(queuedId)
+                },
                 onRetryFullAccess = { viewModel.retryLastUserPromptWithFullAccess() },
             )
         }
@@ -686,6 +692,8 @@ private fun WorkspaceScaffold(
     onReconnect: () -> Unit,
     onSendMessage: (String) -> Unit,
     onInterrupt: () -> Unit,
+    onForceInterrupt: (String?) -> Unit,
+    onRemoveQueuedMessage: (String) -> Unit,
     onRetryFullAccess: () -> Unit,
 ) {
     val activeTab = state.activeTab
@@ -744,11 +752,10 @@ private fun WorkspaceScaffold(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(7.dp)
-                                            .clip(CircleShape)
-                                            .background(statusColor(activeTab.status))
+                                    TabStatusDot(
+                                        status = activeTab.status,
+                                        dotSize = 7.dp,
+                                        modifier = Modifier.testTag("top_bar_status_dot"),
                                     )
                                     Text(
                                         text = "${activeTab.agentLabel} · ${activeTab.folderName}",
@@ -951,6 +958,8 @@ private fun WorkspaceScaffold(
                 onOpenModelPicker = if (activeTab.agent != "shell") onChangeModel else null,
                 onSendMessage = onSendMessage,
                 onInterrupt = onInterrupt,
+                onForceInterrupt = onForceInterrupt,
+                onRemoveQueuedMessage = onRemoveQueuedMessage,
                 onRetryFullAccess = onRetryFullAccess,
                 modifier = Modifier.padding(innerPadding),
             )
@@ -999,11 +1008,9 @@ private fun QuickTabStrip(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(statusColor(tab.status))
+                        TabStatusDot(
+                            status = tab.status,
+                            dotSize = 8.dp,
                         )
                         Text(
                             text = tab.title,

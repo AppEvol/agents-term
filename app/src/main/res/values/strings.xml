@@ -23,7 +23,10 @@
     <string name="action_rename_tab">Rename tab</string>
     <string name="action_close_tab">Close tab</string>
     <string name="action_send">Send message</string>
-    <string name="action_stop_agent">Stop agent</string>
+    <string name="action_queue_message">Queue message</string>
+    <string name="action_stop_agent">Hold to stop agent</string>
+    <string name="action_hold_interrupt_queue">Hold to interrupt and process queue</string>
+    <string name="action_remove_queued">Remove queued message</string>
     <string name="action_copy_code">Copy code</string>
     <string name="action_copy_message">Copy response</string>
     <string name="action_toggle_token">Toggle token visibility</string>
@@ -53,6 +56,15 @@
     <string name="composer_reconnecting">Reconnecting to VM…</string>
     <string name="composer_shell_placeholder">Run a command in %1$s…</string>
     <string name="composer_agent_placeholder">Message %1$s…</string>
+    <string name="composer_queue_shell_placeholder">Queue next command…</string>
+    <string name="composer_queue_agent_placeholder">Queue next message…</string>
+    <string name="queue_header_count">Queued (%1$d)</string>
+    <string name="queue_hint_hold_to_run">Hold send to interrupt &amp; run</string>
+    <string name="queue_hint_tap_to_run">Tap send to run</string>
+    <string name="hold_hint_stop">Hold button to stop agent</string>
+    <string name="hold_hint_interrupt_run">Hold button to interrupt &amp; run</string>
+    <string name="holding_interrupt_status">Keep holding to interrupt…</string>
+    <string name="holding_interrupt_run_status">Keep holding to interrupt &amp; run…</string>
     <string name="permission_required_title">Permission Required</string>
     <string name="permission_required_body">Agent was blocked waiting for approval: %1$s</string>
     <string name="thinking_label">Reasoning</string>
@@ -61,6 +73,8 @@
     <string name="tool_input_label">Input</string>
     <string name="tool_output_label">Output</string>
     <string name="status_interrupted">Interrupted by user</string>
+    <string name="status_working_badge">Working</string>
+    <string name="status_working_fallback">Working…</string>
     <string name="copied_snackbar">Copied to clipboard</string>
     <string name="scroll_to_bottom">Scroll to latest</string>
     <string name="connect_mode_ssh_bootstrap">SSH Auto-Setup</string>
