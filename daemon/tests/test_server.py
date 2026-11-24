@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import DAEMON_DIR, DaemonProcess, run_async
+from helpers import DAEMON_DIR, FIXTURES_DIR, DaemonProcess, run_async
 
 from agentsterm_daemon.app_state import AppStateBroker, AppStateError
 from agentsterm_daemon.httpserver import connect_websocket
@@ -176,6 +176,46 @@ class DaemonE2ETest(unittest.TestCase):
         self.assertEqual(d.api("DELETE", f"/api/tabs/{tab['id']}")[1], {"ok": True})
         self.assertEqual(d.api("GET", f"/api/tabs/{tab['id']}/messages")[0], 404)
         self.assertEqual(d.api("GET", "/api/nope")[1], {"error": "Unknown endpoint GET /api/nope"})
+
+    def test_claude_turn_streams_separated_text_blocks_end_to_end(self):
+        """Real captured claude stream through a real daemon: WS deltas == stored message text."""
+        self.daemon.stop()
+        bin_dir = self.home / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "claude"
+        fake.write_text(f"#!/usr/bin/env python3\nimport sys\n"
+                        f"sys.stdout.write(open({str(FIXTURES_DIR / 'claude_tool_turn.ndjson')!r}).read())\n")
+        fake.chmod(0o755)
+        self.daemon = DaemonProcess(self.home, extra_path=bin_dir)
+        d = self.daemon
+
+        async def go():
+            ws = await self.ws()
+            msgs = ws.messages()
+            await msgs.__anext__()  # snapshot
+            _, body = await asyncio.to_thread(d.api, "POST", "/api/tabs", {"agent": "claude", "cwd": str(self.home)})
+            tab = body["tab"]
+            status, _ = await asyncio.to_thread(d.api, "POST", f"/api/tabs/{tab['id']}/messages", {"text": "go"})
+            self.assertEqual(status, 200)
+            streamed, tools, final = "", [], None
+            while final is None:
+                env = json.loads(await msgs.__anext__())
+                if env["type"] == "message_delta":
+                    streamed += env.get("textDelta", "")
+                elif env["type"] == "tool_update":
+                    tools.append((env["toolCall"]["name"], env["toolCall"]["status"]))
+                elif env["type"] == "message_updated" and env["message"]["role"] == "assistant":
+                    final = env["message"]
+            ws.close()
+            return tab, streamed, tools, final
+
+        tab, streamed, tools, final = run_async(go())
+        self.assertEqual(final["text"], "Starting now.\n\nAll done.")
+        self.assertEqual(streamed, final["text"])
+        self.assertEqual(tools, [("Bash", "running"), ("Bash", "done")])
+        stored = d.api("GET", f"/api/tabs/{tab['id']}/messages")[1]["messages"][-1]
+        self.assertEqual(stored["text"], final["text"])
+        self.assertEqual(stored["usage"]["outputTokens"], 85)
 
     def test_ws_rejects_bad_auth_and_path_and_accepts_query_token(self):
         async def go():

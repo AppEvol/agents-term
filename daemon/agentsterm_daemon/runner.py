@@ -78,6 +78,39 @@ def _tool_output_text(raw_out: Any) -> Optional[str]:
     return None
 
 
+def block_separator(existing: Optional[str]) -> str:
+    """Paragraph break to put before a new content block appended to `existing` text.
+
+    Agents emit text in separate blocks around tool calls ("Starting." <tool> "Done."). Appending
+    them directly glued sentences together ("Starting.Done.").
+    """
+    if not existing or existing.endswith("\n\n"):
+        return ""
+    return "\n" if existing.endswith("\n") else "\n\n"
+
+
+class _BlockBreaks:
+    """Tracks "a new block started" so the break is only emitted once the block has content."""
+
+    def __init__(self) -> None:
+        self.text = False
+        self.thinking = False
+
+    def start(self, block_type: Any) -> None:
+        if block_type == "text":
+            self.text = True
+        elif block_type == "thinking":
+            self.thinking = True
+
+    def take_text(self, existing: Optional[str]) -> str:
+        pending, self.text = self.text, False
+        return block_separator(existing) if pending else ""
+
+    def take_thinking(self, existing: Optional[str]) -> str:
+        pending, self.thinking = self.thinking, False
+        return block_separator(existing) if pending else ""
+
+
 def _denied_from(rec: Dict[str, Any], default_action: str, default_name: str, use_alt_keys: bool) -> Dict[str, Any]:
     if use_alt_keys:
         action = js_str(first_not_none(rec.get("tool_name"), rec.get("action"), default_action))
@@ -590,9 +623,19 @@ class AgentRunner:
 
         self._set_status_detail(tab_id, "Antigravity is thinking…")
 
-        st: Dict[str, Any] = {"session_ref": session, "usage": None, "saw_text": False}
+        st: Dict[str, Any] = {"session_ref": session, "usage": None, "saw_text": False,
+                              "text_step": None, "think_step": None}
         denied: List[Dict[str, Any]] = []
         tool_starts: Dict[str, int] = {}
+        breaks = _BlockBreaks()
+
+        def step_break(kind: str, step: Dict[str, Any], existing: Optional[str]) -> str:
+            """Paragraph break when text/thinking continues in a different step (e.g. after a tool)."""
+            idx = step.get("step_index")
+            if idx is None:
+                return ""
+            previous, st[kind] = st[kind], idx
+            return block_separator(existing) if previous is not None and previous != idx else ""
 
         def text(delta: str) -> None:
             self._emit_delta(tab_id, msg, text_delta=delta)
@@ -630,13 +673,13 @@ class AgentRunner:
 
             if step_type == "agent_response":
                 if isinstance(step.get("thinking_delta"), str) and step["thinking_delta"]:
-                    think(step["thinking_delta"])
+                    think(step_break("think_step", step, msg["thinking"]) + step["thinking_delta"])
                 if isinstance(step.get("text_delta"), str) and step["text_delta"]:
                     st["saw_text"] = True
-                    text(step["text_delta"])
+                    text(step_break("text_step", step, msg["text"]) + step["text_delta"])
                 elif isinstance(step.get("text"), str) and step["text"] and not st["saw_text"]:
                     st["saw_text"] = True
-                    text(step["text"])
+                    text(step_break("text_step", step, msg["text"]) + step["text"])
                 step_usage = parse_agy_usage(step.get("usage"), step.get("duration_seconds"))
                 if step_usage:
                     st["usage"] = step_usage
@@ -649,7 +692,7 @@ class AgentRunner:
                         think_text = step[key]
                         break
                 if think_text:
-                    think(think_text)
+                    think(step_break("think_step", step, msg["thinking"]) + think_text)
                 return
 
             if step_type == "tool":
@@ -776,12 +819,16 @@ class AgentRunner:
             if ev_type == "stream_event" and as_obj(ev.get("event")) is not None:
                 inner = as_obj(ev["event"]) or {}
                 d = as_obj(inner.get("delta"))
-                if inner.get("type") == "content_block_delta" and d is not None:
+                if inner.get("type") == "content_block_start":
+                    breaks.start((as_obj(inner.get("content_block")) or {}).get("type"))
+                elif inner.get("type") == "content_block_delta" and d is not None:
                     if d.get("type") == "text_delta" and isinstance(d.get("text"), str):
                         st["saw_text"] = True
-                        text(d["text"])
+                        if d["text"]:
+                            text(breaks.take_text(msg["text"]) + d["text"])
                     elif d.get("type") == "thinking_delta" and isinstance(d.get("thinking"), str):
-                        think(d["thinking"])
+                        if d["thinking"]:
+                            think(breaks.take_thinking(msg["thinking"]) + d["thinking"])
                 return
 
             if ev_type == "assistant" and as_obj(ev.get("message")) is not None:
@@ -792,10 +839,10 @@ class AgentRunner:
                         continue
                     if b.get("type") == "thinking" and isinstance(b.get("thinking"), str) and b["thinking"]:
                         if not (msg["thinking"] is not None and b["thinking"] in msg["thinking"]):
-                            think(("\n" if msg["thinking"] else "") + b["thinking"])
+                            think(block_separator(msg["thinking"]) + b["thinking"])
                     elif b.get("type") == "text" and isinstance(b.get("text"), str) and b["text"]:
                         if not st["saw_text"]:
-                            text(("\n" if msg["text"] else "") + b["text"])
+                            text(block_separator(msg["text"]) + b["text"])
                     elif b.get("type") == "tool_use":
                         self._tool_use_started(tab_id, msg, tool_starts, b.get("id"), b.get("name"), b.get("input"))
                 return
@@ -919,6 +966,7 @@ class AgentRunner:
         st: Dict[str, Any] = {"session_ref": session, "usage": None, "saw_partial": False}
         denied: List[Dict[str, Any]] = []
         tool_starts: Dict[str, int] = {}
+        breaks = _BlockBreaks()
 
         def handle_line(line: str) -> None:
             trimmed = line.strip()
@@ -937,12 +985,18 @@ class AgentRunner:
             if ev_type == "stream_event" and as_obj(ev.get("event")) is not None:
                 inner = as_obj(ev["event"]) or {}
                 d = as_obj(inner.get("delta"))
-                if inner.get("type") == "content_block_delta" and d is not None:
+                if inner.get("type") == "content_block_start":
+                    breaks.start((as_obj(inner.get("content_block")) or {}).get("type"))
+                elif inner.get("type") == "content_block_delta" and d is not None:
                     if d.get("type") == "text_delta" and isinstance(d.get("text"), str):
                         st["saw_partial"] = True
-                        self._emit_delta(tab_id, msg, text_delta=d["text"])
+                        if d["text"]:
+                            self._emit_delta(tab_id, msg, text_delta=breaks.take_text(msg["text"]) + d["text"])
                     elif d.get("type") == "thinking_delta" and isinstance(d.get("thinking"), str):
-                        self._emit_delta(tab_id, msg, thinking_delta=d["thinking"])
+                        if d["thinking"]:
+                            self._emit_delta(
+                                tab_id, msg, thinking_delta=breaks.take_thinking(msg["thinking"]) + d["thinking"]
+                            )
             elif ev_type == "assistant" and as_obj(ev.get("message")) is not None:
                 content = (as_obj(ev["message"]) or {}).get("content")
                 for block in content if isinstance(content, list) else []:
@@ -952,7 +1006,8 @@ class AgentRunner:
                     if b.get("type") == "tool_use":
                         self._tool_use_started(tab_id, msg, tool_starts, b.get("id"), b.get("name"), b.get("input"))
                     elif b.get("type") == "text" and isinstance(b.get("text"), str) and not st["saw_partial"]:
-                        self._emit_delta(tab_id, msg, text_delta=("\n" if msg["text"] else "") + b["text"])
+                        if b["text"]:
+                            self._emit_delta(tab_id, msg, text_delta=block_separator(msg["text"]) + b["text"])
             elif ev_type == "user" and as_obj(ev.get("message")) is not None:
                 content = (as_obj(ev["message"]) or {}).get("content")
                 for block in content if isinstance(content, list) else []:
