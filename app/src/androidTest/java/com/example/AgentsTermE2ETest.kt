@@ -39,6 +39,7 @@ class AgentsTermE2ETest {
 
     private var scenario: ActivityScenario<MainActivity>? = null
     private var daemon: FakeAgentsTermDaemon? = null
+    private var sshServer: FakeSshVmServer? = null
 
     @Before
     fun clearAppPreferences() {
@@ -53,6 +54,8 @@ class AgentsTermE2ETest {
     fun tearDown() {
         scenario?.close()
         scenario = null
+        sshServer?.close()
+        sshServer = null
         daemon?.close()
         daemon = null
     }
@@ -383,5 +386,55 @@ class AgentsTermE2ETest {
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             activeDaemon.uploadedDebugDumps.any { it.note == "quick dump from chat" }
         }
+    }
+
+    @Test
+    fun sshBootstrapWithFakeVmStreamsAgyAndConnectsToAgentWorkspace() {
+        val activeDaemon = startDaemon()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val fakeSsh = FakeSshVmServer(
+            context = context,
+            expectedUsername = "ned",
+            allowNoneAuth = true,
+            pairingUri = activeDaemon.pairingUri("herdr"),
+            daemonPort = activeDaemon.port,
+        ).also {
+            it.start()
+            sshServer = it
+        }
+
+        launchMainActivity()
+
+        // Default unconfigured screen opens in SSH + agy Setup mode (Tailscale SSH / none auth)
+        waitForTag("ssh_host_input")
+        composeRule.onNodeWithTag("ssh_host_input").performScrollTo().performTextReplacement(fakeSsh.host)
+        composeRule.onNodeWithTag("ssh_username_input").performScrollTo().performTextReplacement("ned")
+        composeRule.onNodeWithTag("ssh_port_input").performScrollTo().performTextReplacement(fakeSsh.port.toString())
+        composeRule.onNodeWithTag("ssh_daemon_port_input").performScrollTo().performTextReplacement(activeDaemon.port.toString())
+        Espresso.closeSoftKeyboard()
+
+        // Start SSH bootstrap against the in-process fake VM SSH server
+        composeRule.onNodeWithTag("ssh_bootstrap_button").performScrollTo().performClick()
+
+        // App connects over real JSch, parses streamed agy JSON, extracts pairing URI,
+        // verifies /api/info on FakeAgentsTermDaemon, and opens the workspace automatically.
+        waitForText("Connected to ci-test-vm", timeoutMs = 20_000L)
+        assertTrue(fakeSsh.receivedCommands.isNotEmpty())
+        assertTrue(fakeSsh.receivedCommands.first().contains("base64 -d | bash -s"))
+
+        // Create an Antigravity (agy) agent tab and verify full agent streaming workflow
+        composeRule.onNodeWithTag("empty_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        composeRule.onNodeWithTag("agent_option_agy").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("SSH Agy Tab")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+
+        waitForText("SSH Agy Tab")
+        composeRule.onNodeWithTag("composer_input").performTextInput("Diagnose phone glitch")
+        composeRule.onNodeWithTag("send_button").performClick()
+
+        waitForText("Diagnose phone glitch")
+        waitForText("Repository is clean on main branch.")
     }
 }

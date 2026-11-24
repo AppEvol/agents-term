@@ -138,10 +138,10 @@ jobs:
       - name: Run E2E instrumented tests on Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
-          target: default
+          api-level: 35
+          target: google_apis
           arch: x86_64
-          profile: pixel_6
+          profile: pixel_9a
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: gradle :app:connectedDebugAndroidTest --stacktrace
