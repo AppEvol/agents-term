@@ -605,6 +605,12 @@ class AgentsTermE2ETest {
             }
         }
 
+        // Like `app_state_cli wait --tag … && app_state_cli tap --tag …`: screens change asynchronously.
+        fun agentTaps(tag: String): Map<String, Any?> {
+            agentWaitsFor("'$tag' to tap") { nodes("""{"tag":"$tag"}""").isNotEmpty() }
+            return agent("tap", """{"tag":"$tag"}""")
+        }
+
         // The user allows inspection only: the agent can read the screen but not touch it.
         composeRule.onNodeWithTag("overflow_menu_button").performClick()
         composeRule.onNodeWithTag("menu_app_settings").performClick()
@@ -643,7 +649,7 @@ class AgentsTermE2ETest {
         agentWaitsFor("the workspace") { screen() == "workspace" }
 
         // Open the overflow menu. It is a separate window, and shows up in the UI tree and screenshot.
-        agent("tap", """{"tag":"overflow_menu_button"}""")
+        agentTaps("overflow_menu_button")
         agentWaitsFor("the overflow menu") { nodes("""{"tag":"menu_app_settings"}""").isNotEmpty() }
         val menuItem = nodes("""{"tag":"menu_app_settings"}""").single()
         assertTrue("the menu item should be in a window above the Activity", (menuItem["window"] as Number).toInt() >= 1)
@@ -660,22 +666,23 @@ class AgentsTermE2ETest {
         assertEquals("workspace", screen())
 
         // Tap a menu item by the position read from the UI tree, like an agent working from a screenshot.
-        agent("tap", """{"tag":"overflow_menu_button"}""")
+        agentTaps("overflow_menu_button")
         agentWaitsFor("the overflow menu") { nodes("""{"tag":"menu_app_settings"}""").isNotEmpty() }
         val center = nodes("""{"tag":"menu_app_settings"}""").single()["center"] as List<Number>
         val tapped = agent("tap", """{"x":${center[0].toInt()},"y":${center[1].toInt()}}""")
         assertEquals("popup", (tapped["window"] as Map<String, Any?>)["type"])
         agentWaitsFor("Settings") { screen() == "settings" }
-        agent("tap", """{"tag":"settings_back_button"}""")
+        agentTaps("settings_back_button")
         agentWaitsFor("the workspace") { screen() == "workspace" }
 
         // Write a prompt and send it.
+        agentWaitsFor("the composer") { nodes("""{"tag":"composer_input"}""").isNotEmpty() }
         val typed = agent("type", """{"tag":"composer_input","text":"Summarize the repo"}""")
         assertEquals(18, (typed["chars"] as Number).toInt())
         agentWaitsFor("the prompt in the composer") {
             nodes("""{"tag":"composer_input"}""").singleOrNull()?.get("value") == "Summarize the repo"
         }
-        agent("tap", """{"tag":"send_button"}""")
+        agentTaps("send_button")
         agentWaitsFor("the agent's reply") { nodes("""{"text":"Repository is clean on main branch."}""").isNotEmpty() }
         waitForText("Repository is clean on main branch.")
 
