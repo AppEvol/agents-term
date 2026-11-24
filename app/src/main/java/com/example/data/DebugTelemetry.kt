@@ -23,7 +23,7 @@ data class DebugDumpUploadState(
 )
 
 private val bearerTokenRegex = Regex("""(?i)\bBearer\s+[A-Za-z0-9._\-+/=]+""")
-private val queryTokenRegex = Regex("""(?i)([?&]token=)[^&\s"'`<>)\]]+""")
+private val queryTokenRegex = Regex("""(?i)((?:[?&]|\b)token=)[^&\s"'`<>)\]]+""")
 private val jsonTokenRegex = Regex("""(?i)("token"\s*:\s*")([^"]*)(")""")
 private val privateKeyBlockRegex = Regex(
     """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----"""
