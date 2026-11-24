@@ -367,6 +367,49 @@ data class CreateTabRequest(
     val systemPrompt: String? = null,
 )
 
+private val FENCED_CODE_BLOCK_REGEX = Regex("```[\\s\\S]*?```")
+private val NEGATED_CLOSE_TAB_REGEX = Regex(
+    "\\b(?:do\\s+not|don't|cannot|can't|avoid|never|wait\\s+before)\\b[^\\n.!?]{0,40}\\bclose\\s+(?:this|the)\\s+tab\\b",
+    RegexOption.IGNORE_CASE,
+)
+private val CLOSE_TAB_CUE_REGEX = Regex(
+    "(?:\\b(?:you\\s+(?:can|may)|feel\\s+free\\s+to|(?:it(?:'s|\\s+is)\\s+)?safe\\s+to|safely|good\\s+to|ready\\s+to)\\s+" +
+        "(?:now\\s+)?(?:safely\\s+)?close\\s+(?:this|the)\\s+tab\\b|" +
+        "\\bclose\\s+(?:this|the)\\s+tab\\s+(?:now|whenever|if\\s+you(?:'d|\\s+would)?\\s+like)\\b)",
+    RegexOption.IGNORE_CASE,
+)
+private val PARAGRAPH_SPLIT_REGEX = Regex("\\n\\s*\\n")
+
+/**
+ * Returns true when an assistant message closes by telling the user their task is finished and they
+ * can close the tab. Used as a client-side fallback when connected to daemons predating explicit
+ * `status = "done"` detection.
+ */
+fun isTaskFinishedText(text: String?): Boolean {
+    if (text.isNullOrBlank()) return false
+    val withoutCode = FENCED_CODE_BLOCK_REGEX.replace(text, "").trim()
+    if (withoutCode.isEmpty()) return false
+    val paragraphs = PARAGRAPH_SPLIT_REGEX.split(withoutCode).map { it.trim() }.filter { it.isNotEmpty() }
+    val tail = (paragraphs.lastOrNull() ?: withoutCode).takeLast(320)
+    if (NEGATED_CLOSE_TAB_REGEX.containsMatchIn(tail)) return false
+    return CLOSE_TAB_CUE_REGEX.containsMatchIn(tail)
+}
+
+fun isTabTaskFinished(
+    tab: TabRecord,
+    messages: List<ChatMessage> = emptyList(),
+    manuallyReopened: Boolean = false,
+): Boolean {
+    if (tab.agent == "shell") return false
+    if (tab.status == "done") return true
+    if (manuallyReopened || tab.status != "idle") return false
+    val latestAssistant = messages.lastOrNull { it.role == "assistant" && it.status == "complete" }
+    if (latestAssistant != null) {
+        return isTaskFinishedText(latestAssistant.text)
+    }
+    return isTaskFinishedText(tab.lastMessagePreview)
+}
+
 @JsonClass(generateAdapter = true)
 data class UpdateTabRequest(
     val title: String? = null,
@@ -374,6 +417,7 @@ data class UpdateTabRequest(
     val permissionMode: String? = null,
     val model: String? = null,
     val systemPrompt: String? = null,
+    val status: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

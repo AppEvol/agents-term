@@ -634,6 +634,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateTabStatus(
+        tabId: String,
+        status: String,
+        onUpdated: ((com.example.data.TabRecord) -> Unit)? = null,
+    ) {
+        viewModelScope.launch {
+            val res = repo.updateTabStatus(tabId, status)
+            res.onSuccess { updated ->
+                onUpdated?.invoke(updated)
+            }
+        }
+    }
+
+    fun closeFinishedTabs() {
+        val finishedIds = state.value.finishedTabIds.toList()
+        if (finishedIds.isEmpty()) return
+        viewModelScope.launch {
+            for (tabId in finishedIds) {
+                repo.deleteTab(tabId)
+            }
+        }
+    }
+
     fun sendMessage(text: String, overridePermissionMode: String? = null) {
         val tabId = state.value.activeTab?.id ?: return
         viewModelScope.launch {

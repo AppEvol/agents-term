@@ -24,6 +24,7 @@ data class WorkspaceState(
     val lastCwd: String? = null,
     val messagesByTab: Map<String, List<ChatMessage>> = emptyMap(),
     val loadingTabIds: Set<String> = emptySet(),
+    val reopenedTabIds: Set<String> = emptySet(),
     val bannerMessage: String? = null,
 ) {
     val activeTab: TabRecord?
@@ -34,6 +35,16 @@ data class WorkspaceState(
 
     val attentionCount: Int
         get() = tabs.count { it.unread || it.status == "blocked" || it.status == "error" }
+
+    fun isTabFinished(tab: TabRecord): Boolean =
+        isTabTaskFinished(
+            tab = tab,
+            messages = messagesByTab[tab.id].orEmpty(),
+            manuallyReopened = tab.id in reopenedTabIds,
+        )
+
+    val finishedTabIds: Set<String>
+        get() = tabs.filter { isTabFinished(it) }.map { it.id }.toSet()
 }
 
 /**
@@ -80,7 +91,12 @@ fun reduceWorkspaceEvent(
             } else {
                 state.tabs + tab
             }
-            state.copy(tabs = updated)
+            val nextReopened = if (tab.status == "working" || tab.status == "done") {
+                state.reopenedTabIds - tab.id
+            } else {
+                state.reopenedTabIds
+            }
+            state.copy(tabs = updated, reopenedTabIds = nextReopened)
         }
 
         "tab_deleted" -> {
@@ -91,6 +107,7 @@ fun reduceWorkspaceEvent(
                 tabs = remaining,
                 selectedTabId = nextSelected,
                 messagesByTab = state.messagesByTab - id,
+                reopenedTabIds = state.reopenedTabIds - id,
             )
         }
 
@@ -647,6 +664,15 @@ class HerdrRepository(
             "Updating tab=$tabId systemPrompt=${if (normalized.isEmpty()) "(empty)" else "len=${normalized.length}"}",
         )
         return updateTab(tabId, UpdateTabRequest(systemPrompt = normalized))
+    }
+
+    suspend fun updateTabStatus(tabId: String, status: String): Result<TabRecord> {
+        debugRecorder?.record("ui", "update_tab_status", "Updating tab=$tabId status=$status")
+        _state.update { cur ->
+            val nextReopened = if (status == "idle") cur.reopenedTabIds + tabId else cur.reopenedTabIds - tabId
+            cur.copy(reopenedTabIds = nextReopened)
+        }
+        return updateTab(tabId, UpdateTabRequest(status = status))
     }
 
     suspend fun refreshAgentModels(

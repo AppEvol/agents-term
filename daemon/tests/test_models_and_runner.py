@@ -15,7 +15,7 @@ from agentsterm_daemon.models import (
     read_claude_models_from_disk,
     read_codex_models_from_disk,
 )
-from agentsterm_daemon.runner import AgentRunner, block_separator
+from agentsterm_daemon.runner import AgentRunner, block_separator, is_task_finished_response
 from agentsterm_daemon.store import StateStore
 from agentsterm_daemon.util import summarize_command, summarize_tool_input
 
@@ -543,6 +543,42 @@ class RunnerTest(TempHomeTestCase):
         # 4) Shell tabs never store a systemPrompt
         sh = store.create_tab("shell", cwd=str(self.tmp), system_prompt="Should be ignored")
         self.assertIsNone(sh["systemPrompt"])
+
+    def test_task_finished_detection_marks_coding_agent_tab_done_and_resets_on_followup(self):
+        self.assertTrue(is_task_finished_response("All done! You can close this tab whenever you're ready."))
+        self.assertTrue(is_task_finished_response("Summary...\n\nThe task is finished — feel free to close this tab."))
+        self.assertTrue(is_task_finished_response("Everything passed; it's safe to close the tab now."))
+        self.assertFalse(is_task_finished_response("Please do not close this tab while the build runs."))
+        self.assertFalse(is_task_finished_response("The default prompt tells agents to say they can close the tab."))
+        self.assertFalse(is_task_finished_response("```text\nYou can close this tab.\n```"))
+        self.assertFalse(is_task_finished_response("You can close this tab.\n\nWait, checking one more failure first."))
+
+        self.fake_binary("agy", self.emit_lines_script([
+            {"event": "init", "conversation_id": "conv-done-1"},
+            {"event": "result", "result": {
+                "conversation_id": "conv-done-1", "status": "SUCCESS",
+                "response": "Merged and verified. This task is finished — you can close this tab.",
+            }},
+        ]))
+        store, runner = self.make()
+        tab = store.create_tab("agy", cwd=str(self.tmp))
+        self.run_turn(runner, store, tab, "Finish the task")
+        updated = store.get_tab(tab["id"])
+        self.assertEqual((updated["status"], updated["statusDetail"]), ("done", "Task finished"))
+
+        # Follow-up turn without close-tab cue returns tab to idle
+        self.fake_binary("agy", self.emit_lines_script([
+            {"event": "result", "result": {"conversation_id": "conv-done-1", "status": "SUCCESS",
+                                           "response": "Checking the logs now."}},
+        ]))
+        self.run_turn(runner, store, updated, "Check logs too")
+        reopened = store.get_tab(tab["id"])
+        self.assertEqual((reopened["status"], reopened["statusDetail"]), ("idle", None))
+
+        # Shell tabs never transition to done
+        sh = store.create_tab("shell", cwd=str(self.tmp))
+        self.run_turn(runner, store, sh, "echo 'You can close this tab.'")
+        self.assertEqual(store.get_tab(sh["id"])["status"], "idle")
 
 
 if __name__ == "__main__":

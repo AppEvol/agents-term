@@ -956,4 +956,76 @@ class AgentsTermE2ETest {
             composeRule.onAllNodesWithTag("new_tab_system_prompt_switch").fetchSemanticsNodes().isEmpty(),
         )
     }
+
+    @Test
+    fun finishedTaskTabShowsDoneIndicatorsInPersistentTabsMenuAndCanBeClosed() {
+        val activeTab = TabRecord(
+            id = "tab_active",
+            title = "Active Agent",
+            agent = "agy",
+            cwd = "/home/ci/projects",
+            status = "idle",
+        )
+        val finishedTab = TabRecord(
+            id = "tab_done",
+            title = "Finished Agent",
+            agent = "claude",
+            cwd = "/home/ci/projects",
+            status = "done",
+            statusDetail = "Task finished",
+            lastMessagePreview = "This task is finished — you can close this tab.",
+        )
+        val activeDaemon = startDaemon(initialTabs = listOf(activeTab, finishedTab))
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+
+        // Quick tab strip shows checkmark icon on the finished tab
+        waitForTag("quick_tab_done_icon_tab_done")
+        composeRule.onNodeWithTag("quick_tab_done_icon_tab_done").assertIsDisplayed()
+
+        // Selecting the finished tab shows Done indicator in top bar
+        composeRule.onNodeWithTag("quick_tab_tab_done").performClick()
+        waitForTag("topbar_done_badge")
+        composeRule.onNodeWithTag("topbar_done_badge").assertIsDisplayed()
+
+        // Open Persistent Tabs drawer and verify finished-task UI elements
+        composeRule.onNodeWithTag("open_drawer_button").performClick()
+        waitForTag("drawer_finished_count_badge")
+        composeRule.onNodeWithTag("drawer_finished_count_badge").assertTextContains("1 done")
+        composeRule.onNodeWithTag("drawer_tab_done_icon_tab_done").assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_tab_done_badge_tab_done").assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_tab_done_hint_tab_done")
+            .assertIsDisplayed()
+            .assertTextContains("Task finished", substring = true)
+
+        // Tap "Close done" to close all finished tabs while keeping active tabs
+        composeRule.onNodeWithTag("drawer_close_finished_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithTag("drawer_tab_tab_done").fetchSemanticsNodes().isEmpty() &&
+                composeRule.onAllNodesWithTag("drawer_tab_tab_active").fetchSemanticsNodes().isNotEmpty()
+        }
+        assertTrue(
+            "Finished count badge should disappear after closing finished tabs",
+            composeRule.onAllNodesWithTag("drawer_finished_count_badge").fetchSemanticsNodes().isEmpty(),
+        )
+
+        // Select remaining active tab, trigger a turn that finishes its task, verify Done appears, then mark active
+        composeRule.onNodeWithTag("drawer_tab_tab_active").performClick()
+        waitForTag("composer_input")
+        composeRule.onNodeWithTag("composer_input").performTextInput("finish_task ship update")
+        composeRule.onNodeWithTag("send_button").performClick()
+
+        waitForTag("topbar_done_badge")
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        waitForTag("menu_toggle_task_done")
+        composeRule.onNodeWithTag("menu_toggle_task_done").assertTextContains("Mark as active")
+        composeRule.onNodeWithTag("menu_toggle_task_done").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithTag("topbar_done_badge").fetchSemanticsNodes().isEmpty()
+        }
+    }
 }

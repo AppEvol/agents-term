@@ -383,6 +383,11 @@ class Daemon:
                     )
                     patch["systemPrompt"] = new_sp
                     system_prompt_changed = new_sp != existing.get("systemPrompt")
+                if body.get("status") in ("done", "idle") and not self.runner.is_running(tab_id):
+                    if existing.get("agent") != "shell":
+                        new_status = body["status"]
+                        patch["status"] = new_status
+                        patch["statusDetail"] = "Task finished" if new_status == "done" else None
                 updated = self.store.update_tab(tab_id, patch)
                 if updated:
                     if system_prompt_changed:
