@@ -467,6 +467,44 @@ class HerdrRepository(
         }
     }
 
+    suspend fun updateTabModel(tabId: String, model: String?): Result<TabRecord> {
+        val normalized = model?.trim().orEmpty()
+        debugRecorder?.record(
+            "ui",
+            "update_tab_model",
+            "Updating tab=$tabId model=${normalized.ifEmpty { "(default)" }}",
+        )
+        return updateTab(tabId, UpdateTabRequest(model = normalized))
+    }
+
+    suspend fun refreshAgentModels(
+        agent: String,
+        forceRefresh: Boolean = false,
+    ): Result<AgentModelsResponse> {
+        val cfg = _state.value.config
+        if (!cfg.isValid) {
+            return Result.failure(IllegalStateException("Not connected to a VM daemon"))
+        }
+        return runCatching {
+            val resp = api.getAgentModels(cfg, agent, refresh = forceRefresh)
+            _state.update { cur ->
+                val info = cur.serverInfo ?: return@update cur
+                val updatedAgents = info.agents.map { existing ->
+                    if (existing.type == agent) {
+                        existing.copy(
+                            defaultModel = resp.defaultModel ?: existing.defaultModel,
+                            models = resp.models.ifEmpty { existing.models },
+                        )
+                    } else {
+                        existing
+                    }
+                }
+                cur.copy(serverInfo = info.copy(agents = updatedAgents))
+            }
+            resp
+        }
+    }
+
     suspend fun deleteTab(tabId: String): Result<Unit> {
         val cfg = _state.value.config
         debugRecorder?.record("ui", "delete_tab", "Deleting tab $tabId")

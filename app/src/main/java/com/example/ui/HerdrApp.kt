@@ -71,10 +71,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.AgentModelOption
 import com.example.data.ConnectionState
+import com.example.data.ModelSlashCommand
 import com.example.data.TabRecord
 import com.example.data.WorkspaceState
 import com.example.data.captureWindowScreenshotBase64
+import com.example.data.formatModelChipLabel
+import com.example.data.parseModelSlashCommand
+import com.example.data.resolveAgentModelCatalog
+import com.example.data.resolveModelIdFromQuery
 import com.example.data.shareDebugBundleFile
 import com.example.ui.theme.HerdrAmber
 import com.example.ui.theme.HerdrEmerald
@@ -95,6 +101,7 @@ fun HerdrApp(viewModel: MainViewModel) {
     val sshProfile by viewModel.sshProfile.collectAsStateWithLifecycle()
     val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle()
     val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
+    val isRefreshingModels by viewModel.isRefreshingModels.collectAsStateWithLifecycle()
 
     if (showSettings) {
         val debugUploadState by viewModel.debugUploadState.collectAsStateWithLifecycle()
@@ -153,8 +160,19 @@ fun HerdrApp(viewModel: MainViewModel) {
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showPermissionDialog by remember { mutableStateOf(false) }
+    var showModelPicker by remember { mutableStateOf(false) }
     var showQuickDebugDialog by remember { mutableStateOf(false) }
     var pendingScreenshotBase64 by remember { mutableStateOf<String?>(null) }
+
+    fun openModelPickerForActiveTab() {
+        val current = state.activeTab ?: return
+        if (current.agent == "shell") return
+        showModelPicker = true
+        val serverAgent = state.serverInfo?.agents?.firstOrNull { it.type == current.agent }
+        if (serverAgent == null || serverAgent.models.isEmpty()) {
+            viewModel.refreshModelsForAgent(current.agent, forceRefresh = false)
+        }
+    }
 
     LaunchedEffect(state.bannerMessage) {
         val msg = state.bannerMessage
@@ -192,11 +210,47 @@ fun HerdrApp(viewModel: MainViewModel) {
                 onSelectTab = { viewModel.selectTab(it) },
                 onRenameTab = { showRenameDialog = true },
                 onChangePermission = { showPermissionDialog = true },
+                onChangeModel = { openModelPickerForActiveTab() },
                 onDeleteTab = { viewModel.deleteTab(it) },
                 onOpenSettings = { viewModel.openConnectionSettings() },
                 onOpenAppSettings = { viewModel.openAppSettings() },
                 onReconnect = { viewModel.reconnectNow() },
-                onSendMessage = { viewModel.sendMessage(it) },
+                onSendMessage = { rawText ->
+                    val current = state.activeTab
+                    val modelCmd = if (current != null && current.agent != "shell") {
+                        parseModelSlashCommand(rawText)
+                    } else {
+                        null
+                    }
+                    when (modelCmd) {
+                        is ModelSlashCommand.OpenPicker -> openModelPickerForActiveTab()
+                        is ModelSlashCommand.ResetToDefault -> {
+                            if (current != null) {
+                                viewModel.updateTabModel(current.id, null) {
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar("Model reset to default")
+                                    }
+                                }
+                            }
+                        }
+                        is ModelSlashCommand.SetModel -> {
+                            if (current != null) {
+                                val (models, _) = resolveAgentModelCatalog(
+                                    current.agent,
+                                    state.serverInfo?.agents.orEmpty(),
+                                )
+                                val resolvedId = resolveModelIdFromQuery(modelCmd.modelQuery, models)
+                                val label = formatModelChipLabel(resolvedId, models)
+                                viewModel.updateTabModel(current.id, resolvedId) {
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar("Model switched to $label")
+                                    }
+                                }
+                            }
+                        }
+                        null -> viewModel.sendMessage(rawText)
+                    }
+                },
                 onInterrupt = { viewModel.interruptActiveTab() },
                 onRetryFullAccess = { viewModel.retryLastUserPromptWithFullAccess() },
             )
@@ -265,15 +319,41 @@ fun HerdrApp(viewModel: MainViewModel) {
             defaultCwd = state.activeTab?.cwd ?: state.serverInfo?.defaultCwd ?: "/home",
             onLoadDirectories = { path -> viewModel.loadDirectories(path) },
             onDismiss = { showNewTabSheet = false },
-            onCreate = { agent, cwd, permMode, title ->
+            onCreate = { agent, cwd, permMode, title, model ->
                 viewModel.createTab(
                     agent = agent,
                     cwd = cwd,
                     permissionMode = permMode,
                     title = title,
+                    model = model,
                     onCreated = { showNewTabSheet = false },
                 )
             },
+        )
+    }
+
+    if (showModelPicker && state.activeTab != null && state.activeTab!!.agent != "shell") {
+        val current = state.activeTab!!
+        val (models, defaultModel) = remember(current.agent, state.serverInfo?.agents) {
+            resolveAgentModelCatalog(current.agent, state.serverInfo?.agents.orEmpty())
+        }
+        ModelPickerSheet(
+            agentLabel = current.agentLabel,
+            currentModel = current.model,
+            defaultModel = defaultModel,
+            models = models,
+            isRefreshing = isRefreshingModels,
+            onRefresh = { viewModel.refreshModelsForAgent(current.agent, forceRefresh = true) },
+            onSelectModel = { chosenModel ->
+                showModelPicker = false
+                viewModel.updateTabModel(current.id, chosenModel) {
+                    val label = formatModelChipLabel(chosenModel, models, defaultModel)
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Model: $label")
+                    }
+                }
+            },
+            onDismiss = { showModelPicker = false },
         )
     }
 
@@ -474,6 +554,7 @@ private fun WorkspaceScaffold(
     onSelectTab: (String) -> Unit,
     onRenameTab: () -> Unit,
     onChangePermission: () -> Unit,
+    onChangeModel: () -> Unit,
     onDeleteTab: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAppSettings: () -> Unit,
@@ -483,6 +564,17 @@ private fun WorkspaceScaffold(
     onRetryFullAccess: () -> Unit,
 ) {
     val activeTab = state.activeTab
+    val activeModelInfo = remember(activeTab?.agent, activeTab?.model, state.serverInfo?.agents) {
+        if (activeTab == null || activeTab.agent == "shell") {
+            null
+        } else {
+            val (models, defaultModel) = resolveAgentModelCatalog(
+                activeTab.agent,
+                state.serverInfo?.agents.orEmpty(),
+            )
+            formatModelChipLabel(activeTab.model, models, defaultModel)
+        }
+    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
@@ -590,6 +682,14 @@ private fun WorkspaceScaffold(
                                         },
                                     )
                                     if (activeTab.agent != "shell") {
+                                        DropdownMenuItem(
+                                            text = { Text("Model (${activeModelInfo ?: "Default"})") },
+                                            onClick = {
+                                                onToggleOverflow(false)
+                                                onChangeModel()
+                                            },
+                                            modifier = Modifier.testTag("menu_change_model"),
+                                        )
                                         DropdownMenuItem(
                                             text = { Text("Permission mode (${activeTab.permissionMode})") },
                                             onClick = {
@@ -708,6 +808,9 @@ private fun WorkspaceScaffold(
                 messages = state.activeMessages,
                 isLoading = activeTab.id in state.loadingTabIds,
                 isConnected = state.connectionState == ConnectionState.CONNECTED,
+                modelLabel = activeModelInfo,
+                hasCustomModel = !activeTab.model.isNullOrBlank(),
+                onOpenModelPicker = if (activeTab.agent != "shell") onChangeModel else null,
                 onSendMessage = onSendMessage,
                 onInterrupt = onInterrupt,
                 onRetryFullAccess = onRetryFullAccess,

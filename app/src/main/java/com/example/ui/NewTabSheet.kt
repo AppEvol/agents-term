@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.AvailableAgentInfo
 import com.example.data.FsListResponse
+import com.example.data.resolveAgentModelCatalog
 import com.example.ui.theme.MonoFontFamily
 import kotlinx.coroutines.launch
 
@@ -63,7 +64,7 @@ fun NewTabSheet(
     defaultCwd: String,
     onLoadDirectories: suspend (String?) -> Result<FsListResponse>,
     onDismiss: () -> Unit,
-    onCreate: (agent: String, cwd: String, permissionMode: String, title: String) -> Unit,
+    onCreate: (agent: String, cwd: String, permissionMode: String, title: String, model: String?) -> Unit,
 ) {
     val effectiveAgents = remember(agents) {
         if (agents.isNotEmpty()) {
@@ -88,6 +89,7 @@ fun NewTabSheet(
         var selectedAgent by remember {
             mutableStateOf(effectiveAgents.firstOrNull { it.available }?.type ?: "agy")
         }
+        var selectedModel by remember { mutableStateOf<String?>(null) }
         var cwd by remember { mutableStateOf(defaultCwd) }
         var permissionMode by remember { mutableStateOf("full-access") }
         var customTitle by remember { mutableStateOf("") }
@@ -168,7 +170,12 @@ fun NewTabSheet(
                             },
                             modifier = Modifier
                                 .width(142.dp)
-                                .clickable { selectedAgent = agent.type }
+                                .clickable {
+                                    if (selectedAgent != agent.type) {
+                                        selectedAgent = agent.type
+                                        selectedModel = null
+                                    }
+                                }
                                 .testTag("agent_option_${agent.type}"),
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
@@ -280,6 +287,47 @@ fun NewTabSheet(
                 }
             }
 
+            // Model selector (coding agents only)
+            if (selectedAgent != "shell") {
+                val (availableModels, defaultModel) = remember(selectedAgent, effectiveAgents) {
+                    resolveAgentModelCatalog(selectedAgent, effectiveAgents)
+                }
+                val defaultChipText = remember(defaultModel, availableModels) {
+                    val defName = defaultModel?.let { defId ->
+                        availableModels.firstOrNull { it.id == defId }?.name ?: defId
+                    }
+                    if (defName != null) "Default ($defName)" else "Default"
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.new_tab_model_label),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = selectedModel == null,
+                            onClick = { selectedModel = null },
+                            label = { Text(defaultChipText, maxLines = 1) },
+                            modifier = Modifier.testTag("new_tab_model_default"),
+                        )
+                        for (option in availableModels) {
+                            FilterChip(
+                                selected = selectedModel == option.id,
+                                onClick = { selectedModel = option.id },
+                                label = { Text(option.name, maxLines = 1) },
+                                modifier = Modifier.testTag("new_tab_model_${option.id}"),
+                            )
+                        }
+                    }
+                }
+            }
+
             // Permission mode (coding agents only)
             if (selectedAgent != "shell") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -320,7 +368,13 @@ fun NewTabSheet(
 
             Button(
                 onClick = {
-                    onCreate(selectedAgent, cwd.trim(), permissionMode, customTitle.trim())
+                    onCreate(
+                        selectedAgent,
+                        cwd.trim(),
+                        permissionMode,
+                        customTitle.trim(),
+                        if (selectedAgent == "shell") null else selectedModel,
+                    )
                 },
                 modifier = Modifier
                     .fillMaxWidth()

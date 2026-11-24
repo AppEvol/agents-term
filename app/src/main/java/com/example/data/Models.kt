@@ -70,6 +70,14 @@ data class ConnectionConfig(
 }
 
 @JsonClass(generateAdapter = true)
+data class AgentModelOption(
+    val id: String,
+    val name: String,
+    val description: String? = null,
+    val isDefault: Boolean = false,
+)
+
+@JsonClass(generateAdapter = true)
 data class AvailableAgentInfo(
     val type: String,
     val name: String,
@@ -77,7 +85,93 @@ data class AvailableAgentInfo(
     val binary: String = "",
     val available: Boolean = true,
     val binaryPath: String? = null,
+    val defaultModel: String? = null,
+    val models: List<AgentModelOption> = emptyList(),
 )
+
+@JsonClass(generateAdapter = true)
+data class AgentModelsResponse(
+    val agent: String,
+    val defaultModel: String? = null,
+    val models: List<AgentModelOption> = emptyList(),
+)
+
+sealed class ModelSlashCommand {
+    data object OpenPicker : ModelSlashCommand()
+    data object ResetToDefault : ModelSlashCommand()
+    data class SetModel(val modelQuery: String) : ModelSlashCommand()
+}
+
+fun parseModelSlashCommand(rawText: String): ModelSlashCommand? {
+    val trimmed = rawText.trim()
+    if (!trimmed.startsWith("/model", ignoreCase = true)) return null
+    val rest = trimmed.substring(6)
+    if (rest.isNotEmpty() && !rest[0].isWhitespace()) return null
+    val arg = rest.trim()
+    if (arg.isEmpty()) return ModelSlashCommand.OpenPicker
+    if (arg.equals("default", ignoreCase = true) ||
+        arg.equals("reset", ignoreCase = true) ||
+        arg.equals("auto", ignoreCase = true)
+    ) {
+        return ModelSlashCommand.ResetToDefault
+    }
+    return ModelSlashCommand.SetModel(arg)
+}
+
+fun resolveModelIdFromQuery(query: String, availableModels: List<AgentModelOption>): String {
+    val trimmed = query.trim()
+    availableModels.firstOrNull { it.id.equals(trimmed, ignoreCase = true) }?.let { return it.id }
+    availableModels.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }?.let { return it.id }
+    return trimmed
+}
+
+fun fallbackModelsForAgent(agentType: String): List<AgentModelOption> = when (agentType) {
+    "agy" -> listOf(
+        AgentModelOption("gemini-4-neon-high", "Gemini 4 Neon (High)"),
+        AgentModelOption("gemini-4-neon-medium", "Gemini 4 Neon (Medium)"),
+        AgentModelOption("gemini-4-carbon-high", "Gemini 4 Carbon (High)"),
+        AgentModelOption("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
+        AgentModelOption("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
+        AgentModelOption("claude-sonnet-5-5-medium", "Claude Sonnet 5.5 (Medium)"),
+    )
+    "claude" -> listOf(
+        AgentModelOption("opus", "Opus", "Most capable Claude model alias"),
+        AgentModelOption("sonnet", "Sonnet", "Balanced Claude model alias"),
+        AgentModelOption("haiku", "Haiku", "Fastest Claude model alias"),
+    )
+    "codex" -> listOf(
+        AgentModelOption("gpt-6.2-sol", "GPT-6.2-Sol"),
+        AgentModelOption("gpt-6.2-astra", "GPT-6.2-Astra"),
+        AgentModelOption("gpt-6.1-terra", "GPT-6.1 Terra"),
+        AgentModelOption("gpt-6-astra", "GPT-6-Astra"),
+    )
+    else -> emptyList()
+}
+
+fun resolveAgentModelCatalog(
+    agentType: String,
+    agents: List<AvailableAgentInfo>,
+): Pair<List<AgentModelOption>, String?> {
+    if (agentType == "shell") return emptyList<AgentModelOption>() to null
+    val info = agents.firstOrNull { it.type == agentType }
+    val models = info?.models?.takeIf { it.isNotEmpty() } ?: fallbackModelsForAgent(agentType)
+    return models to info?.defaultModel
+}
+
+fun formatModelChipLabel(
+    modelId: String?,
+    availableModels: List<AgentModelOption>,
+    defaultModel: String? = null,
+): String {
+    val trimmed = modelId?.trim().orEmpty()
+    if (trimmed.isEmpty()) {
+        val defaultName = defaultModel?.let { defId ->
+            availableModels.firstOrNull { it.id == defId }?.name ?: defId
+        }
+        return if (defaultName != null) "Default · $defaultName" else "Default model"
+    }
+    return availableModels.firstOrNull { it.id == trimmed }?.name ?: trimmed
+}
 
 @JsonClass(generateAdapter = true)
 data class ServerInfo(

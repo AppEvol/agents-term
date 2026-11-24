@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -568,6 +569,85 @@ class AgentsTermE2ETest {
             "WebSocket entered a reconnect loop after foreground recovery",
             stableUpgrades,
             activeDaemon.webSocketUpgradeCount.get(),
+        )
+    }
+
+    @Test
+    fun modelPickerAndSlashModelCommandSwitchAgentModelEndToEnd() {
+        val activeDaemon = startDaemon()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForText("Connected to ci-test-vm")
+
+        // 1) Create a Claude tab with a specific initial model picked in NewTabSheet
+        composeRule.onNodeWithTag("empty_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        composeRule.onNodeWithTag("agent_option_claude").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_model_claude-sonnet-5-5").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Claude Model Tab")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+
+        waitForText("Claude Model Tab")
+        waitForTag("model_picker_chip")
+        composeRule.onNodeWithTag("model_picker_chip").assertTextContains("Sonnet 5.5")
+        assertEquals("claude-sonnet-5-5", activeDaemon.tabModel("tab_1"))
+
+        // 2) Tap the per-tab model picker chip and switch to Opus 5.5
+        composeRule.onNodeWithTag("model_picker_chip").performClick()
+        waitForTag("model_option_claude-opus-5-5")
+        composeRule.onNodeWithTag("model_option_claude-opus-5-5").performScrollTo().performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            activeDaemon.tabModel("tab_1") == "claude-opus-5-5" &&
+                composeRule.onAllNodes(hasTestTag("model_picker_chip") and hasText("Opus 5.5", substring = true))
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+        }
+        composeRule.onNodeWithTag("model_picker_chip").assertTextContains("Opus 5.5")
+
+        // 3) Use /model default slash command in composer to reset to CLI default
+        composeRule.onNodeWithTag("composer_input").performTextInput("/model default")
+        composeRule.onNodeWithTag("send_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            activeDaemon.tabModel("tab_1") == null &&
+                composeRule.onAllNodes(hasTestTag("model_picker_chip") and hasText("Default model", substring = true))
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+        }
+        composeRule.onNodeWithTag("model_picker_chip").assertTextContains("Default model")
+
+        // 4) Use /model (bare command) to open the ModelPickerSheet and apply a custom model ID
+        composeRule.onNodeWithTag("composer_input").performTextInput("/model")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForTag("custom_model_input")
+        composeRule.onNodeWithTag("custom_model_input").performScrollTo().performTextInput("claude-custom-exp")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("custom_model_apply_button").performScrollTo().performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            activeDaemon.tabModel("tab_1") == "claude-custom-exp" &&
+                composeRule.onAllNodes(hasTestTag("model_picker_chip") and hasText("claude-custom-exp", substring = true))
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+        }
+        composeRule.onNodeWithTag("model_picker_chip").assertTextContains("claude-custom-exp")
+
+        // 5) Shell tabs should NOT display the model picker chip
+        composeRule.onNodeWithTag("top_new_tab_button").performClick()
+        waitForText("New Persistent Agent Tab")
+        composeRule.onNodeWithTag("agent_option_shell").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Plain Shell")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+
+        waitForText("Plain Shell")
+        assertTrue(
+            "Shell tab should not show model picker chip",
+            composeRule.onAllNodesWithTag("model_picker_chip").fetchSemanticsNodes().isEmpty(),
         )
     }
 }

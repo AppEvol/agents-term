@@ -99,6 +99,9 @@ fun ChatWorkspace(
     messages: List<ChatMessage>,
     isLoading: Boolean,
     isConnected: Boolean,
+    modelLabel: String? = null,
+    hasCustomModel: Boolean = false,
+    onOpenModelPicker: (() -> Unit)? = null,
     onSendMessage: (String) -> Unit,
     onInterrupt: () -> Unit,
     onRetryFullAccess: () -> Unit,
@@ -216,6 +219,9 @@ fun ChatWorkspace(
             isWorking = isWorking,
             isConnected = isConnected,
             statusDetail = if (isWorking) tab.statusDetail else null,
+            modelLabel = modelLabel,
+            hasCustomModel = hasCustomModel,
+            onOpenModelPicker = onOpenModelPicker,
             onSend = {
                 val text = draft.trim()
                 if (text.isNotEmpty()) {
@@ -749,6 +755,9 @@ private fun ChatComposer(
     isWorking: Boolean,
     isConnected: Boolean,
     statusDetail: String?,
+    modelLabel: String? = null,
+    hasCustomModel: Boolean = false,
+    onOpenModelPicker: (() -> Unit)? = null,
     onSend: () -> Unit,
     onInterrupt: () -> Unit,
 ) {
@@ -763,25 +772,94 @@ private fun ChatComposer(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (!statusDetail.isNullOrBlank()) {
+            if (onOpenModelPicker != null && !modelLabel.isNullOrBlank() || !statusDetail.isNullOrBlank()) {
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        strokeWidth = 1.8.dp,
-                        color = HerdrBlue,
-                    )
-                    Text(
-                        text = statusDetail,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = MonoFontFamily,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    if (onOpenModelPicker != null && !modelLabel.isNullOrBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (hasCustomModel) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHigh
+                            },
+                            border = BorderStroke(
+                                1.dp,
+                                if (hasCustomModel) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant
+                                },
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable(onClick = onOpenModelPicker)
+                                .testTag("model_picker_chip"),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = if (hasCustomModel) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = modelLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (hasCustomModel) FontWeight.SemiBold else FontWeight.Medium,
+                                    color = if (hasCustomModel) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 200.dp),
+                                )
+                                Icon(
+                                    imageVector = Icons.Rounded.ExpandMore,
+                                    contentDescription = stringResource(R.string.action_change_model),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    if (!statusDetail.isNullOrBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.8.dp,
+                                color = HerdrBlue,
+                            )
+                            Text(
+                                text = statusDetail,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = MonoFontFamily,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
 

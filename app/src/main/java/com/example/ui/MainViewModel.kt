@@ -95,6 +95,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _hasLastCrash = MutableStateFlow(false)
     val hasLastCrash: StateFlow<Boolean> = _hasLastCrash.asStateFlow()
 
+    private val _isRefreshingModels = MutableStateFlow(false)
+    val isRefreshingModels: StateFlow<Boolean> = _isRefreshingModels.asStateFlow()
+
     private var bootstrapJob: Job? = null
 
     init {
@@ -428,6 +431,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cwd: String?,
         permissionMode: String,
         title: String?,
+        model: String? = null,
         onCreated: () -> Unit = {},
     ) {
         viewModelScope.launch {
@@ -437,6 +441,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     title = title?.takeIf { it.isNotBlank() },
                     cwd = cwd?.takeIf { it.isNotBlank() },
                     permissionMode = permissionMode,
+                    model = model?.trim()?.takeIf { it.isNotEmpty() },
                 )
             )
             if (res.isSuccess) {
@@ -454,6 +459,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updatePermissionMode(tabId: String, mode: String) {
         viewModelScope.launch {
             repo.updateTab(tabId, UpdateTabRequest(permissionMode = mode))
+        }
+    }
+
+    fun updateTabModel(
+        tabId: String,
+        model: String?,
+        onUpdated: ((com.example.data.TabRecord) -> Unit)? = null,
+    ) {
+        viewModelScope.launch {
+            val res = repo.updateTabModel(tabId, model)
+            res.onSuccess { updated ->
+                onUpdated?.invoke(updated)
+            }
+        }
+    }
+
+    fun refreshModelsForAgent(agent: String, forceRefresh: Boolean = false) {
+        if (agent == "shell") return
+        viewModelScope.launch {
+            _isRefreshingModels.value = true
+            try {
+                repo.refreshAgentModels(agent, forceRefresh = forceRefresh)
+            } finally {
+                _isRefreshingModels.value = false
+            }
         }
     }
 

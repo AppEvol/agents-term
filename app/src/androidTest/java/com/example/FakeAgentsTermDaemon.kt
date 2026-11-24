@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.data.AgentModelOption
+import com.example.data.AgentModelsResponse
 import com.example.data.AvailableAgentInfo
 import com.example.data.ChatMessage
 import com.example.data.CreateTabRequest
@@ -75,12 +77,51 @@ class FakeAgentsTermDaemon(
         tailscaleIp = "127.0.0.1",
         defaultCwd = "/home/ci",
         agents = listOf(
-            AvailableAgentInfo("agy", "Antigravity", "Antigravity CLI", "agy", true),
-            AvailableAgentInfo("claude", "Claude Code", "Claude CLI", "claude", true),
-            AvailableAgentInfo("codex", "Codex", "Codex CLI", "codex", true),
+            AvailableAgentInfo(
+                type = "agy",
+                name = "Antigravity",
+                description = "Antigravity CLI",
+                binary = "agy",
+                available = true,
+                defaultModel = "gemini-4-neon-high",
+                models = listOf(
+                    AgentModelOption("gemini-4-neon-high", "Gemini 4 Neon (High)", isDefault = true),
+                    AgentModelOption("gemini-4-neon-xhigh", "Gemini 4 Neon (XHigh)"),
+                    AgentModelOption("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
+                ),
+            ),
+            AvailableAgentInfo(
+                type = "claude",
+                name = "Claude Code",
+                description = "Claude CLI",
+                binary = "claude",
+                available = true,
+                defaultModel = null,
+                models = listOf(
+                    AgentModelOption("claude-opus-5-5", "Opus 5.5", "For complex work and everyday tasks"),
+                    AgentModelOption("claude-sonnet-5-5", "Sonnet 5.5", "Most efficient for simpler tasks"),
+                    AgentModelOption("claude-haiku-5-5", "Haiku 5.5", "Fastest for quick answers"),
+                ),
+            ),
+            AvailableAgentInfo(
+                type = "codex",
+                name = "Codex",
+                description = "Codex CLI",
+                binary = "codex",
+                available = true,
+                defaultModel = "gpt-6-astra",
+                models = listOf(
+                    AgentModelOption("gpt-6.2-sol", "GPT-6.2-Sol"),
+                    AgentModelOption("gpt-6-astra", "GPT-6-Astra", isDefault = true),
+                ),
+            ),
             AvailableAgentInfo("shell", "Shell", "Persistent bash", "bash", true),
         ),
     )
+
+    fun tabModel(tabId: String): String? = synchronized(lock) {
+        tabs.firstOrNull { it.id == tabId }?.model
+    }
 
     private val fsListings = mapOf(
         "/home/ci" to FsListResponse(
@@ -156,6 +197,18 @@ class FakeAgentsTermDaemon(
             return jsonResponse(200, encodeHerdrJson(serverInfo))
         }
 
+        val agentModelsMatch = Regex("^/api/agents/([^/]+)/models$").matchEntire(path)
+        if (method == "GET" && agentModelsMatch != null) {
+            val agentType = agentModelsMatch.groupValues[1]
+            val found = serverInfo.agents.firstOrNull { it.type == agentType }
+            val resp = AgentModelsResponse(
+                agent = agentType,
+                defaultModel = found?.defaultModel,
+                models = found?.models.orEmpty(),
+            )
+            return jsonResponse(200, encodeHerdrJson(resp))
+        }
+
         if (method == "GET" && path == "/api/fs") {
             val requestedPath = request.requestUrl?.queryParameter("path") ?: serverInfo.defaultCwd
             val listing = fsListings[requestedPath] ?: FsListResponse(
@@ -206,6 +259,7 @@ class FakeAgentsTermDaemon(
                 agent = req.agent,
                 cwd = cwd,
                 permissionMode = req.permissionMode,
+                model = req.model?.trim()?.ifEmpty { null },
                 status = "idle",
                 createdAt = now,
                 updatedAt = now,
@@ -294,11 +348,16 @@ class FakeAgentsTermDaemon(
             val idx = tabs.indexOfFirst { it.id == tabId }
             if (idx < 0) return jsonResponse(404, """{"error":"Tab not found"}""")
             val cur = tabs[idx]
+            val nextModel = if (req.model != null) {
+                req.model.trim().ifEmpty { null }
+            } else {
+                cur.model
+            }
             val next = cur.copy(
                 title = req.title ?: cur.title,
                 cwd = req.cwd ?: cur.cwd,
                 permissionMode = req.permissionMode ?: cur.permissionMode,
-                model = req.model ?: cur.model,
+                model = nextModel,
                 updatedAt = System.currentTimeMillis(),
             )
             tabs[idx] = next

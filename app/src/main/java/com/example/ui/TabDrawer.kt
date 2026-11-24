@@ -350,6 +350,16 @@ private fun DrawerTabRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (tab.agent != "shell" && !tab.model.isNullOrBlank()) {
+                    Text(
+                        text = tab.model,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = MonoFontFamily,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (!tab.lastMessagePreview.isNullOrBlank()) {
                     Text(
                         text = tab.lastMessagePreview,

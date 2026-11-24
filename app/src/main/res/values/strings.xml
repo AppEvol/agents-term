@@ -134,4 +134,18 @@
     <string name="dialog_debug_dump_body">Uploads sanitized client events, workspace state, and optional screenshot/logcat to ~/.config/herdr-mobile/debug-dumps/latest on your VM.</string>
     <string name="dialog_debug_dump_upload">Upload to VM</string>
     <string name="dialog_debug_dump_share">Share ZIP</string>
+    <string name="action_change_model">Change model</string>
+    <string name="action_apply">Apply</string>
+    <string name="new_tab_model_label">Model</string>
+    <string name="model_picker_title">Select Model</string>
+    <string name="model_picker_subtitle">%1$s · applies to next prompt</string>
+    <string name="model_picker_refresh">Refresh available models</string>
+    <string name="model_picker_search_placeholder">Filter models…</string>
+    <string name="model_picker_default_title">Default</string>
+    <string name="model_picker_default_subtitle">Use the agent CLI\'s configured default model</string>
+    <string name="model_picker_default_with_name">CLI default (%1$s)</string>
+    <string name="model_picker_custom_active">Custom model active for this tab</string>
+    <string name="model_picker_no_matches">No models match \"%1$s\"</string>
+    <string name="model_picker_custom_label">Custom model ID or alias</string>
+    <string name="model_picker_custom_placeholder">e.g. opus, gemini-4-neon-high, gpt-6.2-sol</string>
 </resources>

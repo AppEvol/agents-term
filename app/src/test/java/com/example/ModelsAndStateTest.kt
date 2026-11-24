@@ -1,26 +1,35 @@
 package com.example
 
+import com.example.data.AgentModelOption
+import com.example.data.AvailableAgentInfo
 import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
 import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DebugRecorder
+import com.example.data.ModelSlashCommand
 import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
+import com.example.data.UpdateTabRequest
 import com.example.data.WorkspaceState
 import com.example.data.WsServerEnvelope
 import com.example.data.buildAgyBootstrapCommand
 import com.example.data.buildSanitizedWorkspaceJson
 import com.example.data.decodeHerdrJson
 import com.example.data.encodeBase64Utf8
+import com.example.data.encodeHerdrJson
 import com.example.data.extractPairingUriFromOutput
+import com.example.data.formatModelChipLabel
 import com.example.data.parseAgyStreamJsonLine
+import com.example.data.parseModelSlashCommand
 import com.example.data.parseSshSetupInput
 import com.example.data.parseSshSetupUri
 import com.example.data.reduceWorkspaceEvent
+import com.example.data.resolveAgentModelCatalog
+import com.example.data.resolveModelIdFromQuery
 import com.example.data.sanitizeDebugText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -387,5 +396,76 @@ class ModelsAndStateTest {
         // Plain hostname/IP without user@ or ssh prefix should not trigger false autofill
         assertNull(parseSshSetupInput("100.71.219.26"))
         assertNull(parseSshSetupInput("ned-vm"))
+    }
+
+    @Test
+    fun modelSlashCommandsCatalogResolutionAndUpdateSerializationWork() {
+        // Slash command parsing
+        assertEquals(ModelSlashCommand.OpenPicker, parseModelSlashCommand("/model"))
+        assertEquals(ModelSlashCommand.OpenPicker, parseModelSlashCommand("  /MODEL  "))
+        assertEquals(ModelSlashCommand.ResetToDefault, parseModelSlashCommand("/model default"))
+        assertEquals(ModelSlashCommand.ResetToDefault, parseModelSlashCommand("/model reset"))
+        assertEquals(ModelSlashCommand.ResetToDefault, parseModelSlashCommand("/model auto"))
+        assertEquals(
+            ModelSlashCommand.SetModel("gemini-4-neon-high"),
+            parseModelSlashCommand("/model gemini-4-neon-high"),
+        )
+        assertNull(parseModelSlashCommand("/models"))
+        assertNull(parseModelSlashCommand("Explain /model usage"))
+
+        // Server catalog + backward-compatible snapshot deserialization
+        val raw = """
+            {
+              "type": "snapshot",
+              "server": {
+                "version": "0.1.0",
+                "hostname": "ned-vm",
+                "agents": [
+                  {
+                    "type": "claude",
+                    "name": "Claude Code",
+                    "available": true,
+                    "defaultModel": "claude-sonnet-5-5",
+                    "models": [
+                      {"id": "claude-opus-5-5", "name": "Opus 5.5", "description": "Complex work"},
+                      {"id": "claude-sonnet-5-5", "name": "Sonnet 5.5", "isDefault": true}
+                    ]
+                  },
+                  {
+                    "type": "codex",
+                    "name": "Codex",
+                    "available": true
+                  }
+                ]
+              },
+              "tabs": []
+            }
+        """.trimIndent()
+        val env = decodeHerdrJson<WsServerEnvelope>(raw)
+        val agents = env.server!!.agents
+
+        val (claudeModels, claudeDefault) = resolveAgentModelCatalog("claude", agents)
+        assertEquals("claude-sonnet-5-5", claudeDefault)
+        assertEquals(2, claudeModels.size)
+        assertEquals("claude-opus-5-5", resolveModelIdFromQuery("Opus 5.5", claudeModels))
+        assertEquals("claude-opus-5-5", resolveModelIdFromQuery("CLAUDE-OPUS-5-5", claudeModels))
+        assertEquals("custom-slug", resolveModelIdFromQuery("custom-slug", claudeModels))
+
+        assertEquals("Opus 5.5", formatModelChipLabel("claude-opus-5-5", claudeModels, claudeDefault))
+        assertEquals("Default · Sonnet 5.5", formatModelChipLabel(null, claudeModels, claudeDefault))
+        assertEquals("custom-slug", formatModelChipLabel("custom-slug", claudeModels, claudeDefault))
+
+        // Older daemon without models falls back to built-in suggestions; shell stays empty
+        val (codexModels, _) = resolveAgentModelCatalog("codex", agents)
+        assertTrue(codexModels.isNotEmpty())
+        val (shellModels, shellDefault) = resolveAgentModelCatalog("shell", agents)
+        assertTrue(shellModels.isEmpty())
+        assertNull(shellDefault)
+
+        // UpdateTabRequest clearing model sends explicit empty string while title-only omits model
+        val clearJson = encodeHerdrJson(UpdateTabRequest(model = ""))
+        assertTrue(clearJson.contains("\"model\":\"\""))
+        val renameJson = encodeHerdrJson(UpdateTabRequest(title = "Renamed"))
+        assertFalse(renameJson.contains("\"model\""))
     }
 }

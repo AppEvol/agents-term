@@ -168,10 +168,11 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 
 | Endpoint | Purpose |
 | :--- | :--- |
-| `GET /api/info` | Returns server version, hostname, Tailscale IP, `defaultCwd`, and detected `agents[]`. |
+| `GET /api/info` | Returns server version, hostname, Tailscale IP, `defaultCwd`, and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
+| `GET /api/agents/:agent/models` | Returns (and optionally refreshes via `?refresh=1`) available models for an agent CLI (`agy`, `claude`, `codex`). |
 | `GET /api/tabs` | Lists all persistent agent tabs and `activeTabId`. |
-| `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`). |
-| `PATCH /api/tabs/:id` | Renames a tab or updates its tool `permissionMode`. |
+| `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`). |
+| `PATCH /api/tabs/:id` | Renames a tab, updates its tool `permissionMode`, or changes its `model` (pass `""` to reset to CLI default). |
 | `DELETE /api/tabs/:id` | Closes a persistent tab. |
 | `GET /api/tabs/:id/messages` | Fetches full message/tool/thinking transcript for a tab. |
 | `POST /api/tabs/:id/messages` | Sends a prompt to the tab (with optional `overridePermissionMode`). |

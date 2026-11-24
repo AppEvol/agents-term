@@ -94,6 +94,24 @@ open class HerdrApiClient(
         return executeJson(req)
     }
 
+    open suspend fun getAgentModels(
+        config: ConnectionConfig,
+        agent: String,
+        refresh: Boolean = false,
+    ): AgentModelsResponse {
+        val base = "${config.httpBaseUrl()}/api/agents/$agent/models".toHttpUrlOrNull()
+            ?: throw IOException("Invalid host URL")
+        val url = base.newBuilder().apply {
+            if (refresh) addQueryParameter("refresh", "1")
+        }.build()
+        val req = Request.Builder()
+            .url(url)
+            .withAuth(config)
+            .get()
+            .build()
+        return executeJson(req)
+    }
+
     suspend fun listTabs(config: ConnectionConfig): TabsResponse {
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs")
