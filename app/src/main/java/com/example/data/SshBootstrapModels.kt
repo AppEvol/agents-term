@@ -174,7 +174,7 @@ fun defaultAgyBootstrapPrompt(
         appendLine("   if [ -d \"$dir/.git\" ]; then $install; else git clone --depth 1 --branch $ref $repoUrl \"$dir\" && $install; fi")
         appendLine("   install.sh is idempotent: it updates the checkout, installs the herdr-mobile.service systemd --user unit (or a detached process), replaces any legacy Node daemon, health-checks http://<tailscale-ip>:$daemonPort/api/info, and prints a herdr://connect pairing URI.")
         appendLine("2. If it exits non-zero, read its ERROR line, fix the root cause, and run step 1 again:")
-        appendLine("   - exit 3 (missing prerequisite): install python3 (>= 3.8) or git with the system package manager, or bring Tailscale up (`sudo tailscale up`). If GitHub is unreachable, say so clearly.")
+        appendLine("   - exit 3 (missing prerequisite): install python3 (>= 3.9) or git with the system package manager, or bring Tailscale up (`sudo tailscale up`). If GitHub is unreachable, say so clearly.")
         appendLine("   - exit 4 (daemon unhealthy): inspect `systemctl --user status herdr-mobile.service` or ~/.config/herdr-mobile/daemon.log (for example, another process holding port $daemonPort).")
         appendLine("3. End your final response with the exact `herdr://connect?host=...&port=$daemonPort&token=...` line that install.sh printed, on its own line.")
     }.trim()

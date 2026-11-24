@@ -98,6 +98,30 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
 
+  daemon-and-cli-tests:
+    name: VM Daemon & CLI Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.9', '3.13']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Run VM daemon tests (unit, process end-to-end, install.sh)
+        run: python3 -W error::ResourceWarning -m unittest discover -s daemon/tests -v
+
+      - name: Run app_state_cli tests
+        run: python3 -W error::ResourceWarning -m unittest discover -s app_state_cli -v
+
   e2e-tests:
     name: End-to-End Android Instrumented Tests
     runs-on: ubuntu-latest
@@ -181,7 +205,7 @@ jobs:
   publish-apk:
     name: Publish Verified APK Release
     runs-on: ubuntu-latest
-    needs: [build-and-unit-test, e2e-tests]
+    needs: [build-and-unit-test, e2e-tests, daemon-and-cli-tests]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write

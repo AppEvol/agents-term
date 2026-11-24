@@ -10,6 +10,7 @@ import com.example.data.DebugDumpUploadResponse
 import com.example.data.DeniedAction
 import com.example.data.FsDirectoryEntry
 import com.example.data.FsListResponse
+import com.example.data.HerdrMoshi
 import com.example.data.SendMessageRequest
 import com.example.data.SendMessageResponse
 import com.example.data.ServerInfo
@@ -62,6 +63,41 @@ class FakeAgentsTermDaemon(
     val uploadedDebugDumps = CopyOnWriteArrayList<DebugDumpUploadRequest>()
     val recordedRequests = CopyOnWriteArrayList<String>()
     val webSocketUpgradeCount = AtomicInteger(0)
+
+    /** Raw text frames the app sent over the WebSocket (app_hello, app_state_response). */
+    val receivedAppFrames = CopyOnWriteArrayList<String>()
+    private val appStateRequestCounter = AtomicInteger(0)
+
+    @Suppress("UNCHECKED_CAST")
+    private fun parseFrame(raw: String): Map<String, Any?> =
+        (HerdrMoshi.adapter(Any::class.java).fromJson(raw) as? Map<String, Any?>).orEmpty()
+
+    /** `reporter.enabled` from the most recent app_hello frame, or null if none arrived yet. */
+    @Suppress("UNCHECKED_CAST")
+    fun latestAppHello(): Map<String, Any?>? = receivedAppFrames
+        .map { parseFrame(it) }
+        .lastOrNull { it["type"] == "app_hello" }
+        ?.let { it["reporter"] as? Map<String, Any?> }
+
+    /**
+     * Sends an app_state_request like the real daemon's broker and waits for the app's response.
+     * Returns the parsed app_state_response frame.
+     */
+    fun requestAppState(command: String, argsJson: String = "{}", timeoutMs: Long = 15_000L): Map<String, Any?> {
+        val requestId = "e2e-req-${appStateRequestCounter.incrementAndGet()}"
+        val frame = """{"type":"app_state_request","requestId":"$requestId","command":"$command","args":$argsJson}"""
+        check(activeSockets.isNotEmpty()) { "No app WebSocket connected" }
+        for (ws in activeSockets) ws.send(frame)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            receivedAppFrames
+                .map { parseFrame(it) }
+                .firstOrNull { it["type"] == "app_state_response" && it["requestId"] == requestId }
+                ?.let { return it }
+            Thread.sleep(50)
+        }
+        throw AssertionError("App did not answer app_state_request '$command' within ${timeoutMs}ms")
+    }
 
     fun dropAllWebSockets() {
         val snapshot = activeSockets.toList()
@@ -343,6 +379,10 @@ class FakeAgentsTermDaemon(
                         )
                     }
                     webSocket.send(encodeHerdrJson(snapshot))
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    receivedAppFrames.add(text)
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {

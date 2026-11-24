@@ -13,6 +13,7 @@
 #   AGENTSTERM_INSTALL_DIR  checkout used by the service (default ~/.local/share/agentsterm/agents-term)
 #   AGENTSTERM_HOST         bind address (default: this VM's Tailscale IPv4)
 #   AGENTSTERM_KEEP_LEGACY  set to 1 to leave other daemon processes alone (tests/sandboxes)
+#   AGENTSTERM_NO_SYSTEMD   set to 1 to always start a detached process (containers, tests)
 #
 # Exit codes: 0 ok, 2 bad usage, 3 missing prerequisite (python3/git/tailscale), 4 daemon unhealthy.
 set -euo pipefail
@@ -39,7 +40,7 @@ while [ $# -gt 0 ]; do
     --ref) REF="${2:?--ref needs a value}"; shift 2 ;;
     --ref=*) REF="${1#--ref=}"; shift ;;
     --no-update) UPDATE=0; shift ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
   esac
 done
@@ -51,8 +52,8 @@ export PATH="$PATH:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"  # fallbacks; 
 # --- prerequisites ------------------------------------------------------------------------------
 PYTHON="$(command -v python3 || true)"
 [ -n "$PYTHON" ] || die 3 "python3 is not installed (install it with the system package manager, e.g. 'sudo apt-get install -y python3')."
-"$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' \
-  || die 3 "python3 >= 3.8 is required (found $("$PYTHON" -V 2>&1))."
+"$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' \
+  || die 3 "python3 >= 3.9 is required (found $("$PYTHON" -V 2>&1))."
 
 TS_IP="${AGENTSTERM_HOST:-}"
 if [ -z "$TS_IP" ]; then
@@ -98,7 +99,7 @@ stop_detached() {
 }
 
 # --- start --------------------------------------------------------------------------------------
-if systemctl --user show-environment >/dev/null 2>&1; then
+if [ "${AGENTSTERM_NO_SYSTEMD:-0}" != 1 ] && systemctl --user show-environment >/dev/null 2>&1; then
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
   cat > "$UNIT_DIR/$UNIT_NAME" <<EOF

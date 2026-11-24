@@ -407,6 +407,85 @@ class AgentsTermE2ETest {
     }
 
     @Test
+    @Suppress("UNCHECKED_CAST")
+    fun appStateReporterAnswersVmRequestsOnlyWhileUserAllowsInspection() {
+        val tab1 = TabRecord(
+            id = "tab_1",
+            title = "Antigravity · app",
+            agent = "agy",
+            cwd = "/home/ci/projects",
+            status = "idle",
+        )
+        val activeDaemon = startDaemon(initialTabs = listOf(tab1))
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForText("Antigravity · app")
+
+        // The app announces itself after the snapshot. Inspection is off by default and refused.
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello() != null }
+        assertEquals(false, activeDaemon.latestAppHello()!!["enabled"])
+        val refused = activeDaemon.requestAppState("state")
+        assertEquals(false, refused["ok"])
+        assertTrue((refused["error"] as String).contains("disabled"))
+
+        // The user opts in from Settings: debug sharing, then "Allow VM agents to inspect the app".
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        composeRule.onNodeWithTag("menu_app_settings").performClick()
+        waitForTag("debug_sharing_switch")
+        composeRule.onNodeWithTag("debug_sharing_switch").performScrollTo().performClick()
+        composeRule.onNodeWithTag("debug_remote_inspection_switch").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("enabled") == true }
+        val commands = activeDaemon.latestAppHello()!!["commands"] as List<String>
+        assertTrue(commands.containsAll(listOf("ping", "state", "logs", "logcat", "crash", "screenshot", "dump")))
+
+        // state: live UI + workspace, with the token reported only as a boolean.
+        val state = activeDaemon.requestAppState("state")
+        assertEquals(true, state["ok"])
+        val result = state["result"] as Map<String, Any?>
+        val ui = result["ui"] as Map<String, Any?>
+        assertEquals("settings", ui["screen"])
+        assertEquals(true, ui["appInForeground"])
+        assertEquals(true, (ui["debugSettings"] as Map<String, Any?>)["remoteInspectionEnabled"])
+        val workspace = result["workspace"] as Map<String, Any?>
+        assertEquals("CONNECTED", workspace["connectionState"])
+        assertEquals(true, workspace["hasToken"])
+        assertEquals("tab_1", ((workspace["tabs"] as List<Map<String, Any?>>).single())["id"])
+
+        // logs: the in-app event buffer, filterable by category.
+        val logs = activeDaemon.requestAppState("logs", """{"categories":["ui"],"limit":50}""")
+        val events = (logs["result"] as Map<String, Any?>)["events"] as List<Map<String, Any?>>
+        assertTrue(events.isNotEmpty())
+        assertTrue(events.all { it["category"] == "ui" })
+        assertTrue(events.any { it["event"] == "debug_settings_updated" })
+
+        // screenshot: a real PNG of the app window.
+        val shot = activeDaemon.requestAppState("screenshot")
+        assertEquals("screenshot failed: ${shot["error"]}", true, shot["ok"])
+        val png = android.util.Base64.decode(
+            (shot["result"] as Map<String, Any?>)["pngBase64"] as String,
+            android.util.Base64.DEFAULT,
+        )
+        assertTrue("screenshot too small: ${png.size} bytes", png.size > 2_000)
+        assertEquals(listOf(0x89, 'P'.code, 'N'.code, 'G'.code), png.take(4).map { it.toInt() and 0xFF })
+        val bitmap = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size)
+        assertTrue(bitmap.width > 100 && bitmap.height > 100)
+
+        assertEquals(false, (activeDaemon.requestAppState("crash")["result"] as Map<String, Any?>)["hasCrash"])
+        assertEquals(false, activeDaemon.requestAppState("bogus")["ok"])
+
+        // Nothing the app sent may contain the bearer token.
+        assertTrue(activeDaemon.receivedAppFrames.none { it.contains(activeDaemon.token) })
+
+        // Turning the switch off takes effect immediately.
+        composeRule.onNodeWithTag("debug_remote_inspection_switch").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("enabled") == false }
+        assertEquals(false, activeDaemon.requestAppState("state")["ok"])
+    }
+
+    @Test
     fun sshBootstrapWithFakeVmStreamsAgyAndConnectsToAgentWorkspace() {
         val activeDaemon = startDaemon()
         val context = InstrumentationRegistry.getInstrumentation().targetContext
