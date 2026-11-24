@@ -17,9 +17,10 @@
 
 ## Debugging the Live App
 
-- When debugging behavior on the phone, inspect the running app with `app_state_cli/app_state_cli.py` (see `app_state_cli/README.md`) before guessing: `status`, `state`, `logs`, `logcat`, `crash`, `screenshot -o <png>`, `dump`.
+- When debugging behavior on the phone, inspect the running app with `app_state_cli/app_state_cli.py` (see `app_state_cli/README.md`) before guessing: `status`, `state`, `logs`, `logcat`, `crash`, `screenshot -o <png>`, `ui`, `dump`.
 - Run `status` first. Exit code 3 means the app is not connected or the user has not enabled **Settings > Debug sharing > Allow VM agents to inspect the app**; ask the user to do that rather than retrying.
-- The CLI is read-only. Screenshots need the app in the foreground and show the user a toast.
+- These commands are read-only. Screenshots need the app in the foreground and show the user a toast.
+- The same CLI can drive the app to reproduce a bug or QA test a flow: `ui --brief` lists what is on screen, then `tap`, `long-press`, `type`, `scroll`, `swipe`, `key back` and `wait` (see "Driving the app" in `app_state_cli/README.md`). These need a second switch, **Allow VM agents to control the app**; `status` reports `controlReady`, and exit code 3 with `control_disabled` means it is off, so ask the user rather than retrying. Only drive the app when the task calls for it: the user is holding that phone.
 
 ## VM Daemon (`daemon/`)
 

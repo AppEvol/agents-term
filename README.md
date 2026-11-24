@@ -141,7 +141,7 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 | `GET /api/fs?path=...` | Lists directories on the VM for the New Tab directory browser. |
 | `POST /api/debug/dumps` | Uploads an Android debug dump (`events.ndjson`, `state.json`, `logcat.txt`, `crash.txt`, optional `screenshot.png`) into `~/.config/herdr-mobile/debug-dumps/` and updates the `latest` symlink. |
 | `GET /api/debug/dumps` | Lists recent Android debug dump folders stored on the VM. |
-| `GET /api/app/status` | App state reporter: whether a connected app has remote inspection enabled. |
+| `GET /api/app/status` | App state reporter: whether a connected app has remote inspection (`ready`) and remote control (`controlReady`) enabled. |
 | `POST /api/app/command` | App state reporter: relays `{command, args, timeoutMs}` to the app over the WebSocket and returns its result (used by `app_state_cli/`). |
 | `WS /ws?token=...` | Real-time stream of `snapshot`, `tab_*`, `message_created`, `message_delta`, `tool_update`, and `message_updated` events. The app sends `app_hello` and `app_state_response` frames, and the daemon sends `app_state_request` frames (see `app_state_cli/README.md`). |
 

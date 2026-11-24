@@ -5,12 +5,14 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.util.Base64
 import android.view.PixelCopy
+import android.view.WindowManager
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -109,8 +111,33 @@ suspend fun collectAppLogcat(maxLines: Int = 400): String? = withContext(Dispatc
     }
 }
 
+/** Draws the app's other windows (in z-order) onto a canvas that already shows the Activity window. */
+private fun drawOverlayWindows(activity: Activity, canvas: Canvas) {
+    val decorView = activity.window.decorView
+    val origin = IntArray(2).also { decorView.getLocationOnScreen(it) }
+    val location = IntArray(2)
+    for (root in appWindowRoots(activity)) {
+        if (root === decorView) continue
+        val params = root.layoutParams as? WindowManager.LayoutParams
+        if (params != null && params.flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND != 0) {
+            canvas.drawColor(Color.argb((params.dimAmount.coerceIn(0f, 1f) * 255).toInt(), 0, 0, 0))
+        }
+        root.getLocationOnScreen(location)
+        val saved = canvas.save()
+        try {
+            canvas.translate((location[0] - origin[0]).toFloat(), (location[1] - origin[1]).toFloat())
+            root.draw(canvas)
+        } catch (_: Throwable) {
+            // A window that cannot be drawn in software is left out rather than failing the capture.
+        } finally {
+            canvas.restoreToCount(saved)
+        }
+    }
+}
+
 /**
- * Captures the current Activity window as a downscaled Base64 PNG for visual glitch inspection.
+ * Captures the app (the Activity window plus any dialog, sheet or menu on top of it) as a
+ * downscaled Base64 PNG for visual glitch inspection.
  * Returns null safely if no Activity is attached or capture fails.
  */
 suspend fun captureWindowScreenshotBase64(activity: Activity?): String? {
@@ -146,15 +173,15 @@ suspend fun captureWindowScreenshotBase64(activity: Activity?): String? {
             false
         }
 
-        if (!copied) {
-            withContext(Dispatchers.Main) {
-                val canvas = Canvas(rawBitmap)
-                decorView.draw(canvas)
-            }
+        withContext(Dispatchers.Main) {
+            val canvas = Canvas(rawBitmap)
+            if (!copied) decorView.draw(canvas)
+            // Dialogs, bottom sheets and popup menus are separate windows: draw them on top.
+            runCatching { drawOverlayWindows(activity, canvas) }
         }
 
         withContext(Dispatchers.Default) {
-            val maxWidth = 1080
+            val maxWidth = SCREENSHOT_MAX_WIDTH
             val finalBitmap = if (rawBitmap.width > maxWidth) {
                 val scaledHeight = (rawBitmap.height.toFloat() * maxWidth / rawBitmap.width).toInt().coerceAtLeast(1)
                 Bitmap.createScaledBitmap(rawBitmap, maxWidth, scaledHeight, true).also {

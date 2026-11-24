@@ -381,6 +381,17 @@ fun SettingsScreen(
                             testTag = "debug_remote_inspection_switch",
                         )
 
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.settings_debug_remote_control_title),
+                            subtitle = stringResource(R.string.settings_debug_remote_control_subtitle),
+                            checked = debugSettings.remoteControlEnabled,
+                            enabled = debugSettings.enabled && debugSettings.remoteInspectionEnabled,
+                            onCheckedChange = { checked ->
+                                onUpdateDebugSettings { it.copy(remoteControlEnabled = checked) }
+                            },
+                            testTag = "debug_remote_control_switch",
+                        )
+
                         // VM destination path indicator
                         Surface(
                             shape = RoundedCornerShape(12.dp),
