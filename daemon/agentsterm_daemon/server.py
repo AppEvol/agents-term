@@ -183,7 +183,8 @@ def list_directories(requested: Optional[str]) -> Dict[str, Any]:
         directories.sort(key=lambda d: (d["name"].casefold(), d["name"]))
     except OSError:
         pass  # empty listing if unreadable
-    return {"path": target, "parent": parent, "directories": directories}
+    # `exists` lets the app tell a deleted folder from an empty one (new-tab folder fallback).
+    return {"path": target, "parent": parent, "directories": directories, "exists": os.path.isdir(target)}
 
 
 # ------------------------------------------------------------------ daemon

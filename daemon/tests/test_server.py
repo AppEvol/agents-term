@@ -236,6 +236,11 @@ class DaemonE2ETest(unittest.TestCase):
         listing = self.daemon.api("GET", f"/api/fs?path={self.home}")[1]
         self.assertEqual([e["name"] for e in listing["directories"]][:2], ["alpha", "Beta"])
         self.assertNotIn(".hidden", [e["name"] for e in listing["directories"]])
+        self.assertIs(listing["exists"], True)
+        # Hidden folders are not listed by their parent, so `exists` is the only way to know.
+        self.assertIs(self.daemon.api("GET", f"/api/fs?path={self.home}/.hidden")[1]["exists"], True)
+        missing = self.daemon.api("GET", f"/api/fs?path={self.home}/deleted-folder")[1]
+        self.assertEqual((missing["exists"], missing["directories"]), (False, []))
 
         png = base64.b64encode(b"\x89PNG\r\n\x1a\nxx").decode()
         status, res = self.daemon.api("POST", "/api/debug/dumps", {
