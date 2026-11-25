@@ -140,7 +140,7 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 | `GET /api/info` | Returns server version, the git `commit` the daemon is running, hostname, Tailscale IP, `defaultCwd`, `defaultSystemPrompt`, `defaultSystemPromptFullAccess`, and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
 | `GET /api/agents/:agent/models` | Returns (and optionally refreshes via `?refresh=1`) available models for an agent CLI (`agy`, `claude`, `codex`). |
 | `GET /api/tabs` | Lists all persistent agent tabs and `activeTabId`. |
-| `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`, optional `systemPrompt`). |
+| `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`, optional `systemPrompt`). Returns HTTP 409 when the VM already has 10 or more open tabs. |
 | `PATCH /api/tabs/:id` | Renames a tab, updates its tool `permissionMode`, changes its `model`, updates its `systemPrompt` (pass `""` to clear), or sets its task `status` (`"done"` / `"idle"`). |
 | `DELETE /api/tabs/:id` | Closes a persistent tab. |
 | `GET /api/tabs/:id/messages` | Fetches full message/tool/thinking transcript for a tab. |

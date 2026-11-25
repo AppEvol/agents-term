@@ -20,7 +20,7 @@ from .config import SERVER_VERSION, build_server_info, daemon_commit, home_dir
 from .httpserver import Request, Response, WebSocket
 from .models import get_agent_models, warm_agent_models_cache
 from .runner import AgentRunner
-from .store import StateStore
+from .store import MAX_OPEN_TABS, StateStore
 from .util import now_ms
 
 PING_INTERVAL_S = 25.0
@@ -375,6 +375,10 @@ class Daemon:
                 model=body.get("model"),
                 system_prompt=body.get("systemPrompt"),
             )
+            if tab is None:
+                return Response.json(
+                    409, {"error": f"The limit is {MAX_OPEN_TABS} open tabs. Close a tab to make room."}
+                )
             self.broadcast({"type": "tab_created", "tab": tab})
             return Response.json(200, {"tab": tab})
 
