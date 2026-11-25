@@ -670,7 +670,10 @@ impl WorkDoneStreamFilter {
                             || (bytes[p] == b'\r' && p + 1 < bytes.len() && bytes[p + 1] == b'\n')
                             || (bytes[p] == b'\r' && flush);
                         if count >= flen && is_eol {
-                            let end = if bytes[p] == b'\r' && p + 1 < bytes.len() && bytes[p + 1] == b'\n' {
+                            let end = if bytes[p] == b'\r'
+                                && p + 1 < bytes.len()
+                                && bytes[p + 1] == b'\n'
+                            {
                                 p + 2
                             } else {
                                 p + 1
