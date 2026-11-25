@@ -632,7 +632,10 @@ class AgentsTermE2ETest {
         // The user allows control too.
         composeRule.onNodeWithTag("debug_remote_control_switch").performScrollTo().performClick()
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("controlEnabled") == true }
-        assertEquals("on", nodes("""{"tag":"debug_remote_control_switch"}""").single()["toggle"])
+        // The hello can reach the daemon before the switch is redrawn.
+        agentWaitsFor("the control switch to show on") {
+            nodes("""{"tag":"debug_remote_control_switch"}""").singleOrNull()?.get("toggle") == "on"
+        }
         assertTrue(
             (activeDaemon.latestAppHello()!!["commands"] as List<String>)
                 .containsAll(listOf("ui", "tap", "long_press", "swipe", "scroll", "type", "key")),
