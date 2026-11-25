@@ -41,15 +41,6 @@ EOF
   chown vmuser:vmuser /home/vmuser/.profile
 fi
 
-# Optional legacy git mirror for Python -> Rust live upgrade testing.
-if [ -d /mnt/repo ] && command -v git >/dev/null 2>&1; then
-  git config --system --add safe.directory '*'
-  rm -rf /opt/agentsterm-repo
-  git clone --bare /mnt/repo /opt/agentsterm-repo >/dev/null
-  chown -R vmuser:vmuser /opt/agentsterm-repo
-  git config --system url."file:///opt/agentsterm-repo".insteadOf "https://github.com/nedn/agents-term.git"
-fi
-
 # Seed realistic model configs for claude, codex, and agy discovery tests.
 install -d -o vmuser -g vmuser \
   /home/vmuser/.claude \

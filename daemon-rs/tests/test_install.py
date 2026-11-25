@@ -1,4 +1,4 @@
-"""End-to-end tests of the minimal POSIX `daemon/install.sh` static binary bootstrapper."""
+"""End-to-end tests of the POSIX installer for the Rust daemon."""
 
 from __future__ import annotations
 
@@ -13,11 +13,8 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from typing import Optional
 
-from helpers import DAEMON_DIR, free_port
-
-INSTALL_SCRIPT = DAEMON_DIR / "install.sh"
+INSTALL_SCRIPT = Path(__file__).resolve().parents[1] / "install.sh"
 
 
 def _host_arch() -> str:
@@ -45,14 +42,13 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
 class InstallScriptTest(unittest.TestCase):
     def setUp(self) -> None:
         if platform.system() != "Linux":
-            self.skipTest("daemon/install.sh targets Linux")
+            self.skipTest("daemon-rs/install.sh targets Linux")
         self.tmp = Path(tempfile.mkdtemp(prefix="agentsterm-install-"))
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.release_dir = self.tmp / "release"
         self.release_dir.mkdir()
         self.asset_name = f"agentsterm-daemon-linux-{_host_arch()}"
-        self.port = free_port()
 
         handler_cls = type(
             "ReleaseHandler",
@@ -72,11 +68,8 @@ class InstallScriptTest(unittest.TestCase):
         self.env = {
             **os.environ,
             "HOME": str(self.home),
+            "AGENTSTERM_BIN_DIR": str(self.home / ".local" / "bin"),
             "AGENTSTERM_RELEASE_BASE_URL": f"http://127.0.0.1:{self.http_port}",
-            "AGENTSTERM_HOST": "127.0.0.1",
-            "AGENTSTERM_KEEP_LEGACY": "1",
-            "AGENTSTERM_NO_SYSTEMD": "1",
-            "AGENTSTERM_NO_CRON": "1",
         }
 
     def tearDown(self) -> None:
@@ -89,16 +82,16 @@ class InstallScriptTest(unittest.TestCase):
             "#!/usr/bin/env sh\n"
             f'echo ">>> fake-daemon {label} args: $*"\n'
             f'if [ "{exit_code}" -ne 0 ]; then exit {exit_code}; fi\n'
-            f'echo "herdr://connect?host=127.0.0.1&port={self.port}&token=tok_{label}"\n'
+            f'echo "herdr://connect?host=127.0.0.1&port=$3&token=tok_{label}"\n'
         ).encode()
         (self.release_dir / self.asset_name).write_bytes(body)
         sha = "0" * 64 if bad_sha else hashlib.sha256(body).hexdigest()
         (self.release_dir / f"{self.asset_name}.sha256").write_text(f"{sha}  {self.asset_name}\n")
 
-    def run_install(self, *args: str, env: Optional[dict] = None) -> subprocess.CompletedProcess:
+    def run_install(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            ["sh", str(INSTALL_SCRIPT), "--port", str(self.port), *args],
-            env=env if env is not None else self.env,
+            ["sh", str(INSTALL_SCRIPT), "--port", "7591", *args],
+            env=self.env,
             capture_output=True,
             text=True,
             timeout=30,
@@ -109,7 +102,7 @@ class InstallScriptTest(unittest.TestCase):
         r1 = self.run_install()
         self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
         self.assertEqual(self.handler_cls.downloads, 1)
-        self.assertIn("fake-daemon v1 args: install --port", r1.stdout)
+        self.assertIn("fake-daemon v1 args: install --port 7591", r1.stdout)
         self.assertIn("token=tok_v1", r1.stdout)
 
         # Second run with same checksum skips downloading the binary.
@@ -123,8 +116,7 @@ class InstallScriptTest(unittest.TestCase):
         r3 = self.run_install("--force-restart")
         self.assertEqual(r3.returncode, 0, r3.stdout + r3.stderr)
         self.assertEqual(self.handler_cls.downloads, 2)
-        self.assertIn("fake-daemon v2 args: install --port", r3.stdout)
-        self.assertIn("--force-restart", r3.stdout)
+        self.assertIn("fake-daemon v2 args: install --port 7591 --force-restart", r3.stdout)
 
     def test_checksum_mismatch_rejected_without_overwriting_existing_binary(self) -> None:
         self.publish_fake_binary("good")

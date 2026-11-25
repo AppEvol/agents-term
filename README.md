@@ -3,7 +3,7 @@
 Native Android client (Kotlin + Jetpack Compose + Material 3) for controlling persistent coding agents (**Antigravity (`agy`)**, **Claude Code (`claude`)**, **Codex (`codex`)**, and **Shell**) running on a Tailscale-connected Linux VM.
 
 AgentsTerm supports both:
-- **Zero-touch VM bootstrapping over SSH**: Connects over Tailscale SSH to run `daemon/install.sh` automatically (falling back to `agy --dangerously-skip-permissions` to repair the VM if prerequisites are missing) and outputs the pairing URI.
+- **SSH setup** downloads and verifies the Rust daemon on the VM, starts it, and uses the pairing URI it prints to connect.
 - **Direct / Pairing URI connection**: Connects directly using an `agentsterm://connect?...` or `herdr://connect?...` URI (or manual Tailscale IP, port, and bearer token).
 
 ---
@@ -84,50 +84,33 @@ Every push to `main` that passes `Static Checks`, `Build APK & Unit Tests`, the 
 
 ## 2. Agent Guide: Setting Up the VM Space for AgentsTerm
 
-The VM daemon is the Python 3 program in [`daemon/`](daemon/) (standard library only, no build step).
-
-**Every SSH bootstrap from the app leaves the latest daemon running.** The bootstrap command:
-
-1. Clones the repo if needed and runs `daemon/install.sh`. The script updates the checkout to the latest `main`, restarts the daemon unless it is already running that exact commit, and verifies the commit the running daemon reports.
-2. Only if that fails (python3 or git missing, Tailscale down, ...) invokes `agy --dangerously-skip-permissions` with a prompt telling Antigravity to repair the VM.
-3. Runs `install.sh` again as the authoritative check. A non-zero exit fails the bootstrap in the app, even if a pairing URI was printed along the way.
-
-So to update a VM, run the SSH bootstrap again from the app (or run the commands below by hand).
+The VM daemon is a static Rust binary built from [`daemon-rs/`](daemon-rs/). To install or update it, run **SSH & Bootstrap VM** in the app. An official APK downloads the daemon from its matching GitHub Release, verifies its SHA-256 checksum, and runs `agentsterm-daemon install`.
 
 ### Prerequisites on the VM
 1. **Tailscale active** on the same tailnet as the phone: `tailscale ip -4` must print a `100.x.y.z` address.
 2. **SSH access** for the zero-touch bootstrap: Tailscale SSH (`sudo tailscale set --ssh`, recommended) or OpenSSH with a key or password.
-3. **Tools:** `python3` (>= 3.9), `git`, and the agent CLIs you want to control (`agy`, `claude`, `codex`) on `PATH` and authenticated. Non-interactive SSH shells don't load `.bashrc`, so put them in `~/.local/bin` or `/usr/local/bin`, or export them in `~/.profile`.
+3. **Linux x86_64 or aarch64** with a POSIX shell, `curl` or `wget`, and `sha256sum` or `shasum`. Put the agent CLIs you want to use (`agy`, `claude`, `codex`) on `PATH` and authenticate them.
 
-### Install or update (idempotent)
-```bash
-DIR="$HOME/.local/share/agentsterm/agents-term"
-if [ -d "$DIR/.git" ]; then bash "$DIR/daemon/install.sh" --port 7501
-else git clone --depth 1 https://github.com/nedn/agents-term.git "$DIR" && bash "$DIR/daemon/install.sh" --port 7501; fi
+### Manual install or update
+
+From a checkout on the VM, run the installer over SSH. Restarting the daemon ends active agent turns, including a tab running the installer.
+
+```sh
+sh daemon-rs/install.sh --port 7501
 ```
 
-`install.sh` does the following:
-- Updates the checkout (`--ref <branch>`, default `main`; `--no-update` skips this step).
-- Restarts the daemon unless it is already running the checkout's exact commit (`--force-restart` always restarts). A restart ends agent turns that are in progress, so an up-to-date daemon is left alone.
-- Enables linger (`loginctl enable-linger`) and installs `~/.config/systemd/user/herdr-mobile.service`. Without `systemd --user` it starts a detached process logging to `~/.config/herdr-mobile/daemon.log` and installs an `@reboot` crontab entry so the daemon survives a reboot. Output always states whether the daemon will survive a reboot.
-- Replaces the legacy Node daemon (`~/agent-terminal`) if one is running. Config, token, and tab history in `~/.config/herdr-mobile/` are reused as-is.
-- Health-checks `http://<tailscale-ip>:<port>/api/info`, requires it to report the commit that was just installed, and prints the `herdr://connect?...` pairing URI.
+The script installs the latest release in `~/.local/bin/agentsterm-daemon`. To install a specific release, set `AGENTSTERM_RELEASE_BASE_URL` to its `https://github.com/nedn/agents-term/releases/download/<tag>` URL.
 
-Exit codes: `3` means a prerequisite is missing (python3, git, or Tailscale), and `4` means the daemon is not healthy on the expected commit (see `systemctl --user status herdr-mobile.service` or the log).
-
-> **Don't run `install.sh` from an AgentsTerm agent tab.** Agent sessions are child processes of the daemon, so restarting the daemon ends them, including the session running the script. Run it over SSH instead.
+The installer reuses the token and tab history in `~/.config/herdr-mobile/` and preserves active turns when the requested build is already running. It configures the `herdr-mobile.service` systemd user service when available, otherwise it starts a detached daemon and sets up an `@reboot` crontab entry when possible. It reports whether the daemon will survive a reboot and prints the pairing URI after checking `/api/info`.
 
 ### Day-to-day
-```bash
-D="$HOME/.local/share/agentsterm/agents-term/daemon/agentsterm-daemon"
-python3 "$D" pairing --port 7501      # print host, port, token and the pairing URI
-python3 "$D" version                  # daemon version and the git commit of the checkout
-python3 "$D" rotate-token             # new bearer token (restart the daemon to apply)
-systemctl --user restart herdr-mobile.service
-python3 -m unittest discover -s daemon/tests   # daemon tests (from a repo checkout)
+
+```sh
+~/.local/bin/agentsterm-daemon pairing   # print the connection details and pairing URI
+~/.local/bin/agentsterm-daemon version   # print the version and build hash
 ```
 
-*(AgentsTerm accepts both `agentsterm://connect?...` and `herdr://connect?...`. The SSH bootstrapper scans the bootstrap output for this URI, tests `/api/info`, opens the WebSocket stream, and launches the workspace.)*
+From a source checkout, run `cargo test --manifest-path daemon-rs/Cargo.toml` for the daemon and `python3 -m unittest discover -s daemon-rs/tests` for the shell installer.
 
 ---
 
@@ -140,7 +123,7 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 | `GET /api/info` | Returns server version, the git `commit` the daemon is running, hostname, Tailscale IP, `defaultCwd`, `defaultSystemPrompt`, `defaultSystemPromptFullAccess`, and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
 | `GET /api/agents/:agent/models` | Returns (and optionally refreshes via `?refresh=1`) available models for an agent CLI (`agy`, `claude`, `codex`). |
 | `GET /api/tabs` | Lists all persistent agent tabs and `activeTabId`. |
-| `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`, optional `systemPrompt`). |
+| `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`, optional `systemPrompt`). Returns HTTP 409 when the VM already has 10 or more open tabs. |
 | `PATCH /api/tabs/:id` | Renames a tab, updates its tool `permissionMode`, changes its `model`, updates its `systemPrompt` (pass `""` to clear), or sets its task `status` (`"done"` / `"idle"`). |
 | `DELETE /api/tabs/:id` | Closes a persistent tab. |
 | `GET /api/tabs/:id/messages` | Fetches full message/tool/thinking transcript for a tab. |
@@ -158,7 +141,7 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 
 ## Troubleshooting
 
-- **`'agy' was not found in PATH` during SSH bootstrap**: Symlink `agy` into `~/.local/bin/agy` or `/usr/local/bin/agy`, or export its directory in `~/.profile`.
+- If an agent CLI is missing after setup, install it in `~/.local/bin` or `/usr/local/bin` so the daemon can find it.
 - **Phone cannot reach `http://<tailscale-ip>:7501`**: Confirm Tailscale is connected on both phone and VM, the daemon is bound to the Tailscale IPv4 (not `127.0.0.1`), and any host firewall (`ufw`/`iptables`) allows TCP `7501` on the `tailscale0` interface.
 - **Host key mismatch warning in AgentsTerm**: If the VM was rebuilt and generated a new SSH host key, tap **Trust New Host Key & Retry** in the bootstrap console to update the pinned SHA-256 fingerprint.
-- **Rotate bearer token**: Run `python3 ~/.local/share/agentsterm/agents-term/daemon/agentsterm-daemon rotate-token` on the VM, restart the daemon, and paste the new pairing URI into **VM Connection Settings**.
+- To rotate the bearer token, run `~/.local/bin/agentsterm-daemon rotate-token` over SSH, restart the daemon, and paste the new pairing URI into **VM Connection Settings**.

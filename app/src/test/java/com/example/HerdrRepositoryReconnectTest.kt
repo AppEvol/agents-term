@@ -15,10 +15,13 @@ import com.example.data.TabRecord
 import com.example.data.WsServerEnvelope
 import com.example.data.resolveInitialDirectoryListing
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import okhttp3.Request
 import okhttp3.WebSocket
 import okio.ByteString
@@ -102,6 +105,7 @@ class HerdrRepositoryReconnectTest {
         val sockets = mutableListOf<FakeWebSocketHandle>()
         val listDirCalls = mutableListOf<String?>()
         val markReadCalls = mutableListOf<String>()
+        var createTabCalls = 0
 
         override suspend fun markRead(config: ConnectionConfig, tabId: String) {
             markReadCalls.add(tabId)
@@ -126,9 +130,11 @@ class HerdrRepositoryReconnectTest {
         }
 
         override suspend fun createTab(config: ConnectionConfig, body: CreateTabRequest): TabRecord {
+            yield()
+            createTabCalls++
             val cwd = body.cwd ?: "/home/test"
             return TabRecord(
-                id = "tab_created",
+                id = "tab_created_$createTabCalls",
                 title = body.title ?: "Tab",
                 agent = body.agent,
                 cwd = cwd,
@@ -418,6 +424,26 @@ class HerdrRepositoryReconnectTest {
         }.getOrThrow()
         assertEquals("/home/ned", deletedError.listing.path)
         assertTrue(deletedError.fellBackToHome)
+    }
+
+    @Test
+    fun concurrentCreatesShareTheLastSlotEvenWithAnOlderDaemon() = runTest {
+        val api = FakeApiClient()
+        val repo = HerdrRepository(api, InMemorySettings(testConfig), ioDispatcher = StandardTestDispatcher(testScheduler))
+        val tabs = (1..9).map { TabRecord(id = "t$it", title = "Tab $it", agent = "shell", cwd = "/home/test") }
+        repo.connect(testConfig)
+        val socket = api.sockets.single()
+        socket.emitEvent(WsServerEnvelope(type = "snapshot", tabs = tabs))
+
+        val request = CreateTabRequest(agent = "claude")
+        val results = List(2) { async { repo.createTab(request) } }.awaitAll()
+        assertEquals(1, results.count { it.isSuccess })
+        assertEquals(1, api.createTabCalls)
+        assertEquals(10, repo.state.value.tabs.size)
+
+        socket.emitEvent(WsServerEnvelope(type = "tab_deleted", tabId = tabs.first().id))
+        assertTrue(repo.createTab(request).isSuccess)
+        assertEquals(10, repo.state.value.tabs.size)
     }
 
     @Test

@@ -10,7 +10,6 @@
 #   vm-fedora-41       Fedora 41 (bash, curl, no cron -> detached-only fallback, zero git)
 #   vm-amazonlinux-2023 Amazon Linux 2023 / AWS EC2 (bash, curl, no cron, zero git)
 #   vm-alpine-321      Alpine Linux 3.21 (musl libc, BusyBox ash, wget-only/no curl, zero git/python3)
-#   vm-legacy-python   Ubuntu 24.04 + git + python3 (live Python -> Rust upgrade)
 
 # ---------------------------------------------------------------------------
 # 1. Ubuntu 24.04 LTS (zero git, zero python3, curl + dash + Vixie cron)
@@ -66,14 +65,6 @@ ENTRYPOINT ["/usr/local/bin/vm-entrypoint.sh"]
 
 # Backward-compatible alias used by Android Emulator E2E and existing docs.
 FROM vm-ubuntu-2404 AS vm-minimal
-
-# Legacy VM target with Python 3 + git for testing live Python -> Rust daemon upgrades.
-FROM vm-ubuntu-2404 AS vm-legacy-python
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    python3 \
-    && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
 # 2. Ubuntu 22.04 LTS (zero git, zero python3, curl + dash + Vixie cron)

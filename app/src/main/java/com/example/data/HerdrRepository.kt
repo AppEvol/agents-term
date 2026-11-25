@@ -11,8 +11,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.WebSocket
 import java.util.concurrent.atomic.AtomicBoolean
+
+const val MAX_OPEN_TABS = 10
 
 data class WorkspaceState(
     val config: ConnectionConfig = ConnectionConfig(),
@@ -27,6 +31,9 @@ data class WorkspaceState(
     val reopenedTabIds: Set<String> = emptySet(),
     val bannerMessage: String? = null,
 ) {
+    val canCreateTab: Boolean
+        get() = tabs.size < MAX_OPEN_TABS
+
     val activeTab: TabRecord?
         get() = tabs.firstOrNull { it.id == selectedTabId } ?: tabs.firstOrNull()
 
@@ -304,6 +311,7 @@ class HerdrRepository(
     val state: StateFlow<WorkspaceState> = _state.asStateFlow()
 
     private val socketLock = Any()
+    private val createTabMutex = Mutex()
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
     private var shouldStayConnected = false
@@ -621,15 +629,17 @@ class HerdrRepository(
         }
     }
 
-    suspend fun createTab(request: CreateTabRequest): Result<TabRecord> {
-        val cfg = _state.value.config
+    suspend fun createTab(request: CreateTabRequest): Result<TabRecord> = createTabMutex.withLock {
+        val workspace = _state.value
+        val cfg = workspace.config
         debugRecorder?.record(
             "ui",
             "create_tab",
             "Creating tab agent=${request.agent} cwd=${request.cwd} mode=${request.permissionMode} " +
                 "hasSystemPrompt=${!request.systemPrompt.isNullOrBlank()}",
         )
-        return runCatching {
+        runCatching {
+            check(workspace.canCreateTab) { "The limit is $MAX_OPEN_TABS open tabs. Close a tab to make room." }
             val tab = api.createTab(cfg, request)
             settings.saveLastTabId(tab.id)
             val resolvedCwd = tab.cwd.trim().takeIf { it.isNotEmpty() }

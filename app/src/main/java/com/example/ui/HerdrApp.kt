@@ -368,6 +368,7 @@ fun HerdrApp(viewModel: MainViewModel) {
     if (showNewTabSheet) {
         NewTabSheet(
             agents = state.serverInfo?.agents.orEmpty(),
+            canCreateTab = state.canCreateTab,
             defaultCwd = resolvePreferredNewTabCwd(
                 lastCwd = state.lastCwd,
                 activeTabCwd = state.activeTab?.cwd,
@@ -942,11 +943,12 @@ internal fun WorkspaceScaffold(
                             }
                             IconButton(
                                 onClick = onNewTab,
+                                enabled = state.canCreateTab,
                                 modifier = Modifier.testTag("top_new_tab_button"),
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Add,
-                                    contentDescription = stringResource(R.string.action_new_tab),
+                                    contentDescription = newTabButtonLabel(state.canCreateTab),
                                 )
                             }
                             Box {

@@ -11,11 +11,10 @@ Provides a multi-distro matrix of realistic Linux Docker VM targets (`e2e/docker
 | `vm-fedora-41` | `fedora:41` | Modern Fedora, `bash`, `curl`, **no `cron`** (detached-only fallback) |
 | `vm-amazonlinux-2023` | `amazonlinux:2023` | AWS EC2 default Linux, `bash`, `curl`, **no `cron`** |
 | `vm-alpine-321` | `alpine:3.21` | Pure **musl libc**, BusyBox `ash`, **`wget`-only (no `curl`)**, zero `git`/`python3` |
-| `vm-legacy-python` | `ubuntu:24.04` + `git`/`python3` | Live in-place Python -> Rust daemon upgrade |
 
 ## Run Headless Multi-Distro Rust Daemon E2E Locally
 
-Run default targets (`vm-ubuntu-2404` + `vm-legacy-python`):
+Run the default target (`vm-ubuntu-2404`):
 
 ```bash
 python3 -W error::ResourceWarning -m unittest discover -s e2e/docker-vm -v

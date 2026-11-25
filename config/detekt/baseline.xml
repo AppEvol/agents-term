@@ -43,7 +43,6 @@
     <ID>LongMethod:ModelsAndStateTest.kt$ModelsAndStateTest$@Test fun systemPromptDefaultsResolutionAndSerializationWork()</ID>
     <ID>LongMethod:SshBootstrapClient.kt$SshBootstrapClient$suspend fun bootstrapWithAgy( config: SshBootstrapConfig, onPhase: (BootstrapPhase) -&gt; Unit, onHostFingerprint: (String) -&gt; Unit, onLog: (String) -&gt; Unit, ): SshBootstrapResult</ID>
     <ID>LongMethod:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
-    <ID>LongMethod:SshBootstrapModels.kt$fun buildAgyBootstrapCommand( prompt: String, daemonPort: Int = 7501, repoUrl: String = AGENTSTERM_REPO_URL, ref: String = AGENTSTERM_DAEMON_REF, ): String</ID>
     <ID>LongMethod:SshBootstrapModels.kt$fun parseSshSetupInput(raw: String): SshSetupAutofill?</ID>
     <ID>LongParameterList:AndroidUiDriver.kt$AndroidUiDriver$(root: View, downTime: Long, eventTime: Long, action: Int, screenX: Float, screenY: Float)</ID>
     <ID>LongParameterList:AppUiControl.kt$AppUiDriver$(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, holdMs: Long)</ID>
@@ -76,12 +75,6 @@
     <ID>MaxLineLength:SettingsScreen.kt$"${workspaceState.config.host}:${workspaceState.config.port} · ${workspaceState.connectionState.name.lowercase()}"</ID>
     <ID>MaxLineLength:SshBootstrapClient.kt$SshBootstrapClient$debugRecorder?.record("ssh", "ssh_bootstrap_exit", "Remote bootstrap exited with status $exitCode (conv=${agyConversationId ?: "none"})")</ID>
     <ID>MaxLineLength:SshBootstrapClient.kt$SshBootstrapClient$debugRecorder?.record("ssh", "ssh_connect_start", "Connecting to $username@$host:${config.sshPort} (auth=${config.authMethod.storageKey})")</ID>
-    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine(" - exit 3 (missing prerequisite): install python3 (&gt;= 3.9) or git with the system package manager, or bring Tailscale up (`sudo tailscale up`). If GitHub is unreachable, say so clearly.")</ID>
-    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine(" - exit 4 (daemon unhealthy): inspect `systemctl --user status herdr-mobile.service` or ~/.config/herdr-mobile/daemon.log (for example, another process holding port $daemonPort).")</ID>
-    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine(" install.sh is idempotent: it updates the checkout to the latest $ref, installs the herdr-mobile.service systemd --user unit (or a detached process), restarts the daemon unless it already runs that commit, replaces any legacy Node daemon, verifies http://&lt;tailscale-ip&gt;:$daemonPort/api/info reports that commit, and prints a herdr://connect pairing URI.")</ID>
-    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine("3. End your final response with the exact `herdr://connect?host=...&amp;port=$daemonPort&amp;token=...` line that install.sh printed, on its own line.")</ID>
-    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine("Repair this VM so the AgentsTerm Android app can connect over Tailscale. The automatic install of the AgentsTerm daemon just failed here, or could not start.")</ID>
-    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine("The VM daemon is the Python 3 program in `daemon/` of $repoUrl, installed by its `daemon/install.sh`. Do not write your own daemon.")</ID>
     <ID>NestedBlockDepth:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleRequest(request: RecordedRequest): MockResponse</ID>
     <ID>NestedBlockDepth:MessagePresentation.kt$@Suppress("UNCHECKED_CAST") fun formatToolCallSummary(toolCall: ToolCallItem): String</ID>
     <ID>NestedBlockDepth:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
