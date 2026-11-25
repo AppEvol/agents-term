@@ -1,0 +1,84 @@
+#!/usr/bin/env sh
+# Deterministic POSIX sh fake for `claude` CLI used inside Docker E2E VMs.
+set -eu
+
+prompt=""
+session_id=""
+model="default"
+skip_perms=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p)
+      prompt="${2:-}"
+      shift 2
+      ;;
+    --resume)
+      session_id="${2:-}"
+      shift 2
+      ;;
+    --model)
+      model="${2:-}"
+      shift 2
+      ;;
+    --dangerously-skip-permissions)
+      skip_perms=1
+      shift
+      ;;
+    --output-format|--permission-mode|--append-system-prompt)
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+resumed="no"
+if [ -n "$session_id" ]; then
+  resumed="yes"
+else
+  session_id="claude-sess-e2e-1"
+fi
+
+printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$session_id"
+
+case "$prompt" in
+  *SLOW_TURN*)
+    printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}\n' "$session_id"
+    printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Claude working slowly... "}}}\n' "$session_id"
+    sleep 10
+    printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Finished slow."}}}\n' "$session_id"
+    printf '{"type":"result","session_id":"%s","subtype":"success","is_error":false,"result":"Claude working slowly... Finished slow.","duration_ms":10000}\n' "$session_id"
+    exit 0
+    ;;
+esac
+
+if [ "$skip_perms" -eq 0 ]; then
+  case "$prompt" in
+    *DENY_TOOL*)
+      printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}\n' "$session_id"
+      printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Need permission to run Bash."}}}\n' "$session_id"
+      printf '{"type":"result","session_id":"%s","subtype":"success","is_error":false,"result":"Need permission to run Bash.","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"touch /tmp/perm-ok"}}]}\n' "$session_id"
+      exit 0
+      ;;
+  esac
+fi
+
+printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}\n' "$session_id"
+printf '{"type":"assistant","session_id":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_e2e_1","name":"Bash","input":{"command":"echo claude-ok","description":"Check container"}}]}}\n' "$session_id"
+printf '{"type":"user","session_id":"%s","message":{"role":"user","content":[{"tool_use_id":"toolu_e2e_1","type":"tool_result","content":"claude-ok","is_error":false}]}}\n' "$session_id"
+
+summary_prefix=""
+case "$prompt" in
+  *tab_task_summary*)
+    summary_prefix="<tab_task_summary>Docker E2E Claude Task</tab_task_summary>\n"
+    ;;
+esac
+
+reply="Claude reply [sess=${session_id} resumed=${resumed} model=${model} perms=${skip_perms}]."
+printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}}\n' "$session_id"
+printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"%s%s"}}}\n' \
+  "$session_id" "$summary_prefix" "$reply"
+printf '{"type":"result","session_id":"%s","subtype":"success","is_error":false,"result":"%s","duration_ms":250,"total_cost_usd":0.001,"usage":{"input_tokens":10,"output_tokens":20},"permission_denials":[]}\n' \
+  "$session_id" "$reply"

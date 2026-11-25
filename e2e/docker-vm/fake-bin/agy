@@ -1,0 +1,92 @@
+#!/usr/bin/env sh
+# Deterministic POSIX sh fake for `agy` (Antigravity CLI) used inside Docker E2E VMs.
+set -eu
+
+if [ "${1:-}" = "models" ]; then
+  printf 'gemini-4-pro   Gemini 4 Pro\n'
+  printf 'gemini-4-flash Gemini 4 Flash\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "--help" ]; then
+  printf 'agy --output-format stream-json --print=PROMPT\n'
+  exit 0
+fi
+
+conv_id=""
+model="default"
+skip_perms=0
+prompt=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --conversation)
+      conv_id="${2:-}"
+      shift 2
+      ;;
+    --model)
+      model="${2:-}"
+      shift 2
+      ;;
+    --dangerously-skip-permissions)
+      skip_perms=1
+      shift
+      ;;
+    --print=*)
+      prompt="${1#--print=}"
+      shift
+      ;;
+    --output-format|--mode)
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+resumed="no"
+if [ -n "$conv_id" ]; then
+  resumed="yes"
+else
+  conv_id="agy-conv-e2e-1"
+fi
+
+printf '{"event":"init","conversation_id":"%s","init":{"conversation_id":"%s","cwd":"%s"}}\n' \
+  "$conv_id" "$conv_id" "$(pwd)"
+
+case "$prompt" in
+  *SLOW_TURN*)
+    printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":1,"step_type":"agent_response","text_delta":"Working slowly... "}}\n' "$conv_id"
+    sleep 10
+    printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":2,"step_type":"agent_response","text_delta":"Done slow."}}\n' "$conv_id"
+    printf '{"event":"result","conversation_id":"%s","result":{"conversation_id":"%s","status":"DONE","response":"Working slowly... Done slow.","duration_seconds":10.0}}\n' "$conv_id" "$conv_id"
+    exit 0
+    ;;
+esac
+
+if [ "$skip_perms" -eq 0 ]; then
+  case "$prompt" in
+    *DENY_TOOL*)
+      printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_call_id":"agy_t_deny","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"rm -rf /tmp/protected"}}}}\n' "$conv_id"
+      printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":1,"step_type":"tool","state":"DENIED","tool_call_id":"agy_t_deny","tool_name":"run_command","tool_info":{"denied":true,"error":"Permission required"}}}\n' "$conv_id"
+      printf '{"event":"result","conversation_id":"%s","result":{"conversation_id":"%s","status":"DONE","response":"Blocked by permissions.","permission_denials":[{"tool_name":"run_command","reason":"Approval required"}]}}\n' "$conv_id" "$conv_id"
+      exit 0
+      ;;
+  esac
+fi
+
+printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":1,"step_type":"tool","state":"ACTIVE","tool_call_id":"agy_t_1","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"uname -s"}}}}\n' "$conv_id"
+printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":1,"step_type":"tool","state":"DONE","tool_call_id":"agy_t_1","tool_name":"run_command","duration_seconds":0.1,"tool_info":{"output":"Linux"}}}\n' "$conv_id"
+
+summary_prefix=""
+case "$prompt" in
+  *tab_task_summary*)
+    summary_prefix="<tab_task_summary>Docker E2E Agy Task</tab_task_summary>\n"
+    ;;
+esac
+
+printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":2,"step_type":"agent_response","text_delta":"%sAgy reply [conv=%s resumed=%s model=%s perms=%s]."}}\n' \
+  "$conv_id" "$summary_prefix" "$conv_id" "$resumed" "$model" "$skip_perms"
+printf '{"event":"result","conversation_id":"%s","result":{"conversation_id":"%s","status":"DONE","response":"Agy reply [conv=%s resumed=%s model=%s perms=%s].","duration_seconds":0.2,"usage":{"input_tokens":12,"output_tokens":18}}}\n' \
+  "$conv_id" "$conv_id" "$conv_id" "$resumed" "$model" "$skip_perms"

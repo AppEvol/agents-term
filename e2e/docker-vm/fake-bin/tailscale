@@ -1,0 +1,20 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ -f /tmp/tailscale-down ]; then
+  echo "Tailscale is stopped." >&2
+  exit 1
+fi
+
+case "${1:-}" in
+  ip)
+    printf '%s\n' "${FAKE_TAILSCALE_IP:-127.0.0.1}"
+    ;;
+  status)
+    printf '%s  docker-e2e-vm  vmuser@  linux  -\n' "${FAKE_TAILSCALE_IP:-127.0.0.1}"
+    ;;
+  *)
+    echo "fake tailscale: unsupported args: $*" >&2
+    exit 1
+    ;;
+esac

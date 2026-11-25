@@ -168,6 +168,23 @@ jobs:
       - name: Run app_state_cli tests
         run: python3 -W error::ResourceWarning -m unittest discover -s app_state_cli -v
 
+  docker-vm-e2e:
+    name: Docker VM Cross-Boundary E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Run headless Docker VM E2E suite (real SSH, daemon, WS, agents, upgrade)
+        run: python3 -W error::ResourceWarning -m unittest discover -s e2e/docker-vm -v
+
   e2e-tests:
     name: End-to-End Android Instrumented Tests
     runs-on: ubuntu-latest
@@ -229,7 +246,14 @@ jobs:
           echo "APP_VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
           echo "APP_VERSION_NAME=${APP_MAJOR_MINOR}.${GITHUB_RUN_NUMBER}-${SHORT_SHA}" >> "$GITHUB_ENV"
 
-      - name: Run E2E instrumented tests on Android Emulator
+      - name: Start Docker E2E VM container
+        id: docker_vm
+        run: |
+          META="$(bash e2e/docker-vm/start_vm.sh --name agentsterm-ci-vm --ssh-port 2222 --daemon-port 7591)"
+          printf '%s\n' "$META"
+          printf '%s\n' "$META" >> "$GITHUB_OUTPUT"
+
+      - name: Run E2E instrumented tests on Android Emulator (mock + real Docker VM)
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -238,7 +262,27 @@ jobs:
           profile: pixel_9a
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: gradle :app:connectedDebugAndroidTest --stacktrace
+          script: |
+            adb reverse tcp:2222 tcp:2222
+            adb reverse tcp:7591 tcp:7591
+            gradle :app:connectedDebugAndroidTest \
+              -Pandroid.testInstrumentationRunnerArguments.realVmSshHost=127.0.0.1 \
+              -Pandroid.testInstrumentationRunnerArguments.realVmSshPort=2222 \
+              -Pandroid.testInstrumentationRunnerArguments.realVmSshUser=vmuser \
+              -Pandroid.testInstrumentationRunnerArguments.realVmSshPass=agentsterm-e2e-pass \
+              -Pandroid.testInstrumentationRunnerArguments.realVmDaemonPort=7591 \
+              --stacktrace
+
+      - name: Stop Docker E2E VM container
+        if: always()
+        env:
+          SNAPSHOT_DIR: ${{ steps.docker_vm.outputs.SNAPSHOT_DIR }}
+        run: |
+          docker logs agentsterm-ci-vm 2>&1 | tail -n 50 || true
+          docker rm -f agentsterm-ci-vm || true
+          if [ -n "${SNAPSHOT_DIR:-}" ]; then
+            rm -rf "$SNAPSHOT_DIR"
+          fi
 
       - name: Upload E2E test report
         if: always()
@@ -251,7 +295,7 @@ jobs:
   publish-apk:
     name: Publish Verified APK Release
     runs-on: ubuntu-latest
-    needs: [static-checks, build-and-unit-test, e2e-tests, daemon-and-cli-tests]
+    needs: [static-checks, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
