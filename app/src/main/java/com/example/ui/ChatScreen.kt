@@ -874,10 +874,9 @@ private fun ToolCallRunHeader(
         // Same box for the spinner and the icons, so the label does not shift when they swap.
         Box(contentAlignment = Alignment.Center, modifier = Modifier.size(15.dp)) {
             when {
-                hasRunning -> CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    strokeWidth = 1.8.dp,
+                hasRunning -> SandclockIndicator(
                     color = AppTheme.colors.info,
+                    modifier = Modifier.size(15.dp),
                 )
 
                 hasError -> Icon(
