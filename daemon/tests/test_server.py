@@ -283,6 +283,19 @@ class DaemonE2ETest(unittest.TestCase):
         self.assertEqual(d.api("GET", f"/api/tabs/{tab['id']}/messages")[0], 404)
         self.assertEqual(d.api("GET", "/api/nope")[1], {"error": "Unknown endpoint GET /api/nope"})
 
+    def test_open_tab_limit_releases_a_slot_when_a_tab_is_closed(self):
+        d = self.daemon
+        for _ in range(10):
+            self.assertEqual(d.api("POST", "/api/tabs", {"agent": "shell"})[0], 200)
+        _, listing = d.api("GET", "/api/tabs")
+        status, body = d.api("POST", "/api/tabs", {"agent": "claude"})
+        self.assertEqual(status, 409)
+        self.assertIn("10 open tabs", body["error"])
+        self.assertEqual(d.api("GET", "/api/tabs")[1], listing)
+        self.assertEqual(d.api("DELETE", f"/api/tabs/{listing['activeTabId']}")[0], 200)
+        self.assertEqual(d.api("POST", "/api/tabs", {"agent": "claude"})[0], 200)
+        self.assertEqual(len(d.api("GET", "/api/tabs")[1]["tabs"]), 10)
+
     def test_tab_system_prompt_create_patch_and_clear_via_rest(self):
         d = self.daemon
         status, body = d.api(

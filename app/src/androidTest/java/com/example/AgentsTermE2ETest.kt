@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
@@ -28,7 +29,11 @@ import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.data.ChatMessage
+import com.example.data.ConnectionConfig
+import com.example.data.CreateTabRequest
+import com.example.data.HerdrApiClient
 import com.example.data.TabRecord
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -360,6 +365,39 @@ class AgentsTermE2ETest {
 
         waitForText("Full access granted. Command completed successfully.")
         assertTrue(activeDaemon.receivedOverrideModes.contains("full-access"))
+    }
+
+    @Test
+    fun newTabControlsTrackTheLastSlotAcrossClients() {
+        val tabs = (1..9).map { TabRecord(id = "tab_$it", title = "Tab $it", agent = "shell", cwd = "/home/ci") }
+        val activeDaemon = startDaemon(initialTabs = tabs)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val uri = activeDaemon.pairingUri()
+        launchMainActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uri)).setClass(context, MainActivity::class.java))
+        waitForText("Tab 1")
+        composeRule.onNodeWithTag("top_new_tab_button").performClick()
+        waitForTag("create_tab_button")
+
+        val otherClient = HerdrApiClient()
+        val config = requireNotNull(ConnectionConfig.parsePairingUri(uri))
+        val tenth = runBlocking { otherClient.createTab(config, CreateTabRequest(agent = "claude")) }
+        val limitLabel = "10-tab limit reached"
+        composeRule.waitUntil(10_000L) {
+            composeRule.onAllNodes(hasTestTag("create_tab_button") and hasText(limitLabel)).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().assertIsNotEnabled()
+        Espresso.pressBack()
+        composeRule.onNodeWithTag("top_new_tab_button").assertIsNotEnabled()
+        composeRule.onNodeWithTag("open_drawer_button").performClick()
+        waitForText("PERSISTENT TABS (10)")
+        composeRule.onNodeWithTag("drawer_new_tab_button").assertIsNotEnabled().assertTextContains(limitLabel)
+
+        runBlocking { otherClient.deleteTab(config, tenth.id) }
+        waitForText("PERSISTENT TABS (9)")
+        composeRule.onNodeWithTag("drawer_new_tab_button").assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().assertIsEnabled().performClick()
+        waitForTag("quick_tab_tab_11")
+        composeRule.onNodeWithTag("top_new_tab_button").assertIsNotEnabled()
     }
 
     @Test

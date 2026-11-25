@@ -28,7 +28,7 @@ use crate::config::{
 use crate::log::{log_info, log_warn};
 use crate::models::{get_agent_models, warm_agent_models_cache};
 use crate::runner::AgentRunner;
-use crate::store::{resolve_abs_path, StateStore};
+use crate::store::{resolve_abs_path, StateStore, MAX_OPEN_TABS};
 use crate::util::{now_ms, rand_hex};
 
 const PING_INTERVAL: Duration = Duration::from_secs(25);
@@ -545,14 +545,19 @@ async fn post_tabs(
             json!({ "error": "Missing required field: agent" }),
         );
     };
-    let tab = st.store.create_tab(
+    let Some(tab) = st.store.create_tab(
         agent,
         parsed.get("title"),
         parsed.get("cwd"),
         parsed.get("permissionMode"),
         parsed.get("model"),
         parsed.get("systemPrompt"),
-    );
+    ) else {
+        return json_status(
+            StatusCode::CONFLICT,
+            json!({ "error": format!("The limit is {MAX_OPEN_TABS} open tabs. Close a tab to make room.") }),
+        );
+    };
     st.broadcast_raw(json!({ "type": "tab_created", "tab": tab }).to_string());
     json_status(StatusCode::OK, json!({ "tab": tab }))
 }

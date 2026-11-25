@@ -12,6 +12,7 @@ from .config import ensure_config_dir, home_dir, state_path
 from .util import derive_task_summary_from_messages, now_ms, rand_hex
 
 SAVE_DEBOUNCE_S = 0.25
+MAX_OPEN_TABS = 10
 
 _AGENT_LABELS = {"agy": "Antigravity", "claude": "Claude", "codex": "Codex", "shell": "Shell"}
 
@@ -162,7 +163,9 @@ class StateStore:
         permission_mode: Any = None,
         model: Any = None,
         system_prompt: Any = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
+        if len(self._tabs) >= MAX_OPEN_TABS:
+            return None
         now = now_ms()
         tab_id = f"tab_{rand_hex(6)}"
         raw_cwd = _strip_or_none(cwd) or str(home_dir())

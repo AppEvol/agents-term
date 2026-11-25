@@ -196,6 +196,7 @@ fun TabSidebarBody(
 
         PrimaryActionButton(
             onClick = onNewTab,
+            enabled = state.canCreateTab,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
@@ -204,7 +205,7 @@ fun TabSidebarBody(
             Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
             Text(
-                text = stringResource(R.string.action_new_tab),
+                text = newTabButtonLabel(state.canCreateTab),
                 fontWeight = FontWeight.SemiBold,
             )
         }

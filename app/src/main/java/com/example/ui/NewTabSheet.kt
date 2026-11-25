@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -54,6 +55,7 @@ import com.example.data.AvailableAgentInfo
 import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
 import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.FsListResponse
+import com.example.data.MAX_OPEN_TABS
 import com.example.data.resolveAgentModelCatalog
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.ThemedButton
@@ -64,11 +66,22 @@ import com.example.ui.theme.ThemedTextField
 import com.example.ui.theme.themedCorner
 import kotlinx.coroutines.launch
 
+@Composable
+internal fun newTabButtonLabel(
+    canCreateTab: Boolean,
+    @StringRes action: Int = R.string.action_new_tab,
+): String = if (canCreateTab) {
+    stringResource(action)
+} else {
+    stringResource(R.string.tab_limit_reached, MAX_OPEN_TABS)
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun NewTabSheet(
     agents: List<AvailableAgentInfo>,
     defaultCwd: String,
+    canCreateTab: Boolean,
     defaultSystemPromptForMode: (String) -> String = { mode ->
         if (mode == "full-access") DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT else DEFAULT_AGENT_SYSTEM_PROMPT
     },
@@ -523,6 +536,7 @@ fun NewTabSheet(
                         effectiveSystemPrompt,
                     )
                 },
+                enabled = canCreateTab,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
@@ -530,7 +544,7 @@ fun NewTabSheet(
                 shape = themedCorner(14.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.new_tab_create_button),
+                    text = newTabButtonLabel(canCreateTab, R.string.new_tab_create_button),
                     fontWeight = FontWeight.SemiBold,
                 )
             }

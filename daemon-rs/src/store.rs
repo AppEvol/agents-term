@@ -11,6 +11,7 @@ use crate::log::{log_error, log_warn};
 use crate::util::{derive_task_summary_from_messages, now_ms, rand_hex};
 
 pub const RESTART_INTERRUPTED_REASON: &str = "Interrupted because the VM daemon restarted";
+pub const MAX_OPEN_TABS: usize = 10;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
 pub fn default_agent_label(agent: &str) -> &str {
@@ -321,7 +322,7 @@ impl StateStore {
         permission_mode: Option<&Value>,
         model: Option<&Value>,
         system_prompt: Option<&Value>,
-    ) -> Value {
+    ) -> Option<Value> {
         let now = now_ms();
         let tab_id = format!("tab_{}", rand_hex(6));
         let raw_cwd =
@@ -365,12 +366,15 @@ impl StateStore {
 
         {
             let mut inner = self.inner.lock().unwrap();
+            if inner.tabs.len() >= MAX_OPEN_TABS {
+                return None;
+            }
             inner.tabs.push(tab.clone());
             inner.messages_by_tab.insert(tab_id.clone(), Vec::new());
             inner.active_tab_id = Some(tab_id);
         }
         self.schedule_save();
-        tab
+        Some(tab)
     }
 
     pub fn update_tab(&self, tab_id: &str, patch: Map<String, Value>) -> Option<Value> {

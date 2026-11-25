@@ -144,6 +144,51 @@ impl Drop for TestDaemon {
     }
 }
 
+#[test]
+fn open_tab_limit_preserves_existing_tabs_and_allows_one_create_in_the_last_slot() {
+    let home = make_temp_dir("agentsterm-tab-limit");
+    let config = home.join(".config/herdr-mobile");
+    fs::create_dir_all(&config).unwrap();
+    let tabs: Vec<_> = (1..=11)
+        .map(|id| json!({ "id": format!("old_{id}"), "agent": "claude", "status": "done" }))
+        .collect();
+    let history = json!([{ "id": "msg_1", "role": "user", "text": "Saved conversation" }]);
+    let saved =
+        json!({ "tabs": tabs, "activeTabId": "old_11", "messagesByTab": { "old_11": history } });
+    fs::write(config.join("state.json"), saved.to_string()).unwrap();
+
+    let daemon = TestDaemon::start(&home, None);
+    let create = || daemon.api("POST", "/api/tabs", Some(json!({ "agent": "shell" })));
+    for (count, close_id) in [(11, "old_1"), (10, "old_2")] {
+        let (_, listing) = daemon.api("GET", "/api/tabs", None);
+        assert_eq!(listing["tabs"].as_array().unwrap().len(), count);
+        assert_eq!(listing["activeTabId"], "old_11");
+        let (status, body) = create();
+        assert_eq!(status, 409);
+        assert!(body["error"].as_str().unwrap().contains("10 open tabs"));
+        assert_eq!(daemon.api("GET", "/api/tabs", None).1, listing);
+        assert_eq!(
+            daemon
+                .api("DELETE", &format!("/api/tabs/{close_id}"), None)
+                .0,
+            200
+        );
+    }
+
+    let mut statuses = thread::scope(|scope| {
+        let other = scope.spawn(create);
+        [create().0, other.join().unwrap().0]
+    });
+    statuses.sort();
+    assert_eq!(statuses, [200, 409]);
+    let (_, listing) = daemon.api("GET", "/api/tabs", None);
+    assert_eq!(listing["tabs"].as_array().unwrap().len(), 10);
+    let (_, transcript) = daemon.api("GET", "/api/tabs/old_11/messages", None);
+    assert_eq!(transcript["messages"], history);
+    drop(daemon);
+    fs::remove_dir_all(home).unwrap();
+}
+
 /// Regression test for Issue #52: interrupting a Shell command kills its child process group
 /// and never allows `finished` to be created after the tab reports interrupted/idle.
 #[test]

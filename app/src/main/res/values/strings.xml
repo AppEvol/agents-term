@@ -19,6 +19,7 @@
     <string name="action_back">Back</string>
     <string name="action_tabs">Open tabs drawer</string>
     <string name="action_new_tab">New Agent Tab</string>
+    <string name="tab_limit_reached">%1$d-tab limit reached</string>
     <string name="action_more">More options</string>
     <string name="action_reconnect">Reconnect</string>
     <string name="action_vm_settings">VM Connection Settings</string>
