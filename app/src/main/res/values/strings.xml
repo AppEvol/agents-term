@@ -177,4 +177,13 @@
     <string name="dialog_system_prompt_title">Tab System Prompt</string>
     <string name="dialog_system_prompt_include_label">Include system prompt</string>
     <string name="dialog_system_prompt_note">Applies to this tab\'s agent harness on subsequent turns. Turn off or leave empty to send no custom system prompt.</string>
+    <plurals name="drawer_finished_count">
+        <item quantity="one">%1$d done</item>
+        <item quantity="other">%1$d done</item>
+    </plurals>
+    <string name="drawer_close_finished">Close done</string>
+    <string name="drawer_task_finished_hint">Task finished · safe to close</string>
+    <string name="action_close_finished_tab">Close finished tab</string>
+    <string name="action_mark_task_done">Mark task done</string>
+    <string name="action_mark_tab_active">Mark as active</string>
 </resources>

@@ -439,12 +439,24 @@ class FakeAgentsTermDaemon(
             } else {
                 cur.systemPrompt
             }
+            val nextStatus = if (req.status in setOf("done", "idle") && cur.agent != "shell") {
+                req.status!!
+            } else {
+                cur.status
+            }
+            val nextStatusDetail = when {
+                req.status == "done" && cur.agent != "shell" -> "Task finished"
+                req.status == "idle" && cur.agent != "shell" -> null
+                else -> cur.statusDetail
+            }
             val next = cur.copy(
                 title = req.title ?: cur.title,
                 cwd = req.cwd ?: cur.cwd,
                 permissionMode = req.permissionMode ?: cur.permissionMode,
                 model = nextModel,
                 systemPrompt = nextSystemPrompt,
+                status = nextStatus,
+                statusDetail = nextStatusDetail,
                 updatedAt = System.currentTimeMillis(),
             )
             tabs[idx] = next
@@ -598,6 +610,30 @@ class FakeAgentsTermDaemon(
         return jsonResponse(200, encodeHerdrJson(QueueActionResponse(ok = true, tab = updated)))
     }
 
+    private fun emitFinishTaskTurn(tab: TabRecord, assistantMsg: ChatMessage) {
+        val doneText = "All done! This task is finished — you can close this tab whenever you're ready."
+        broadcast(
+            WsServerEnvelope(
+                type = "message_delta",
+                tabId = tab.id,
+                messageId = assistantMsg.id,
+                textDelta = doneText,
+            ),
+        )
+        val completeMsg = assistantMsg.copy(
+            text = doneText,
+            status = "complete",
+            usage = UsageStats(inputTokens = 60, outputTokens = 20, durationMs = 200L),
+            updatedAt = System.currentTimeMillis(),
+        )
+        replaceMessage(tab.id, completeMsg)
+        val doneTab = updateTabState(tab.id, status = "done", statusDetail = "Task finished")
+        broadcast(WsServerEnvelope(type = "message_updated", tabId = tab.id, message = completeMsg))
+        if (doneTab != null) {
+            broadcast(WsServerEnvelope(type = "tab_updated", tab = doneTab))
+        }
+    }
+
     private fun emitTurnEvents(
         tab: TabRecord,
         userMsg: ChatMessage,
@@ -611,6 +647,11 @@ class FakeAgentsTermDaemon(
 
         if (prompt.contains("hold_working")) {
             // Stay in working state until client calls POST /api/tabs/:id/interrupt
+            return
+        }
+
+        if (prompt.contains("finish_task")) {
+            emitFinishTaskTurn(tab, assistantMsg)
             return
         }
 

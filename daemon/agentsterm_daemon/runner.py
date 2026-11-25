@@ -42,6 +42,33 @@ MAX_TOOL_OUTPUT = 12000
 _LINE_SPLIT_RE = re.compile(r"\r?\n")
 _MODEL_CMD_RE = re.compile(r"^/model(?:\s+(.*))?$", re.I)
 _MODEL_RESET_RE = re.compile(r"(default|reset|auto)", re.I)
+_FENCED_CODE_RE = re.compile(r"```[\s\S]*?```")
+_NEGATED_CLOSE_TAB_RE = re.compile(
+    r"\b(?:do\s+not|don't|cannot|can't|avoid|never|wait\s+before)\b[^\n.!?]{0,40}\bclose\s+(?:this|the)\s+tab\b",
+    re.I,
+)
+_CLOSE_TAB_CUE_RE = re.compile(
+    r"(?:"
+    r"\b(?:you\s+(?:can|may)|feel\s+free\s+to|(?:it(?:'s|\s+is)\s+)?safe\s+to|safely|good\s+to|ready\s+to)\s+"
+    r"(?:now\s+)?(?:safely\s+)?close\s+(?:this|the)\s+tab\b"
+    r"|\bclose\s+(?:this|the)\s+tab\s+(?:now|whenever|if\s+you(?:'d|\s+would)?\s+like)\b"
+    r")",
+    re.I,
+)
+
+
+def is_task_finished_response(text: Optional[str]) -> bool:
+    """Detect when a coding agent signals in its closing paragraph that the task is done and the tab can be closed."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    without_code = _FENCED_CODE_RE.sub("", text).strip()
+    if not without_code:
+        return False
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", without_code) if p.strip()]
+    tail = (paragraphs[-1] if paragraphs else without_code)[-320:]
+    if _NEGATED_CLOSE_TAB_RE.search(tail):
+        return False
+    return bool(_CLOSE_TAB_CUE_RE.search(tail))
 
 
 def _reject_constant(name: str) -> Any:
@@ -506,7 +533,8 @@ class AgentRunner:
         active = self._active.pop(tab_id, None)
         if active:
             active.cancel_kill_timers()
-        if self.store.get_tab(tab_id) is None:
+        tab = self.store.get_tab(tab_id)
+        if tab is None:
             return  # Tab was deleted mid-turn; don't resurrect its message list.
 
         denied = first_not_none(denied_actions, msg.get("deniedActions"), [])
@@ -534,6 +562,8 @@ class AgentRunner:
             tab_status = "error"
         elif failed and stderr_text.strip():
             final_error = f"Exited with code {exit_code}: {truncate(stderr_text.strip(), 240)}"
+        elif not failed and tab.get("agent") != "shell" and is_task_finished_response(msg["text"]):
+            tab_status, status_detail = "done", "Task finished"
 
         final_msg = {
             **self._snapshot_message(msg),
@@ -559,7 +589,7 @@ class AgentRunner:
         if updated_tab:
             self.broadcast({"type": "tab_updated", "tab": updated_tab})
 
-        should_drain = (not interrupted and tab_status == "idle") or (
+        should_drain = (not interrupted and tab_status in ("idle", "done")) or (
             interrupted and active is not None and active.drain_queue_on_exit
         )
         if should_drain and updated_tab and updated_tab.get("queuedMessages"):

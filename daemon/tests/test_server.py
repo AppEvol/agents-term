@@ -316,6 +316,15 @@ class DaemonE2ETest(unittest.TestCase):
         status, body = d.api("POST", "/api/tabs", {"agent": "shell", "systemPrompt": "ignored"})
         self.assertEqual((status, body["tab"]["systemPrompt"]), (200, None))
 
+        # PATCH status marks coding-agent tab done/idle and ignores shell tabs
+        status, body = d.api("PATCH", f"/api/tabs/{tab['id']}", {"status": "done"})
+        self.assertEqual((status, body["tab"]["status"], body["tab"]["statusDetail"]), (200, "done", "Task finished"))
+        status, body = d.api("PATCH", f"/api/tabs/{tab['id']}", {"status": "idle"})
+        self.assertEqual((status, body["tab"]["status"], body["tab"]["statusDetail"]), (200, "idle", None))
+        shell_tab_id = d.api("POST", "/api/tabs", {"agent": "shell"})[1]["tab"]["id"]
+        status, body = d.api("PATCH", f"/api/tabs/{shell_tab_id}", {"status": "done"})
+        self.assertEqual((status, body["tab"]["status"]), (200, "idle"))
+
     def test_claude_turn_streams_separated_text_blocks_end_to_end(self):
         """Real captured claude stream through a real daemon: WS deltas == stored message text."""
         self.daemon.stop()

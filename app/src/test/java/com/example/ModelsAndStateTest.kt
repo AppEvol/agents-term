@@ -1,8 +1,6 @@
 package com.example
 
-import com.example.data.AgentModelOption
 import com.example.data.AssistantDisplayBlock
-import com.example.data.AvailableAgentInfo
 import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
 import com.example.data.CreateTabRequest
@@ -37,6 +35,8 @@ import com.example.data.extractPairingUriFromOutput
 import com.example.data.formatModelChipLabel
 import com.example.data.formatToolCallSummary
 import com.example.data.formatToolRunSummary
+import com.example.data.isTabTaskFinished
+import com.example.data.isTaskFinishedText
 import com.example.data.normalizeFsPath
 import com.example.data.parseAgyStreamJsonLine
 import com.example.data.parseModelSlashCommand
@@ -807,6 +807,48 @@ class ModelsAndStateTest {
         assertTrue(clearJson.contains("\"systemPrompt\":\"\""))
         val titleOnlyJson = encodeHerdrJson(UpdateTabRequest(title = "Renamed"))
         assertFalse(titleOnlyJson.contains("\"systemPrompt\""))
+    }
+
+    @Test
+    fun finishedTaskDetectionAndWorkspaceStateWork() {
+        assertTrue(isTaskFinishedText("This task is finished — you can close this tab whenever you're ready."))
+        assertTrue(isTaskFinishedText("All tests pass.\n\nFeel free to close this tab."))
+        assertTrue(isTaskFinishedText("Done, it is safe to close the tab now."))
+        assertFalse(isTaskFinishedText("Do not close this tab yet."))
+        assertFalse(isTaskFinishedText("The prompt asks agents to tell users that they can close the tab."))
+        assertFalse(isTaskFinishedText("```text\nYou can close this tab.\n```"))
+        assertFalse(isTaskFinishedText("You can close this tab.\n\nWait, one more thing to fix."))
+
+        val explicitDone = TabRecord("t_done", "Done Tab", "agy", "/home/ned", status = "done")
+        val legacyDone = TabRecord(
+            "t_legacy",
+            "Legacy Tab",
+            "claude",
+            "/home/ned",
+            status = "idle",
+            lastMessagePreview = "All set — you can close this tab.",
+        )
+        val workingTab = TabRecord("t_work", "Working Tab", "codex", "/home/ned", status = "working")
+        val shellTab = TabRecord(
+            "t_shell",
+            "Shell",
+            "shell",
+            "/home/ned",
+            status = "done",
+            lastMessagePreview = "You can close this tab.",
+        )
+
+        assertTrue(isTabTaskFinished(explicitDone))
+        assertTrue(isTabTaskFinished(legacyDone))
+        assertFalse(isTabTaskFinished(legacyDone, manuallyReopened = true))
+        assertFalse(isTabTaskFinished(workingTab))
+        assertFalse(isTabTaskFinished(shellTab))
+
+        val ws = WorkspaceState(tabs = listOf(explicitDone, legacyDone, workingTab, shellTab))
+        assertEquals(setOf("t_done", "t_legacy"), ws.finishedTabIds)
+
+        val statusJson = encodeHerdrJson(UpdateTabRequest(status = "done"))
+        assertTrue(statusJson.contains("\"status\":\"done\""))
     }
 
     @Test

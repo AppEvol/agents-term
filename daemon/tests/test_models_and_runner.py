@@ -12,7 +12,7 @@ from agentsterm_daemon.models import (
     read_claude_models_from_disk,
     read_codex_models_from_disk,
 )
-from agentsterm_daemon.runner import AgentRunner, block_separator
+from agentsterm_daemon.runner import AgentRunner, block_separator, is_task_finished_response
 from agentsterm_daemon.store import StateStore
 from agentsterm_daemon.util import summarize_command, summarize_tool_input
 from helpers import FIXTURES_DIR, TempHomeTestCase, run_async
@@ -870,6 +870,107 @@ class RunnerTest(TempHomeTestCase):
         # 4) Shell tabs never store a systemPrompt
         sh = store.create_tab("shell", cwd=str(self.tmp), system_prompt="Should be ignored")
         self.assertIsNone(sh["systemPrompt"])
+
+    def test_task_finished_detection_marks_coding_agent_tab_done_and_resets_on_followup(self):
+        self.assertTrue(is_task_finished_response("All done! You can close this tab whenever you're ready."))
+        self.assertTrue(is_task_finished_response("Summary...\n\nThe task is finished — feel free to close this tab."))
+        self.assertTrue(is_task_finished_response("Everything passed; it's safe to close the tab now."))
+        self.assertFalse(is_task_finished_response("Please do not close this tab while the build runs."))
+        self.assertFalse(is_task_finished_response("The default prompt tells agents to say they can close the tab."))
+        self.assertFalse(is_task_finished_response("```text\nYou can close this tab.\n```"))
+        self.assertFalse(is_task_finished_response("You can close this tab.\n\nWait, checking one more failure first."))
+
+        self.fake_binary(
+            "agy",
+            self.emit_lines_script(
+                [
+                    {"event": "init", "conversation_id": "conv-done-1"},
+                    {
+                        "event": "result",
+                        "result": {
+                            "conversation_id": "conv-done-1",
+                            "status": "SUCCESS",
+                            "response": "Merged and verified. This task is finished — you can close this tab.",
+                        },
+                    },
+                ]
+            ),
+        )
+        store, runner = self.make()
+        tab = store.create_tab("agy", cwd=str(self.tmp))
+        self.run_turn(runner, store, tab, "Finish the task")
+        updated = store.get_tab(tab["id"])
+        self.assertEqual((updated["status"], updated["statusDetail"]), ("done", "Task finished"))
+
+        # Follow-up turn without close-tab cue returns tab to idle
+        self.fake_binary(
+            "agy",
+            self.emit_lines_script(
+                [
+                    {
+                        "event": "result",
+                        "result": {
+                            "conversation_id": "conv-done-1",
+                            "status": "SUCCESS",
+                            "response": "Checking the logs now.",
+                        },
+                    },
+                ]
+            ),
+        )
+        self.run_turn(runner, store, updated, "Check logs too")
+        reopened = store.get_tab(tab["id"])
+        self.assertEqual((reopened["status"], reopened["statusDetail"]), ("idle", None))
+
+        # Shell tabs never transition to done
+        sh = store.create_tab("shell", cwd=str(self.tmp))
+        self.run_turn(runner, store, sh, "echo 'You can close this tab.'")
+        self.assertEqual(store.get_tab(sh["id"])["status"], "idle")
+
+    def test_queued_followup_drains_even_when_turn_signals_task_finished(self):
+        gate = self.tmp / "release_done_turn"
+        self.fake_binary(
+            "agy",
+            f"""
+prompt = sys.argv[-1]
+if "Initial task" in prompt:
+    sys.stdout.write(json.dumps({{"event": "init", "conversation_id": "conv-done-q"}}) + "\\n")
+    sys.stdout.write(json.dumps({{"event": "step_update", "step_update": {{"step_type": "agent_response", "text_delta": "Working"}}}}) + "\\n")
+    sys.stdout.flush()
+    while not os.path.exists({str(gate)!r}):
+        time.sleep(0.02)
+    sys.stdout.write(json.dumps({{"event": "result", "result": {{"conversation_id": "conv-done-q", "status": "SUCCESS", "response": "Task finished — you can close this tab."}}}}) + "\\n")
+else:
+    sys.stdout.write(json.dumps({{"event": "result", "result": {{"conversation_id": "conv-done-q", "status": "SUCCESS", "response": "Follow-up handled."}}}}) + "\\n")
+sys.stdout.flush()
+""",
+        )
+        store, runner = self.make()
+        tab = store.create_tab("agy", cwd=str(self.tmp))
+
+        async def go():
+            r1 = runner.submit_message(tab, "Initial task")
+            for _ in range(200):
+                if store.get_message(tab["id"], r1["assistantMessage"]["id"])["text"]:
+                    break
+                await asyncio.sleep(0.02)
+            runner.submit_message(store.get_tab(tab["id"]), "One more check")
+            gate.write_text("go")
+            for _ in range(300):
+                msgs = store.get_messages(tab["id"])
+                if len(msgs) == 4 and msgs[-1]["status"] == "complete" and not runner.is_running(tab["id"]):
+                    break
+                await asyncio.sleep(0.02)
+            await runner.wait_idle(tab["id"], 10)
+
+        run_async(go())
+        msgs = store.get_messages(tab["id"])
+        self.assertEqual(len(msgs), 4)
+        self.assertEqual(msgs[2]["text"], "One more check")
+        self.assertEqual(msgs[3]["text"], "Follow-up handled.")
+        updated = store.get_tab(tab["id"])
+        self.assertEqual((updated["status"], updated["statusDetail"]), ("idle", None))
+        self.assertEqual(updated["queuedMessages"], [])
 
     def test_queued_messages_auto_drain_combined_when_turn_completes(self):
         args_log = self.tmp / "queue_args.log"

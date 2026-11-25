@@ -1,7 +1,6 @@
 package com.example.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,12 +17,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
@@ -73,7 +72,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.data.AgentModelOption
 import com.example.data.ConnectionState
 import com.example.data.ModelSlashCommand
 import com.example.data.TabRecord
@@ -90,7 +88,6 @@ import com.example.ui.theme.HerdrAmber
 import com.example.ui.theme.HerdrEmerald
 import com.example.ui.theme.HerdrRed
 import com.example.ui.theme.MonoFontFamily
-import com.example.ui.theme.statusColor
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -227,6 +224,16 @@ fun HerdrApp(viewModel: MainViewModel) {
                 onChangePermission = { showPermissionDialog = true },
                 onChangeSystemPrompt = { showSystemPromptDialog = true },
                 onChangeModel = { openModelPickerForActiveTab() },
+                onToggleTaskDone = { tab, markDone ->
+                    val nextStatus = if (markDone) "done" else "idle"
+                    viewModel.updateTabStatus(tab.id, nextStatus) {
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                if (markDone) "Tab marked as done" else "Tab marked as active",
+                            )
+                        }
+                    }
+                },
                 defaultSystemPrompt = activeTabDefaultSystemPrompt,
                 onDeleteTab = { viewModel.deleteTab(it) },
                 onOpenSettings = { viewModel.openConnectionSettings() },
@@ -296,6 +303,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         onSelectTab = { viewModel.selectTab(it) },
                         onNewTab = { showNewTabSheet = true },
                         onDeleteTab = { viewModel.deleteTab(it) },
+                        onCloseFinishedTabs = { viewModel.closeFinishedTabs() },
                         onOpenSettings = { viewModel.openConnectionSettings() },
                         onOpenAppSettings = { viewModel.openAppSettings() },
                         onReconnect = { viewModel.reconnectNow() },
@@ -322,6 +330,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                             showNewTabSheet = true
                         },
                         onDeleteTab = { viewModel.deleteTab(it) },
+                        onCloseFinishedTabs = { viewModel.closeFinishedTabs() },
                         onOpenSettings = {
                             scope.launch { drawerState.close() }
                             viewModel.openConnectionSettings()
@@ -688,6 +697,7 @@ private fun WorkspaceScaffold(
     onChangePermission: () -> Unit,
     onChangeSystemPrompt: () -> Unit,
     onChangeModel: () -> Unit,
+    onToggleTaskDone: (TabRecord, Boolean) -> Unit,
     defaultSystemPrompt: String,
     onDeleteTab: (String) -> Unit,
     onOpenSettings: () -> Unit,
@@ -700,6 +710,8 @@ private fun WorkspaceScaffold(
     onRetryFullAccess: () -> Unit,
 ) {
     val activeTab = state.activeTab
+    val finishedTabIds = state.finishedTabIds
+    val activeTabFinished = activeTab != null && activeTab.id in finishedTabIds
     val activeModelInfo = remember(activeTab?.agent, activeTab?.model, state.serverInfo?.agents) {
         if (activeTab == null || activeTab.agent == "shell") {
             null
@@ -755,11 +767,22 @@ private fun WorkspaceScaffold(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    TabStatusDot(
-                                        status = activeTab.status,
-                                        dotSize = 7.dp,
-                                        modifier = Modifier.testTag("top_bar_status_dot"),
-                                    )
+                                    if (activeTabFinished) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.CheckCircle,
+                                            contentDescription = null,
+                                            tint = HerdrEmerald,
+                                            modifier = Modifier
+                                                .size(13.dp)
+                                                .testTag("topbar_done_icon"),
+                                        )
+                                    } else {
+                                        TabStatusDot(
+                                            status = activeTab.status,
+                                            dotSize = 7.dp,
+                                            modifier = Modifier.testTag("top_bar_status_dot"),
+                                        )
+                                    }
                                     Text(
                                         text = "${activeTab.agentLabel} · ${activeTab.folderName}",
                                         style = MaterialTheme.typography.labelSmall,
@@ -767,7 +790,23 @@ private fun WorkspaceScaffold(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
                                     )
+                                    if (activeTabFinished) {
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = HerdrEmerald.copy(alpha = 0.18f),
+                                            modifier = Modifier.testTag("topbar_done_badge"),
+                                        ) {
+                                            Text(
+                                                text = "Done",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = HerdrEmerald,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -845,6 +884,26 @@ private fun WorkspaceScaffold(
                                             },
                                             modifier = Modifier.testTag("menu_system_prompt"),
                                         )
+                                        if (activeTab.status != "working") {
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        stringResource(
+                                                            if (activeTabFinished) {
+                                                                R.string.action_mark_tab_active
+                                                            } else {
+                                                                R.string.action_mark_task_done
+                                                            },
+                                                        ),
+                                                    )
+                                                },
+                                                onClick = {
+                                                    onToggleOverflow(false)
+                                                    onToggleTaskDone(activeTab, !activeTabFinished)
+                                                },
+                                                modifier = Modifier.testTag("menu_toggle_task_done"),
+                                            )
+                                        }
                                     }
                                     DropdownMenuItem(
                                         text = {
@@ -936,6 +995,7 @@ private fun WorkspaceScaffold(
                     QuickTabStrip(
                         tabs = state.tabs,
                         activeTabId = activeTab?.id,
+                        finishedTabIds = finishedTabIds,
                         onSelect = onSelectTab,
                     )
                 }
@@ -974,6 +1034,7 @@ private fun WorkspaceScaffold(
 private fun QuickTabStrip(
     tabs: List<TabRecord>,
     activeTabId: String?,
+    finishedTabIds: Set<String> = emptySet(),
     onSelect: (String) -> Unit,
 ) {
     Surface(
@@ -989,17 +1050,18 @@ private fun QuickTabStrip(
         ) {
             for (tab in tabs) {
                 val selected = tab.id == activeTabId
+                val finished = tab.id in finishedTabIds
                 Surface(
                     shape = RoundedCornerShape(20.dp),
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainer
+                    color = when {
+                        selected -> MaterialTheme.colorScheme.primaryContainer
+                        finished -> HerdrEmerald.copy(alpha = 0.10f)
+                        else -> MaterialTheme.colorScheme.surfaceContainer
                     },
-                    border = if (selected) {
-                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
-                    } else {
-                        BorderStroke(1.dp, Color.Transparent)
+                    border = when {
+                        selected -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+                        finished -> BorderStroke(1.dp, HerdrEmerald.copy(alpha = 0.45f))
+                        else -> BorderStroke(1.dp, Color.Transparent)
                     },
                     modifier = Modifier
                         .clip(RoundedCornerShape(20.dp))
@@ -1011,14 +1073,25 @@ private fun QuickTabStrip(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        TabStatusDot(
-                            status = tab.status,
-                            dotSize = 8.dp,
-                        )
+                        if (finished) {
+                            Icon(
+                                imageVector = Icons.Rounded.CheckCircle,
+                                contentDescription = "Done",
+                                tint = HerdrEmerald,
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .testTag("quick_tab_done_icon_${tab.id}"),
+                            )
+                        } else {
+                            TabStatusDot(
+                                status = tab.status,
+                                dotSize = 8.dp,
+                            )
+                        }
                         Text(
                             text = tab.title,
                             style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (selected || tab.unread) FontWeight.SemiBold else FontWeight.Normal,
+                            fontWeight = if (selected || tab.unread || finished) FontWeight.SemiBold else FontWeight.Normal,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.width(105.dp),

@@ -148,10 +148,10 @@ class AgentsTermE2ETest {
         }
     }
 
-    private fun waitForTag(tag: String, timeoutMs: Long = 10_000L) {
+    private fun waitForTag(tag: String, timeoutMs: Long = 10_000L, useUnmergedTree: Boolean = false) {
         try {
             composeRule.waitUntil(timeoutMillis = timeoutMs) {
-                composeRule.onAllNodesWithTag(tag)
+                composeRule.onAllNodesWithTag(tag, useUnmergedTree = useUnmergedTree)
                     .fetchSemanticsNodes()
                     .isNotEmpty()
             }
@@ -1138,6 +1138,83 @@ class AgentsTermE2ETest {
         assertTrue(
             "Shell tab should not show system prompt toggle",
             composeRule.onAllNodesWithTag("new_tab_system_prompt_switch").fetchSemanticsNodes().isEmpty(),
+        )
+    }
+
+    @Test
+    fun finishedTaskTabShowsDoneIndicatorsInPersistentTabsMenuAndCanBeClosed() {
+        val activeTab = TabRecord(
+            id = "tab_active",
+            title = "Active Agent",
+            agent = "agy",
+            cwd = "/home/ci/projects",
+            status = "idle",
+        )
+        val finishedTab = TabRecord(
+            id = "tab_done",
+            title = "Finished Agent",
+            agent = "claude",
+            cwd = "/home/ci/projects",
+            status = "done",
+            statusDetail = "Task finished",
+            lastMessagePreview = "This task is finished — you can close this tab.",
+        )
+        val activeDaemon = startDaemon(initialTabs = listOf(activeTab, finishedTab))
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+
+        // Quick tab strip shows checkmark icon on the finished tab
+        waitForTag("quick_tab_done_icon_tab_done", useUnmergedTree = true)
+        composeRule.onNodeWithTag("quick_tab_done_icon_tab_done", useUnmergedTree = true).assertIsDisplayed()
+
+        // Selecting the finished tab shows Done indicator in top bar
+        composeRule.onNodeWithTag("quick_tab_tab_done").performClick()
+        waitForTag("topbar_done_badge")
+        composeRule.onNodeWithTag("topbar_done_badge").assertIsDisplayed()
+
+        // Open Persistent Tabs drawer, verify finished-task UI, and close finished tabs
+        verifyAndCloseFinishedTabInDrawer(finishedTabId = "tab_done", activeTabId = "tab_active")
+
+        // Select remaining active tab, trigger a turn that finishes its task, verify Done appears, then mark active
+        composeRule.onNodeWithTag("drawer_tab_tab_active").performClick()
+        composeRule.waitForIdle()
+        waitForTag("composer_input")
+        composeRule.onNodeWithTag("composer_input").performTextInput("finish_task ship update")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("send_button").performClick()
+
+        waitForTag("topbar_done_badge")
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        waitForTag("menu_toggle_task_done")
+        composeRule.onNodeWithTag("menu_toggle_task_done").assertTextContains("Mark as active")
+        composeRule.onNodeWithTag("menu_toggle_task_done").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithTag("topbar_done_badge").fetchSemanticsNodes().isEmpty()
+        }
+    }
+
+    private fun verifyAndCloseFinishedTabInDrawer(finishedTabId: String, activeTabId: String) {
+        composeRule.onNodeWithTag("open_drawer_button").performClick()
+        waitForTag("drawer_finished_count_badge")
+        composeRule.onNodeWithTag("drawer_finished_count_badge").assertTextContains("1 done")
+        composeRule.onNodeWithTag("drawer_tab_done_icon_$finishedTabId", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_tab_done_badge_$finishedTabId", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_tab_done_hint_$finishedTabId", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assertTextContains("Task finished", substring = true)
+
+        composeRule.onNodeWithTag("drawer_close_finished_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithTag("drawer_tab_$finishedTabId").fetchSemanticsNodes().isEmpty() &&
+                composeRule.onAllNodesWithTag("drawer_tab_$activeTabId").fetchSemanticsNodes().isNotEmpty()
+        }
+        assertTrue(
+            "Finished count badge should disappear after closing finished tabs",
+            composeRule.onAllNodesWithTag("drawer_finished_count_badge").fetchSemanticsNodes().isEmpty(),
         )
     }
 }
