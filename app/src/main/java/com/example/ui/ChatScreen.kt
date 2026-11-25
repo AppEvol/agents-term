@@ -65,7 +65,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -111,10 +113,16 @@ import com.example.data.QueuedMessage
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
 import com.example.data.UsageStats
-import com.example.data.buildAssistantDisplayBlocks
 import com.example.data.formatToolCallSummary
 import com.example.data.formatToolRunSummary
-import com.example.ui.markdown.MarkdownText
+import com.example.ui.markdown.ChatMarkdownCache
+import com.example.ui.markdown.LocalMarkdownParseDispatcher
+import com.example.ui.markdown.LocalMarkdownSyncParseThreshold
+import com.example.ui.markdown.MarkdownStyle
+import com.example.ui.markdown.MdBlock
+import com.example.ui.markdown.VirtualizedMarkdownBlock
+import com.example.ui.markdown.contentType
+import com.example.ui.markdown.rememberMarkdownStyle
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.LunaInputBorder
 import com.example.ui.theme.MonoFontFamily
@@ -137,6 +145,8 @@ private data class ChatScrollSnapshot(
 
 private data class ChatAutoScrollSignal(
     val messageCount: Int,
+    val feedItemCount: Int,
+    val markdownCommitVersion: Long,
     val lastMessageId: String?,
     val lastTextLength: Int,
     val lastThinkingLength: Int,
@@ -149,6 +159,241 @@ private data class ChatAutoScrollSignal(
     val deniedActionCount: Int,
     val sendGeneration: Int,
 )
+
+private sealed interface ChatFeedItem {
+    val key: String
+    val contentType: String
+    val addMessageGap: Boolean
+
+    data class UserMessage(
+        override val key: String,
+        override val addMessageGap: Boolean,
+        val message: ChatMessage,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "user_message"
+    }
+
+    data class AssistantHeader(
+        override val key: String,
+        override val addMessageGap: Boolean,
+        val isStreaming: Boolean,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "assistant_header"
+    }
+
+    data class AssistantThinking(
+        override val key: String,
+        val thinking: String,
+        val isStreaming: Boolean,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "assistant_thinking"
+        override val addMessageGap: Boolean get() = false
+    }
+
+    data class MarkdownBlock(
+        override val key: String,
+        val block: MdBlock,
+        val isFirstInSegment: Boolean,
+    ) : ChatFeedItem {
+        override val contentType: String get() = block.contentType()
+        override val addMessageGap: Boolean get() = false
+    }
+
+    data class ToolRun(
+        override val key: String,
+        val toolCalls: List<ToolCallItem>,
+        val isLive: Boolean,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "tool_run"
+        override val addMessageGap: Boolean get() = false
+    }
+
+    data class StreamingActivity(
+        override val key: String,
+        val statusDetail: String?,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "streaming_activity"
+        override val addMessageGap: Boolean get() = false
+    }
+
+    data class EmptyAssistantResponse(
+        override val key: String,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "assistant_empty"
+        override val addMessageGap: Boolean get() = false
+    }
+
+    data class BlockedPermissions(
+        override val key: String,
+        val deniedActions: List<DeniedAction>,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "blocked_permissions"
+        override val addMessageGap: Boolean get() = false
+    }
+
+    data class AssistantError(
+        override val key: String,
+        val error: String,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "assistant_error"
+        override val addMessageGap: Boolean get() = false
+    }
+
+    data class AssistantInterrupted(
+        override val key: String,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "assistant_interrupted"
+        override val addMessageGap: Boolean get() = false
+    }
+
+    data class AssistantFooter(
+        override val key: String,
+        val text: String,
+        val usageSummary: String?,
+    ) : ChatFeedItem {
+        override val contentType: String get() = "assistant_footer"
+        override val addMessageGap: Boolean get() = false
+    }
+}
+
+private fun buildChatFeedItems(
+    tab: TabRecord,
+    messages: List<ChatMessage>,
+    markdownCache: ChatMarkdownCache,
+): List<ChatFeedItem> {
+    if (messages.isEmpty()) return emptyList()
+    val items = ArrayList<ChatFeedItem>(messages.size * 4)
+    messages.forEachIndexed { msgIndex, msg ->
+        val addMessageGap = msgIndex > 0
+        if (msg.role == "user") {
+            items.add(ChatFeedItem.UserMessage(key = "${msg.id}:user", addMessageGap = addMessageGap, message = msg))
+        } else {
+            appendAssistantFeedItems(
+                items = items,
+                tab = tab,
+                message = msg,
+                addMessageGap = addMessageGap,
+                markdownCache = markdownCache,
+            )
+        }
+    }
+    return items
+}
+
+private fun appendAssistantFeedItems(
+    items: MutableList<ChatFeedItem>,
+    tab: TabRecord,
+    message: ChatMessage,
+    addMessageGap: Boolean,
+    markdownCache: ChatMarkdownCache,
+) {
+    val isStreaming = message.status == "streaming"
+    items.add(
+        ChatFeedItem.AssistantHeader(
+            key = "${message.id}:header",
+            addMessageGap = addMessageGap,
+            isStreaming = isStreaming,
+        ),
+    )
+    if (!message.thinking.isNullOrBlank()) {
+        items.add(
+            ChatFeedItem.AssistantThinking(
+                key = "${message.id}:thinking",
+                thinking = message.thinking,
+                isStreaming = isStreaming,
+            ),
+        )
+    }
+    appendAssistantBodyItems(items, tab, message, isStreaming, markdownCache)
+    appendAssistantStatusAndFooter(items, message, isStreaming)
+}
+
+private fun appendAssistantBodyItems(
+    items: MutableList<ChatFeedItem>,
+    tab: TabRecord,
+    message: ChatMessage,
+    isStreaming: Boolean,
+    markdownCache: ChatMarkdownCache,
+) {
+    val displayBlocks = markdownCache.displayBlocksFor(message)
+    if (displayBlocks.isNotEmpty()) {
+        appendAssistantDisplayBlocks(items, message, displayBlocks, isStreaming, markdownCache)
+        return
+    }
+    if (!message.thinking.isNullOrBlank()) return
+    if (isStreaming) {
+        items.add(ChatFeedItem.StreamingActivity(key = "${message.id}:activity", statusDetail = tab.statusDetail))
+    } else if (message.status == "complete" && message.error.isNullOrBlank() && message.deniedActions.isEmpty()) {
+        items.add(ChatFeedItem.EmptyAssistantResponse(key = "${message.id}:empty"))
+    }
+}
+
+private fun appendAssistantStatusAndFooter(
+    items: MutableList<ChatFeedItem>,
+    message: ChatMessage,
+    isStreaming: Boolean,
+) {
+    if (message.deniedActions.isNotEmpty()) {
+        items.add(ChatFeedItem.BlockedPermissions(key = "${message.id}:denied", deniedActions = message.deniedActions))
+    }
+    if (!message.error.isNullOrBlank()) {
+        items.add(ChatFeedItem.AssistantError(key = "${message.id}:error", error = message.error))
+    } else if (message.status == "interrupted") {
+        items.add(ChatFeedItem.AssistantInterrupted(key = "${message.id}:interrupted"))
+    }
+    val usageSummary = formatUsage(message.usage)
+    if (!isStreaming && (message.text.isNotBlank() || usageSummary != null)) {
+        items.add(
+            ChatFeedItem.AssistantFooter(
+                key = "${message.id}:footer",
+                text = message.text,
+                usageSummary = usageSummary,
+            ),
+        )
+    }
+}
+
+private fun appendAssistantDisplayBlocks(
+    items: MutableList<ChatFeedItem>,
+    message: ChatMessage,
+    displayBlocks: List<AssistantDisplayBlock>,
+    isStreaming: Boolean,
+    markdownCache: ChatMarkdownCache,
+) {
+    displayBlocks.forEachIndexed { blockIndex, block ->
+        val isLastBlock = blockIndex == displayBlocks.lastIndex
+        when (block) {
+            is AssistantDisplayBlock.TextBlock -> {
+                val mdBlocks = markdownCache.blocksFor(
+                    key = "${message.id}:text:$blockIndex",
+                    markdown = block.text,
+                    isStreaming = isStreaming && isLastBlock,
+                )
+                mdBlocks.forEachIndexed { mdIndex, mdBlock ->
+                    items.add(
+                        ChatFeedItem.MarkdownBlock(
+                            key = "${message.id}:text:$blockIndex:md:$mdIndex",
+                            block = mdBlock,
+                            isFirstInSegment = mdIndex == 0,
+                        ),
+                    )
+                }
+            }
+
+            is AssistantDisplayBlock.ToolRunBlock -> {
+                // One item for a run of any length, keyed by its first call, so the card grows in
+                // place when a second call joins instead of being swapped.
+                items.add(
+                    ChatFeedItem.ToolRun(
+                        key = "${message.id}:tool:${block.toolCalls.first().id}",
+                        toolCalls = block.toolCalls,
+                        isLive = isStreaming && isLastBlock,
+                    ),
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun ChatWorkspace(
@@ -170,9 +415,33 @@ fun ChatWorkspace(
         LazyListState()
     }
     val scope = rememberCoroutineScope()
+    val parseDispatcher = LocalMarkdownParseDispatcher.current
+    val syncParseThreshold = LocalMarkdownSyncParseThreshold.current
+    val markdownCache = remember(tab.id, scope, parseDispatcher, syncParseThreshold) {
+        ChatMarkdownCache(
+            scope = scope,
+            parseDispatcher = parseDispatcher,
+            syncThresholdChars = syncParseThreshold,
+        )
+    }
+    DisposableEffect(markdownCache) {
+        onDispose { markdownCache.cancelAll() }
+    }
+    val markdownStyle = rememberMarkdownStyle(MaterialTheme.colorScheme.onSurface)
+    val feedItems = remember(messages, tab.statusDetail, markdownCache.commitVersion) {
+        buildChatFeedItems(
+            tab = tab,
+            messages = messages,
+            markdownCache = markdownCache,
+        )
+    }
+    SideEffect {
+        markdownCache.flushPending(messages.mapTo(HashSet(messages.size)) { it.id })
+    }
     var draft by rememberSaveable(tab.id) { mutableStateOf("") }
     val isWorking = tab.status == "working"
     val latestMessages by rememberUpdatedState(messages)
+    val latestFeedItemCount by rememberUpdatedState(feedItems.size)
 
     var autoScrollPinned by remember(tab.id) { mutableStateOf(true) }
     var isProgrammaticScroll by remember(tab.id) { mutableStateOf(false) }
@@ -230,6 +499,8 @@ fun ChatWorkspace(
     val lastMessage = messages.lastOrNull()
     val autoScrollSignal = ChatAutoScrollSignal(
         messageCount = messages.size,
+        feedItemCount = feedItems.size,
+        markdownCommitVersion = markdownCache.commitVersion,
         lastMessageId = lastMessage?.id,
         lastTextLength = lastMessage?.text?.length ?: 0,
         lastThinkingLength = lastMessage?.thinking?.length ?: 0,
@@ -247,10 +518,11 @@ fun ChatWorkspace(
         if (listState.isScrollInProgress) {
             snapshotFlow { listState.isScrollInProgress }.first { !it }
         }
-        if (latestMessages.isNotEmpty() && autoScrollPinned) {
+        val sentinelIndex = latestFeedItemCount
+        if (sentinelIndex > 0 && autoScrollPinned) {
             isProgrammaticScroll = true
             try {
-                listState.scrollToItem(latestMessages.size)
+                listState.scrollToItem(sentinelIndex)
             } finally {
                 isProgrammaticScroll = false
             }
@@ -279,11 +551,17 @@ fun ChatWorkspace(
                     end = 16.dp,
                     bottom = if (messages.isEmpty()) 14.dp else 0.dp,
                 ),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(messages, key = { it.id }) { msg ->
+                items(
+                    items = feedItems,
+                    key = { it.key },
+                    contentType = { it.contentType },
+                ) { item ->
                     Box(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(if (item.addMessageGap) Modifier.padding(top = 6.dp) else Modifier),
                         contentAlignment = Alignment.Center,
                     ) {
                         Box(
@@ -291,21 +569,18 @@ fun ChatWorkspace(
                                 .fillMaxWidth()
                                 .widthIn(max = 760.dp),
                         ) {
-                            if (msg.role == "user") {
-                                UserMessageBubble(msg)
-                            } else {
-                                AssistantMessageItem(
-                                    tab = tab,
-                                    message = msg,
-                                    onRetryFullAccess = onRetryFullAccess,
-                                )
-                            }
+                            ChatFeedItemContent(
+                                item = item,
+                                tab = tab,
+                                markdownStyle = markdownStyle,
+                                onRetryFullAccess = onRetryFullAccess,
+                            )
                         }
                     }
                 }
-                if (messages.isNotEmpty()) {
-                    item(key = CHAT_BOTTOM_SENTINEL_KEY) {
-                        Spacer(Modifier.height(1.dp))
+                if (feedItems.isNotEmpty()) {
+                    item(key = CHAT_BOTTOM_SENTINEL_KEY, contentType = "bottom_sentinel") {
+                        Spacer(Modifier.height(7.dp))
                     }
                 }
             }
@@ -329,13 +604,14 @@ fun ChatWorkspace(
                 SmallFloatingActionButton(
                     onClick = {
                         scope.launch {
-                            if (latestMessages.isNotEmpty()) {
+                            val sentinelIndex = latestFeedItemCount
+                            if (sentinelIndex > 0) {
                                 autoScrollPinned = true
                                 isProgrammaticScroll = true
                                 try {
-                                    listState.animateScrollToItem(latestMessages.size)
+                                    listState.animateScrollToItem(sentinelIndex)
                                     if (autoScrollPinned && listState.canScrollForward) {
-                                        listState.scrollToItem(latestMessages.size)
+                                        listState.scrollToItem(latestFeedItemCount)
                                     }
                                 } finally {
                                     isProgrammaticScroll = false
@@ -497,10 +773,174 @@ private fun UserMessageBubble(message: ChatMessage) {
 }
 
 @Composable
-private fun AssistantMessageItem(
+private fun ChatFeedItemContent(
+    item: ChatFeedItem,
     tab: TabRecord,
-    message: ChatMessage,
+    markdownStyle: MarkdownStyle,
     onRetryFullAccess: () -> Unit,
+) {
+    when (item) {
+        is ChatFeedItem.UserMessage -> UserMessageBubble(item.message)
+
+        is ChatFeedItem.AssistantHeader -> AssistantMessageHeader(
+            tab = tab,
+            isStreaming = item.isStreaming,
+        )
+
+        is ChatFeedItem.AssistantThinking -> ThinkingAccordionCard(
+            thinking = item.thinking,
+            isStreaming = item.isStreaming,
+        )
+
+        is ChatFeedItem.MarkdownBlock -> VirtualizedMarkdownBlock(
+            block = item.block,
+            isFirst = item.isFirstInSegment,
+            style = markdownStyle,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        is ChatFeedItem.ToolRun -> ToolCallRunCard(
+            toolCalls = item.toolCalls,
+            isLive = item.isLive,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        is ChatFeedItem.StreamingActivity -> AssistantStreamingActivity(statusDetail = item.statusDetail)
+
+        is ChatFeedItem.EmptyAssistantResponse -> Text(
+            text = stringResource(R.string.assistant_empty_response),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        is ChatFeedItem.BlockedPermissions -> BlockedPermissionCard(
+            deniedActions = item.deniedActions,
+            onRetryFullAccess = onRetryFullAccess,
+        )
+
+        is ChatFeedItem.AssistantError -> AssistantErrorBanner(error = item.error)
+
+        is ChatFeedItem.AssistantInterrupted -> Text(
+            text = stringResource(R.string.status_interrupted),
+            style = MaterialTheme.typography.labelSmall,
+            color = AppTheme.colors.warning,
+        )
+
+        is ChatFeedItem.AssistantFooter -> AssistantMessageFooter(
+            text = item.text,
+            usageSummary = item.usageSummary,
+        )
+    }
+}
+
+@Composable
+private fun AssistantMessageHeader(
+    tab: TabRecord,
+    isStreaming: Boolean,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+            modifier = Modifier.size(26.dp),
+        ) {
+            Icon(
+                imageVector = if (tab.agent == "shell") Icons.Rounded.Terminal else Icons.Rounded.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(5.dp),
+            )
+        }
+        Text(
+            text = tab.agentLabel,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        if (isStreaming) {
+            Surface(
+                shape = themedCorner(10.dp),
+                color = AppTheme.colors.info.copy(alpha = 0.14f),
+                modifier = Modifier.testTag("streaming_working_badge"),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    WorkingPulseDots(
+                        color = AppTheme.colors.info,
+                        dotSize = 4.dp,
+                    )
+                    Text(
+                        text = stringResource(R.string.status_working_badge),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AppTheme.colors.info,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssistantStreamingActivity(statusDetail: String?) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .padding(vertical = 2.dp)
+            .testTag("streaming_activity_indicator"),
+    ) {
+        WorkingPulseDots(
+            color = AppTheme.colors.info,
+            dotSize = 5.dp,
+        )
+        Text(
+            text = statusDetail?.takeIf { it.isNotBlank() }
+                ?: stringResource(R.string.status_working_fallback),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun AssistantErrorBanner(error: String) {
+    Surface(
+        shape = themedCorner(12.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.ErrorOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AssistantMessageFooter(
+    text: String,
+    usageSummary: String?,
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
@@ -512,208 +952,34 @@ private fun AssistantMessageItem(
         }
     }
 
-    Column(
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        // Agent label header
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-                modifier = Modifier.size(26.dp),
+        if (usageSummary != null) {
+            Text(
+                text = usageSummary,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = MonoFontFamily,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+            )
+        } else {
+            Spacer(Modifier.width(1.dp))
+        }
+        if (text.isNotBlank()) {
+            IconButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(text))
+                    copied = true
+                },
             ) {
                 Icon(
-                    imageVector = if (tab.agent == "shell") Icons.Rounded.Terminal else Icons.Rounded.AutoAwesome,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(5.dp),
+                    imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                    contentDescription = stringResource(R.string.action_copy_message),
+                    modifier = Modifier.size(16.dp),
+                    tint = if (copied) AppTheme.colors.success else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            Text(
-                text = tab.agentLabel,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (message.status == "streaming") {
-                Surface(
-                    shape = themedCorner(10.dp),
-                    color = AppTheme.colors.info.copy(alpha = 0.14f),
-                    modifier = Modifier.testTag("streaming_working_badge"),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                        WorkingPulseDots(
-                            color = AppTheme.colors.info,
-                            dotSize = 4.dp,
-                        )
-                        Text(
-                            text = stringResource(R.string.status_working_badge),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = AppTheme.colors.info,
-                        )
-                    }
-                }
-            }
-        }
-
-        // Collapsible Thinking block
-        if (!message.thinking.isNullOrBlank()) {
-            ThinkingAccordionCard(
-                thinking = message.thinking,
-                isStreaming = message.status == "streaming",
-            )
-        }
-
-        // Ordered text and grouped tool-call runs
-        val displayBlocks = remember(message.segments, message.toolCalls, message.text) {
-            buildAssistantDisplayBlocks(message)
-        }
-        if (displayBlocks.isNotEmpty()) {
-            displayBlocks.forEachIndexed { blockIndex, block ->
-                when (block) {
-                    is AssistantDisplayBlock.TextBlock -> {
-                        val isLiveTextBlock = message.status == "streaming" && blockIndex == displayBlocks.lastIndex
-                        key("text_$blockIndex") {
-                            MarkdownText(
-                                markdown = block.text,
-                                isStreaming = isLiveTextBlock,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-
-                    is AssistantDisplayBlock.ToolRunBlock -> {
-                        // One composable for a run of any length, keyed by its first call, so the
-                        // card grows in place when a second call joins instead of being swapped.
-                        key(block.toolCalls.first().id) {
-                            ToolCallRunCard(
-                                toolCalls = block.toolCalls,
-                                isLive = message.status == "streaming" && block === displayBlocks.last(),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-                }
-            }
-        } else if (
-            message.status == "streaming" &&
-            message.thinking.isNullOrBlank()
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .padding(vertical = 2.dp)
-                    .testTag("streaming_activity_indicator"),
-            ) {
-                WorkingPulseDots(
-                    color = AppTheme.colors.info,
-                    dotSize = 5.dp,
-                )
-                Text(
-                    text = tab.statusDetail?.takeIf { it.isNotBlank() }
-                        ?: stringResource(R.string.status_working_fallback),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        } else if (
-            message.status == "complete" &&
-            message.error.isNullOrBlank() &&
-            message.deniedActions.isEmpty() &&
-            message.thinking.isNullOrBlank()
-        ) {
-            Text(
-                text = stringResource(R.string.assistant_empty_response),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        // Permission Denied / Blocked inline card
-        if (message.deniedActions.isNotEmpty()) {
-            BlockedPermissionCard(
-                deniedActions = message.deniedActions,
-                onRetryFullAccess = onRetryFullAccess,
-            )
-        }
-
-        // Error banner inside message
-        if (!message.error.isNullOrBlank()) {
-            Surface(
-                shape = themedCorner(12.dp),
-                color = MaterialTheme.colorScheme.errorContainer,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.ErrorOutline,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = message.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                    )
-                }
-            }
-        } else if (message.status == "interrupted") {
-            Text(
-                text = stringResource(R.string.status_interrupted),
-                style = MaterialTheme.typography.labelSmall,
-                color = AppTheme.colors.warning,
-            )
-        }
-
-        // Footer: Usage metrics + copy full response action
-        val usageSummary = remember(message.usage) { formatUsage(message.usage) }
-        if (message.status != "streaming" && (message.text.isNotBlank() || usageSummary != null)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                if (usageSummary != null) {
-                    Text(
-                        text = usageSummary,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = MonoFontFamily,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
-                    )
-                } else {
-                    Spacer(Modifier.width(1.dp))
-                }
-                if (message.text.isNotBlank()) {
-                    IconButton(
-                        onClick = {
-                            clipboard.setText(AnnotatedString(message.text))
-                            copied = true
-                        },
-                    ) {
-                        Icon(
-                            imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                            contentDescription = stringResource(R.string.action_copy_message),
-                            modifier = Modifier.size(16.dp),
-                            tint = if (copied) AppTheme.colors.success else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
             }
         }
     }
@@ -724,7 +990,7 @@ private fun ThinkingAccordionCard(
     thinking: String,
     isStreaming: Boolean,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
     Surface(
         shape = themedCorner(14.dp),
         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.42f),
@@ -789,7 +1055,7 @@ private fun ToolCallRunCard(
     isLive: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
     val isGroup = toolCalls.size > 1
     val runningCalls = remember(toolCalls) { toolCalls.filter { it.status == "running" } }
     val hasRunning = runningCalls.isNotEmpty()
@@ -950,7 +1216,7 @@ private fun ToolCallRow(
     modifier: Modifier = Modifier,
     reserveSummaryLine: Boolean = false,
 ) {
-    var expanded by remember(toolCall.id) { mutableStateOf(false) }
+    var expanded by rememberSaveable(toolCall.id) { mutableStateOf(false) }
     val displaySummary = remember(toolCall.inputSummary, toolCall.inputJson) {
         formatToolCallSummary(toolCall)
     }

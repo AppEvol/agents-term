@@ -1,10 +1,15 @@
 package com.example.ui.markdown
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class StreamingMarkdownParserTest {
 
     private fun loadSample(name: String): String {
@@ -50,10 +55,8 @@ class StreamingMarkdownParserTest {
             "chat_reply",
         )
         for (sample in samples) {
-            assertStreamingMatchesFullParse(loadSample(sample), chunkSizes = listOf(7, 29))
+            assertStreamingMatchesFullParse(loadSample(sample), chunkSizes = listOf(1, 7, 29))
         }
-        // Verify 1-char-at-a-time streaming on loose/ordered lists so partial markers like `"2"` never split early.
-        assertStreamingMatchesFullParse(loadSample("lists"), chunkSizes = listOf(1))
     }
 
     @Test
@@ -84,6 +87,7 @@ class StreamingMarkdownParserTest {
             > second independent quote
 
             • dot bullet one
+
             • dot bullet two
 
             Setext heading
@@ -103,7 +107,26 @@ class StreamingMarkdownParserTest {
 
             Final paragraph.
         """.trimIndent()
-        assertStreamingMatchesFullParse(tricky, chunkSizes = listOf(3, 11, 37))
+        assertStreamingMatchesFullParse(tricky, chunkSizes = listOf(1, 3, 11, 37))
+    }
+
+    @Test
+    fun matchesFullParseOnBlockInterruptionEdgeCasesAndCrlf() {
+        val edgeCases = listOf(
+            // Backtick added to fence info string turns apparent fence back into inline code in paragraph.
+            "Hello\n```foo` bar\n\nAfter.\n",
+            // Thematic break invalidated by trailing character merges back into preceding paragraph.
+            "Hello\n***not a rule\n\nAfter.\n",
+            // Indented fenced code block with blank lines and partial closing fences inside.
+            "Intro.\n\n  ~~~~python\n  x = 1\n\n  ~~~\n    ~~~~\n  y = 2\n  ~~~~\n\nOutro.\n",
+            // CRLF line endings mixed with dot bullets and fenced code.
+            "• one\r\n\r\n• two\r\n\r\n```sh\r\necho hi\r\n• literal\r\n```\r\n\r\nDone.\r\n",
+            // Multi-line link reference definition and link reference inside blockquote.
+            "Ref [one][a] and [two][b].\n\nMiddle.\n\n[a]:\nhttps://example.com/a\n\n> [b]: https://example.com/b\n",
+        )
+        for (doc in edgeCases) {
+            assertStreamingMatchesFullParse(doc, chunkSizes = listOf(1, 5))
+        }
     }
 
     @Test
@@ -123,6 +146,45 @@ class StreamingMarkdownParserTest {
         assertSame(blocks1[1], blocks2[1])
         assertSame(blocks1[2], blocks2[2])
         assertEquals(MarkdownParser.parse(part2), blocks2)
+    }
+
+    @Test
+    fun openCodeFenceFastPathHandlesGrowingFenceInO1UntilClosingFenceArrives() {
+        val state = StreamingMarkdownState()
+        val sb = StringBuilder("Intro paragraph.\n\n```kotlin\n")
+        assertEquals(MarkdownParser.parse(sb.toString()), state.update(sb.toString(), isStreaming = true))
+        assertEquals(1, state.frozenBlockCount)
+
+        // Append 150 lines including blank lines, dot bullets, and shorter backtick runs.
+        for (i in 1..150) {
+            val line = when (i) {
+                25 -> "\n"
+                50 -> "• not a bullet\n"
+                75 -> "``not closing\n"
+                100 -> "    ```indented by four is literal\n"
+                else -> "val line$i = $i * 2\n"
+            }
+            sb.append(line)
+            val current = sb.toString()
+            // Estimated work stays proportional to the delta line, not the entire 150-line block.
+            assertTrue(
+                "Expected O(delta) work estimate, got ${state.estimatedWorkChars(current, true)}",
+                state.estimatedWorkChars(current, isStreaming = true) <= line.length + 1,
+            )
+            val streamed = state.update(current, isStreaming = true)
+            assertEquals(2, streamed.size)
+            assertEquals(MarkdownParser.parse(current), streamed)
+        }
+        assertEquals(150, state.openFenceFastPathHits)
+
+        // Stream closing fence 1 char at a time followed by trailing prose.
+        for (ch in "```\n\nAfter code.\n") {
+            sb.append(ch)
+            val current = sb.toString()
+            assertEquals(MarkdownParser.parse(current), state.update(current, isStreaming = true))
+        }
+        assertEquals(2, state.frozenBlockCount)
+        assertEquals(MarkdownParser.parse(sb.toString()), state.update(sb.toString(), isStreaming = false))
     }
 
     @Test
@@ -155,5 +217,44 @@ class StreamingMarkdownParserTest {
 
         assertEquals(emptyList<MdBlock>(), state.update("", isStreaming = true))
         assertEquals(emptyList<MdBlock>(), state.update("", isStreaming = false))
+    }
+
+    @Test
+    fun asyncSessionParsesSmallDocsSyncAndCoalescesLargeBackgroundParsesWithMonotonicRevisions() = runTest {
+        val bgDispatcher = StandardTestDispatcher(testScheduler)
+        val commits = mutableListOf<List<MdBlock>>()
+        val session = AsyncMarkdownSession(
+            scope = this,
+            parseDispatcher = bgDispatcher,
+            syncThresholdChars = 128,
+            onAsyncCommit = { commits.add(it) },
+        )
+
+        // Small static document parses synchronously on frame 1.
+        val small = "# Small\n\nShort reply."
+        val smallBlocks = session.requestBlocks(small, isStreaming = false)
+        session.launchIfNeeded()
+        assertEquals(MarkdownParser.parse(small), smallBlocks)
+        assertEquals(0, session.asyncDispatchCount)
+        assertTrue(commits.isEmpty())
+
+        // Burst of large updates while background worker hasn't run yet coalesces to the latest revision.
+        val large1 = (1..20).joinToString("\n") { "| col$it | val$it |" }
+        val large2 = "$large1\n| col21 | val21 |"
+        val large3 = "| H1 | H2 |\n| --- | --- |\n$large2"
+
+        session.requestBlocks(large1, isStreaming = true)
+        session.launchIfNeeded()
+        session.requestBlocks(large2, isStreaming = true)
+        session.launchIfNeeded()
+        session.requestBlocks(large3, isStreaming = false)
+        session.launchIfNeeded()
+
+        assertEquals(1, session.asyncDispatchCount)
+        advanceUntilIdle()
+
+        assertEquals(1, commits.size)
+        assertEquals(MarkdownParser.parse(large3), session.blocks)
+        assertEquals(MarkdownParser.parse(large3), commits.single())
     }
 }

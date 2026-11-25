@@ -31,7 +31,34 @@ import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.Text
 import org.commonmark.node.ThematicBreak
+import org.commonmark.parser.IncludeSourceSpans
 import org.commonmark.parser.Parser
+
+/** Metadata for a trailing unclosed top-level [FencedCodeBlock] used by the O(1) append fast path. */
+internal data class OpenFenceInfo(
+    val fenceChar: Char,
+    val openingLength: Int,
+    val indent: Int,
+    val language: String,
+    /** Line-start offset within the parsed input string where the opening fence begins. */
+    val blockStartOffset: Int,
+    /** Offset immediately after the opening fence line's `\n`, or `null` if the line is still incomplete. */
+    val bodyStartOffset: Int?,
+)
+
+/** A top-level parsed [MdBlock] paired with its parser-provided line-start offset in the input string. */
+internal data class TopLevelBlock(
+    val block: MdBlock,
+    /** Line-start char offset in the parsed input string, or `-1` if no source span was attached. */
+    val startOffset: Int,
+)
+
+/** Result of parsing a Markdown document with top-level source spans and structural metadata. */
+internal data class ParsedDocument(
+    val blocks: List<TopLevelBlock>,
+    val hasLinkReferenceDefinition: Boolean,
+    val trailingOpenFence: OpenFenceInfo?,
+)
 
 /**
  * Parses chat Markdown into [MdBlock]s with commonmark-java, the JVM reference implementation of
@@ -48,6 +75,7 @@ import org.commonmark.parser.Parser
 internal object MarkdownParser {
     // Thread-safe and reusable, per the commonmark-java docs.
     private val parser: Parser = Parser.builder()
+        .includeSourceSpans(IncludeSourceSpans.BLOCKS)
         .extensions(
             listOf(
                 TablesExtension.create(),
@@ -67,34 +95,124 @@ internal object MarkdownParser {
         )
         .build()
 
-    fun parse(markdown: String): List<MdBlock> = blocks(parser.parse(normalizeBullets(markdown)))
+    fun parse(markdown: String): List<MdBlock> = parseDocument(markdown).blocks.map { it.block }
 
-    private val fenceRegex = Regex("^\\s*(```|~~~)")
-    private val dotBulletRegex = Regex("^(\\s*)• ")
+    fun parseDocument(markdown: String): ParsedDocument {
+        if (markdown.isEmpty()) {
+            return ParsedDocument(
+                blocks = emptyList(),
+                hasLinkReferenceDefinition = false,
+                trailingOpenFence = null,
+            )
+        }
+        val normalized = normalizeBullets(markdown)
+        val document = parser.parse(normalized)
+        val state = ConversionState()
+        val topLevel = mutableListOf<TopLevelBlock>()
+        var lastAstNode: Node? = null
 
-    /** Rewrites `• item` to `- item` outside fenced code. */
+        for (child in document.children()) {
+            lastAstNode = child
+            val converted = block(child, state) ?: continue
+            topLevel.add(
+                TopLevelBlock(
+                    block = converted,
+                    startOffset = blockLineStartOffset(normalized, child),
+                ),
+            )
+        }
+
+        val openFence = (lastAstNode as? FencedCodeBlock)?.let { fence ->
+            extractOpenFenceInfo(normalized, fence)
+        }
+
+        return ParsedDocument(
+            blocks = topLevel,
+            hasLinkReferenceDefinition = state.hasLinkReferenceDefinition,
+            trailingOpenFence = openFence,
+        )
+    }
+
+    private class ConversionState {
+        var hasLinkReferenceDefinition: Boolean = false
+    }
+
+    private fun extractOpenFenceInfo(source: String, fence: FencedCodeBlock): OpenFenceInfo? {
+        val closingLen = fence.closingFenceLength
+        if (closingLen != null && closingLen > 0) return null
+        val startOffset = blockLineStartOffset(source, fence)
+        if (startOffset < 0) return null
+        val fenceChar = fence.fenceCharacter?.firstOrNull() ?: return null
+        val openingLen = fence.openingFenceLength ?: return null
+        if (openingLen < MIN_FENCE_LEN) return null
+        val firstNewline = source.indexOf('\n', startOffset)
+        val bodyStart = if (firstNewline == -1) null else firstNewline + 1
+        return OpenFenceInfo(
+            fenceChar = fenceChar,
+            openingLength = openingLen,
+            indent = fence.fenceIndent,
+            language = fence.info.orEmpty().trim().substringBefore(' '),
+            blockStartOffset = startOffset,
+            bodyStartOffset = bodyStart,
+        )
+    }
+
+    private fun blockLineStartOffset(source: String, node: Node): Int {
+        val firstSpan = node.sourceSpans.firstOrNull() ?: return -1
+        val idx = firstSpan.inputIndex.coerceIn(0, source.length)
+        if (idx == 0) return 0
+        val prevNewline = source.lastIndexOf('\n', idx - 1)
+        return if (prevNewline == -1) 0 else prevNewline + 1
+    }
+
+    /**
+     * Rewrites leading `• ` to `- ` outside fenced code while preserving exact string length and
+     * line endings (`\r\n` vs `\n`) so parser [org.commonmark.node.SourceSpan] input indices match
+     * the original [markdown] string 1:1.
+     */
     private fun normalizeBullets(markdown: String): String {
         if ('•' !in markdown) return markdown
+        var out: StringBuilder? = null
         var inFence = false
-        return markdown.lineSequence().joinToString("\n") { line ->
-            when {
-                fenceRegex.containsMatchIn(line) -> {
-                    inFence = !inFence
-                    line
-                }
-
-                inFence -> line
-
-                else -> dotBulletRegex.replaceFirst(line, "$1- ")
+        var pos = 0
+        val len = markdown.length
+        while (pos < len) {
+            val nlIdx = markdown.indexOf('\n', pos)
+            val lineEnd = if (nlIdx == -1) len else nlIdx
+            val contentEnd = trimTrailingCr(markdown, pos, lineEnd)
+            val contentStart = skipLeadingIndent(markdown, pos, contentEnd)
+            if (isFenceToggleLine(markdown, contentStart, contentEnd)) {
+                inFence = !inFence
+            } else if (!inFence && isDotBullet(markdown, contentStart, contentEnd)) {
+                val builder = out ?: StringBuilder(markdown).also { out = it }
+                builder.setCharAt(contentStart, '-')
             }
+            pos = if (nlIdx == -1) len else nlIdx + 1
         }
+        return out?.toString() ?: markdown
+    }
+
+    private fun trimTrailingCr(text: String, start: Int, end: Int): Int = if (end > start && text[end - 1] == '\r') end - 1 else end
+
+    private fun skipLeadingIndent(text: String, start: Int, end: Int): Int {
+        var i = start
+        while (i < end && (text[i] == ' ' || text[i] == '\t')) i++
+        return i
+    }
+
+    private fun isDotBullet(text: String, start: Int, end: Int): Boolean = start + 1 < end && text[start] == '•' && text[start + 1] == ' '
+
+    private fun isFenceToggleLine(text: String, start: Int, end: Int): Boolean {
+        if (end - start < MIN_FENCE_LEN) return false
+        val ch = text[start]
+        return (ch == '`' || ch == '~') && text[start + 1] == ch && text[start + 2] == ch
     }
 
     private fun Node.children(): Sequence<Node> = generateSequence(firstChild) { it.next }
 
-    private fun blocks(parent: Node): List<MdBlock> = parent.children().mapNotNull(::block).toList()
+    private fun blocks(parent: Node, state: ConversionState): List<MdBlock> = parent.children().mapNotNull { block(it, state) }.toList()
 
-    private fun block(node: Node): MdBlock? = when (node) {
+    private fun block(node: Node, state: ConversionState): MdBlock? = when (node) {
         is Paragraph -> MdBlock.Paragraph(inlines(node))
 
         is Heading -> MdBlock.Heading(node.level, inlines(node))
@@ -106,11 +224,11 @@ internal object MarkdownParser {
 
         is IndentedCodeBlock -> MdBlock.CodeBlock("", node.literal.orEmpty().trimEnd('\n'))
 
-        is BlockQuote -> MdBlock.Quote(blocks(node))
+        is BlockQuote -> MdBlock.Quote(blocks(node, state))
 
-        is BulletList -> itemList(node, ordered = false, start = 1)
+        is BulletList -> itemList(node, ordered = false, start = 1, state = state)
 
-        is OrderedList -> itemList(node, ordered = true, start = node.markerStartNumber ?: 1)
+        is OrderedList -> itemList(node, ordered = true, start = node.markerStartNumber ?: 1, state = state)
 
         is ThematicBreak -> MdBlock.Rule
 
@@ -118,16 +236,24 @@ internal object MarkdownParser {
 
         is HtmlBlock -> MdBlock.Paragraph(listOf(MdInline.Text(node.literal.orEmpty().trimEnd('\n'))))
 
-        is LinkReferenceDefinition -> null
+        is LinkReferenceDefinition -> {
+            state.hasLinkReferenceDefinition = true
+            null
+        }
 
         // An extension block this renderer does not know: keep its text rather than drop it.
         else -> MdBlock.Paragraph(inlines(node)).takeIf { it.content.isNotEmpty() }
     }
 
-    private fun itemList(list: ListBlock, ordered: Boolean, start: Int): MdBlock.ItemList {
+    private fun itemList(
+        list: ListBlock,
+        ordered: Boolean,
+        start: Int,
+        state: ConversionState,
+    ): MdBlock.ItemList {
         val items = list.children().filterIsInstance<ListItem>().map { item ->
             val marker = item.firstChild as? TaskListItemMarker
-            MdListItem(task = marker?.isChecked, blocks = blocks(item))
+            MdListItem(task = marker?.isChecked, blocks = blocks(item, state))
         }
         return MdBlock.ItemList(ordered, start, list.isTight, items.toList())
     }
@@ -191,6 +317,7 @@ internal object MarkdownParser {
         }
     }
 
+    private const val MIN_FENCE_LEN = 3
     private val htmlBreakRegex = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
 
     /** Adjacent text nodes (commonmark splits at every `[`, `_`, …) become one. */
