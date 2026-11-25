@@ -302,7 +302,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("send_button").performClick()
 
         waitForText("Processing prompt...")
-        waitForTag("working_progress_bar")
+        waitForTag("streaming_working_badge")
         composeRule.onNodeWithTag("send_button").performClick()
         waitForTag("hold_to_interrupt_hint")
         assertTrue("Accidental tap must not interrupt active turn", activeDaemon.interruptedTabIds.isEmpty())

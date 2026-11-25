@@ -195,7 +195,7 @@ class ChatQueueUiTest {
             }
         }
 
-        composeRule.onNodeWithTag("working_progress_bar").assertIsDisplayed()
+        composeRule.onNodeWithTag("working_progress_bar").assertDoesNotExist()
         composeRule.onNodeWithTag("streaming_working_badge").assertIsDisplayed()
         composeRule.onNodeWithTag("streaming_activity_indicator").assertIsDisplayed()
     }
