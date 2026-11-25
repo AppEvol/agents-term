@@ -23,9 +23,9 @@ import java.util.concurrent.Executors
  * In-process embedded SSH server for Android E2E tests.
  *
  * Accepts real JSch connections from [com.example.data.SshBootstrapClient], records the
- * executed remote command, and streams realistic `agy --output-format stream-json` NDJSON
- * bootstrap output ending with the target [pairingUri] so the full SSH -> agy -> daemon
- * workflow can be verified end-to-end on the Android emulator.
+ * executed remote command, and streams deterministic installer output ending with the target
+ * [pairingUri] so the full SSH -> static daemon install -> workspace workflow can be verified
+ * end-to-end on the Android emulator.
  */
 class FakeSshVmServer(
     context: Context,
@@ -74,7 +74,7 @@ class FakeSshVmServer(
             commandFactory = CommandFactory { channel: ChannelSession, command: String ->
                 channel.session?.username?.let { authenticatedUsers.add(it) }
                 receivedCommands.add(command)
-                SimulatedAgyBootstrapCommand(
+                SimulatedDaemonBootstrapCommand(
                     pairingUri = pairingUri,
                     daemonPort = daemonPort,
                     executor = executor,
@@ -93,7 +93,7 @@ class FakeSshVmServer(
     }
 }
 
-private class SimulatedAgyBootstrapCommand(
+private class SimulatedDaemonBootstrapCommand(
     private val pairingUri: String,
     private val daemonPort: Int,
     private val executor: java.util.concurrent.ExecutorService,
@@ -118,12 +118,12 @@ private class SimulatedAgyBootstrapCommand(
         executor.submit {
             try {
                 val lines = listOf(
-                    ">>> Invoking Antigravity (agy --dangerously-skip-permissions) on ci-test-vm...",
-                    """{"event":"init","conversation_id":"e2e-ssh-conv-1234","init":{"cwd":"/home/ci"}}""",
-                    """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"toolSummary":"Verify AgentsTerm daemon on port $daemonPort"}}}}""",
-                    """{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":0.4,"tool_info":{"output":"Daemon healthy on 127.0.0.1:$daemonPort\n$pairingUri\n"}}}""",
-                    """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"AgentsTerm daemon is running and verified.\n$pairingUri\n"}}""",
-                    """{"event":"result","result":{"conversation_id":"e2e-ssh-conv-1234","status":"SUCCESS","response":"AgentsTerm daemon ready:\n$pairingUri\n","duration_seconds":0.9,"num_turns":1}}""",
+                    ">>> Checking latest AgentsTerm daemon (agentsterm-daemon-linux-x86_64)...",
+                    ">>> Installed verified binary at /home/ci/.local/bin/agentsterm-daemon",
+                    ">>> Waiting for the daemon on http://127.0.0.1:$daemonPort ...",
+                    ">>> Daemon v0.3.0 (commit abcdef123456) healthy on 127.0.0.1:$daemonPort (hostname ci-test-vm)",
+                    ">>> Running as systemd --user (herdr-mobile.service)",
+                    pairingUri,
                 )
                 val stream = out
                 if (stream != null) {

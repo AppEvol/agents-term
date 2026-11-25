@@ -197,15 +197,12 @@ class RealVmDockerE2ETest {
         composeRule.onNodeWithTag("settings_back_button").performClick()
         waitForTag("top_new_tab_button")
 
-        // Invoke app_state_cli from inside the Docker VM via a real Shell tab and verify the live round-trip.
+        // Invoke native app_state_cli symlink from inside the zero-dependency Docker VM via a real Shell tab.
         val daemonPort = arg("realVmDaemonPort", "7591")
-        val cliCmd = arg(
-            "realVmAppStateCliCmd",
-            "python3 ~/.local/share/agentsterm/agents-term/app_state_cli/app_state_cli.py",
-        )
+        val cliCmd = arg("realVmAppStateCliCmd", "app_state_cli")
         createTab("shell", "Live Debug Shell")
         composeRule.onNodeWithTag("composer_input")
-            .performTextInput("$cliCmd --port $daemonPort state")
+            .performTextInput("$cliCmd --port $daemonPort state --pretty")
         composeRule.onNodeWithTag("send_button").performClick()
         waitForText("\"connectionState\": \"CONNECTED\"", substring = true, timeoutMs = 25_000L)
     }

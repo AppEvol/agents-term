@@ -34,10 +34,11 @@ class ModelsTest(TempHomeTestCase):
     def test_parse_agy_models_output_strips_spinner_and_ansi(self):
         sample = "\n".join(
             [
+                "Fetching available models...",
                 "\r\x1b[36m⠋ Fetching available models...\x1b[0m\r\x1b[2Kgemini-4-neon-high             Gemini 4 Neon (High)",
-                "gemini-4-neon-medium           Gemini 4 Neon (Medium)",
+                "gemini-4-neon-medium\tGemini 4 Neon (Medium)",
                 "claude-opus-5-5-high           Claude Opus 5.5 (High)",
-                "gemini-4-neon-high             Duplicate Should Be Ignored",
+                "gemini-4-neon-high\tDuplicate Should Be Ignored",
                 "",
             ]
         )
