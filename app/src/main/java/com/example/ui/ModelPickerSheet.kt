@@ -18,7 +18,6 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -26,7 +25,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -46,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.AgentModelOption
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.ThemedButton
+import com.example.ui.theme.ThemedTextField
 import com.example.ui.theme.themedCorner
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -138,7 +138,7 @@ fun ModelPickerSheet(
             }
 
             if (models.size > 5) {
-                OutlinedTextField(
+                ThemedTextField(
                     value = filterQuery,
                     onValueChange = { filterQuery = it },
                     placeholder = { Text(stringResource(R.string.model_picker_search_placeholder)) },
@@ -218,7 +218,7 @@ fun ModelPickerSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedTextField(
+                ThemedTextField(
                     value = customModelInput,
                     onValueChange = { customModelInput = it },
                     placeholder = { Text(stringResource(R.string.model_picker_custom_placeholder)) },
@@ -229,7 +229,7 @@ fun ModelPickerSheet(
                         .weight(1f)
                         .testTag("custom_model_input"),
                 )
-                Button(
+                ThemedButton(
                     onClick = {
                         val trimmed = customModelInput.trim()
                         if (trimmed.isNotEmpty()) {

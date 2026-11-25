@@ -39,22 +39,17 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -87,9 +82,17 @@ import com.example.data.captureWindowScreenshotBase64
 import com.example.data.shareDebugBundleFile
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.ThemedButton
+import com.example.ui.theme.ThemedOutlinedButton
+import com.example.ui.theme.ThemedSwitch
+import com.example.ui.theme.ThemedTextButton
+import com.example.ui.theme.ThemedTextField
 import com.example.ui.theme.TitleBarBackground
+import com.example.ui.theme.TitleBarIconButton
+import com.example.ui.theme.sectionTitleColor
 import com.example.ui.theme.themedCorner
 import com.example.ui.theme.titleBarColors
+import com.example.ui.theme.titleBarTitleStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -148,7 +151,7 @@ fun SettingsScreen(
                 TopAppBar(
                     colors = titleBarColors(),
                     navigationIcon = {
-                        IconButton(
+                        TitleBarIconButton(
                             onClick = onBack,
                             modifier = Modifier.testTag("settings_back_button"),
                         ) {
@@ -161,8 +164,7 @@ fun SettingsScreen(
                     title = {
                         Text(
                             text = stringResource(R.string.settings_title),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.SemiBold,
+                            style = titleBarTitleStyle(MaterialTheme.typography.titleLarge),
                         )
                     },
                 )
@@ -211,6 +213,7 @@ fun SettingsScreen(
                                 text = stringResource(R.string.settings_vm_section_title),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
+                                color = sectionTitleColor,
                             )
                         }
 
@@ -250,7 +253,7 @@ fun SettingsScreen(
                             }
                         }
 
-                        OutlinedButton(
+                        ThemedOutlinedButton(
                             onClick = onOpenVmConnection,
                             shape = themedCorner(12.dp),
                             modifier = Modifier
@@ -268,7 +271,7 @@ fun SettingsScreen(
                         }
                         if (!setupAutofillLink.isNullOrBlank()) {
                             val copiedLinkMsg = stringResource(R.string.settings_vm_copy_setup_link_copied)
-                            OutlinedButton(
+                            ThemedOutlinedButton(
                                 onClick = {
                                     clipboard.setText(AnnotatedString(setupAutofillLink))
                                     scope.launch {
@@ -324,6 +327,7 @@ fun SettingsScreen(
                                 text = stringResource(R.string.settings_debug_section_title),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
+                                color = sectionTitleColor,
                             )
                         }
 
@@ -419,7 +423,7 @@ fun SettingsScreen(
                             }
                         }
 
-                        OutlinedTextField(
+                        ThemedTextField(
                             value = bugNote,
                             onValueChange = { bugNote = it },
                             label = { Text(stringResource(R.string.settings_debug_note_label)) },
@@ -467,7 +471,7 @@ fun SettingsScreen(
                             )
                         }
 
-                        Button(
+                        ThemedButton(
                             onClick = {
                                 scope.launch {
                                     val shot = if (debugSettings.includeScreenshot) {
@@ -507,9 +511,9 @@ fun SettingsScreen(
                             }
                         }
 
-                        OutlinedButton(
+                        ThemedOutlinedButton(
                             onClick = {
-                                if (isExportingZip) return@OutlinedButton
+                                if (isExportingZip) return@ThemedOutlinedButton
                                 scope.launch {
                                     isExportingZip = true
                                     val shot = if (debugSettings.includeScreenshot) {
@@ -646,7 +650,7 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            TextButton(
+                            ThemedTextButton(
                                 onClick = onClearDebugBuffer,
                                 modifier = Modifier.testTag("clear_debug_buffer_button"),
                             ) {
@@ -775,7 +779,7 @@ private fun SettingsSwitchRow(
                 ),
             )
         }
-        Switch(
+        ThemedSwitch(
             checked = checked,
             enabled = enabled,
             onCheckedChange = onCheckedChange,
