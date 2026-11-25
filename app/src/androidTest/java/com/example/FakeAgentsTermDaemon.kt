@@ -166,6 +166,8 @@ class FakeAgentsTermDaemon(
         tabs.firstOrNull { it.id == tabId }?.model
     }
 
+    fun hasTab(tabId: String): Boolean = synchronized(lock) { tabs.any { it.id == tabId } }
+
     fun tabSystemPrompt(tabId: String): String? = synchronized(lock) {
         tabs.firstOrNull { it.id == tabId }?.systemPrompt
     }
