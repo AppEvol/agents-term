@@ -820,23 +820,22 @@ internal fun WorkspaceScaffold(
                         }
                     },
                     title = {
-                        Column(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(
-                                    enabled = activeTab != null,
-                                    onClickLabel = stringResource(R.string.action_toggle_task_summary),
-                                    onClick = onToggleTaskSummary,
-                                )
-                                .padding(horizontal = 2.dp, vertical = 2.dp)
-                                .testTag("top_bar_tab_title"),
-                        ) {
+                        Column {
                             Text(
                                 text = activeTab?.title ?: stringResource(R.string.app_name),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(
+                                        enabled = activeTab != null,
+                                        onClickLabel = stringResource(R.string.action_toggle_task_summary),
+                                        onClick = onToggleTaskSummary,
+                                    )
+                                    .testTag("top_bar_tab_title"),
                             )
                             if (activeTab != null) {
                                 Row(
@@ -866,7 +865,9 @@ internal fun WorkspaceScaffold(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false),
+                                        modifier = Modifier
+                                            .weight(1f, fill = false)
+                                            .clickable(onClick = onToggleTaskSummary),
                                     )
                                     if (activeTabFinished) {
                                         Surface(

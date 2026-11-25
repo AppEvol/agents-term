@@ -222,6 +222,18 @@ class TabSummaryUiTest {
     }
 
     @Test
+    fun topBarDoneBadgeRemainsVisibleWhenTitleIsClickable() {
+        val doneTab = tabA.copy(status = "done")
+        composeRule.setContent {
+            TestWorkspaceHost(tabs = listOf(doneTab), initialSelectedId = doneTab.id)
+        }
+
+        composeRule.onNodeWithTag("topbar_done_badge").assertIsDisplayed()
+        composeRule.onNodeWithTag("top_bar_tab_title").performClick()
+        composeRule.onNodeWithTag("tab_task_summary_card").assertIsDisplayed()
+    }
+
+    @Test
     fun drawerPrefersTaskSummaryOverLastMessagePreview() {
         val legacyWithPreviewOnly = TabRecord(
             id = "tab_c",
