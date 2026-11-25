@@ -209,4 +209,22 @@
     <string name="task_summary_show_less">Show less</string>
     <string name="action_dismiss_task_summary">Dismiss task summary</string>
     <string name="action_toggle_task_summary">Toggle task summary</string>
+    <string name="action_recently_closed_tabs">Recently closed</string>
+    <string name="action_recently_closed_tabs_count">Recently closed (%1$d)</string>
+    <string name="action_revive_tab">Revive</string>
+    <string name="action_undo">Undo</string>
+    <string name="recently_closed_title">Recently Closed Tabs</string>
+    <string name="recently_closed_subtitle">Kept for 24 hours · up to 50 tabs</string>
+    <string name="recently_closed_refresh">Refresh recently closed tabs</string>
+    <string name="recently_closed_search_placeholder">Filter closed tabs…</string>
+    <string name="recently_closed_empty">No recently closed tabs.\nClosed tabs are kept for 24 hours (up to 50 tabs).</string>
+    <string name="recently_closed_no_matches">No closed tabs match \"%1$s\"</string>
+    <string name="recently_closed_limit_reached">%1$d-tab limit reached. Close an open tab to revive one.</string>
+    <string name="recently_closed_time_ago">Closed %1$s</string>
+    <string name="snackbar_tab_closed">Closed \"%1$s\"</string>
+    <plurals name="snackbar_tabs_closed_count">
+        <item quantity="one">Closed %1$d finished tab</item>
+        <item quantity="other">Closed %1$d finished tabs</item>
+    </plurals>
+    <string name="snackbar_tab_revived">Revived \"%1$s\"</string>
 </resources>

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
@@ -71,6 +72,7 @@ fun TabDrawerContent(
     onNewTab: () -> Unit,
     onDeleteTab: (String) -> Unit,
     onCloseFinishedTabs: () -> Unit = {},
+    onOpenRecentlyClosed: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenAppSettings: () -> Unit = {},
     onReconnect: () -> Unit,
@@ -86,6 +88,7 @@ fun TabDrawerContent(
             onNewTab = onNewTab,
             onDeleteTab = onDeleteTab,
             onCloseFinishedTabs = onCloseFinishedTabs,
+            onOpenRecentlyClosed = onOpenRecentlyClosed,
             onOpenSettings = onOpenSettings,
             onOpenAppSettings = onOpenAppSettings,
             onReconnect = onReconnect,
@@ -106,6 +109,7 @@ fun TabSidebarBody(
     onNewTab: () -> Unit,
     onDeleteTab: (String) -> Unit,
     onCloseFinishedTabs: () -> Unit = {},
+    onOpenRecentlyClosed: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenAppSettings: () -> Unit = {},
     onReconnect: () -> Unit,
@@ -317,6 +321,59 @@ fun TabSidebarBody(
 
         Spacer(Modifier.height(8.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(8.dp))
+
+        Surface(
+            shape = themedCorner(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(themedCorner(14.dp))
+                .clickable(onClick = onOpenRecentlyClosed)
+                .testTag("drawer_recently_closed_button"),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.History,
+                    contentDescription = null,
+                    tint = if (state.closedTabs.isNotEmpty()) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(19.dp),
+                )
+                Text(
+                    text = stringResource(R.string.action_recently_closed_tabs),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                if (state.closedTabs.isNotEmpty()) {
+                    Surface(
+                        shape = themedCorner(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Text(
+                            text = state.closedTabs.size.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = MonoFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier
+                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                .testTag("drawer_recently_closed_count"),
+                        )
+                    }
+                }
+            }
+        }
+
         Spacer(Modifier.height(8.dp))
 
         Surface(

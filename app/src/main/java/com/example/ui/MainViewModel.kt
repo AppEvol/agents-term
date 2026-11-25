@@ -115,6 +115,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isRefreshingModels = MutableStateFlow(false)
     val isRefreshingModels: StateFlow<Boolean> = _isRefreshingModels.asStateFlow()
 
+    private val _isRefreshingClosedTabs = MutableStateFlow(false)
+    val isRefreshingClosedTabs: StateFlow<Boolean> = _isRefreshingClosedTabs.asStateFlow()
+
+    private val _revivingTabId = MutableStateFlow<String?>(null)
+    val revivingTabId: StateFlow<String?> = _revivingTabId.asStateFlow()
+
     private var bootstrapJob: Job? = null
 
     private val appVersionLabel =
@@ -659,9 +665,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteTab(tabId: String) {
+    fun deleteTab(
+        tabId: String,
+        onDeleted: ((com.example.data.TabRecord?) -> Unit)? = null,
+    ) {
         viewModelScope.launch {
-            repo.deleteTab(tabId)
+            val res = repo.deleteTab(tabId)
+            res.onSuccess { archived ->
+                onDeleted?.invoke(archived)
+            }
+        }
+    }
+
+    fun refreshClosedTabs() {
+        viewModelScope.launch {
+            _isRefreshingClosedTabs.value = true
+            try {
+                repo.refreshClosedTabs()
+            } finally {
+                _isRefreshingClosedTabs.value = false
+            }
+        }
+    }
+
+    fun reviveClosedTab(
+        tabId: String,
+        onRevived: ((com.example.data.TabRecord) -> Unit)? = null,
+    ) {
+        if (_revivingTabId.value != null) return
+        viewModelScope.launch {
+            _revivingTabId.value = tabId
+            try {
+                val res = repo.reviveClosedTab(tabId)
+                res.onSuccess { revived ->
+                    onRevived?.invoke(revived)
+                }
+            } finally {
+                _revivingTabId.value = null
+            }
         }
     }
 
@@ -678,12 +719,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun closeFinishedTabs() {
+    fun closeFinishedTabs(
+        onClosed: ((List<com.example.data.TabRecord>) -> Unit)? = null,
+    ) {
         val finishedIds = state.value.finishedTabIds.toList()
         if (finishedIds.isEmpty()) return
         viewModelScope.launch {
+            val archived = mutableListOf<com.example.data.TabRecord>()
             for (tabId in finishedIds) {
-                repo.deleteTab(tabId)
+                repo.deleteTab(tabId).onSuccess { closedTab ->
+                    if (closedTab != null) {
+                        archived += closedTab
+                    }
+                }
+            }
+            if (archived.isNotEmpty()) {
+                onClosed?.invoke(archived)
             }
         }
     }

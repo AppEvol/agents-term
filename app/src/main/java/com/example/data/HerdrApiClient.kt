@@ -140,17 +140,34 @@ open class HerdrApiClient(
         return executeJson<SingleTabResponse>(req).tab
     }
 
-    suspend fun deleteTab(config: ConnectionConfig, tabId: String) = withContext(Dispatchers.IO) {
+    open suspend fun deleteTab(config: ConnectionConfig, tabId: String): DeleteTabResponse? {
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs/$tabId")
             .withAuth(config)
             .delete()
             .build()
-        client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) {
-                throw IOException("Failed to delete tab (HTTP ${resp.code})")
-            }
+        val bodyStr = executeRawJson(req)
+        return bodyStr.takeIf { it.isNotBlank() }?.let {
+            runCatching { decodeHerdrJson<DeleteTabResponse>(it) }.getOrNull()
         }
+    }
+
+    open suspend fun listClosedTabs(config: ConnectionConfig): ClosedTabsResponse {
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/tabs/closed")
+            .withAuth(config)
+            .get()
+            .build()
+        return executeJson(req)
+    }
+
+    open suspend fun reviveClosedTab(config: ConnectionConfig, tabId: String): ReviveTabResponse {
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/tabs/closed/$tabId/revive")
+            .withAuth(config)
+            .post("{}".toRequestBody(jsonMediaType))
+            .build()
+        return executeJson(req)
     }
 
     open suspend fun getTabMessages(config: ConnectionConfig, tabId: String): TabMessagesResponse {

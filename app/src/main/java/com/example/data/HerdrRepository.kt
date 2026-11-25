@@ -17,6 +17,8 @@ import okhttp3.WebSocket
 import java.util.concurrent.atomic.AtomicBoolean
 
 const val MAX_OPEN_TABS = 10
+const val MAX_CLOSED_TABS = 50
+const val CLOSED_TAB_RETENTION_MS = 24L * 60L * 60L * 1000L
 
 data class WorkspaceState(
     val config: ConnectionConfig = ConnectionConfig(),
@@ -24,6 +26,7 @@ data class WorkspaceState(
     val connectionError: String? = null,
     val serverInfo: ServerInfo? = null,
     val tabs: List<TabRecord> = emptyList(),
+    val closedTabs: List<TabRecord> = emptyList(),
     val selectedTabId: String? = null,
     val lastCwd: String? = null,
     val messagesByTab: Map<String, List<ChatMessage>> = emptyMap(),
@@ -87,6 +90,7 @@ fun reduceWorkspaceEvent(
                 connectionError = null,
                 serverInfo = event.server ?: state.serverInfo,
                 tabs = incomingTabs,
+                closedTabs = event.closedTabs.orEmpty(),
                 selectedTabId = nextSelected,
             )
         }
@@ -98,8 +102,10 @@ fun reduceWorkspaceEvent(
             } else {
                 state.tabs + tab
             }
+            val nextClosed = event.closedTabs ?: state.closedTabs.filterNot { it.id == tab.id }
             state.copy(
                 tabs = updated,
+                closedTabs = nextClosed,
                 selectedTabId = state.selectedTabId ?: tab.id,
             )
         }
@@ -123,8 +129,12 @@ fun reduceWorkspaceEvent(
             val id = event.tabId ?: return state
             val remaining = state.tabs.filterNot { it.id == id }
             val nextSelected = if (state.selectedTabId == id) remaining.lastOrNull()?.id else state.selectedTabId
+            val nextClosed = event.closedTabs ?: event.closedTab?.let { archived ->
+                (listOf(archived) + state.closedTabs.filterNot { it.id == id }).take(MAX_CLOSED_TABS)
+            } ?: state.closedTabs
             state.copy(
                 tabs = remaining,
+                closedTabs = nextClosed,
                 selectedTabId = nextSelected,
                 messagesByTab = state.messagesByTab - id,
                 reopenedTabIds = state.reopenedTabIds - id,
@@ -286,6 +296,82 @@ suspend fun resolveInitialDirectoryListing(
     }
 
     return Result.success(ResolvedDirectoryListing(listing, fellBackToHome = false))
+}
+
+private fun applyCreatedTab(
+    state: WorkspaceState,
+    tab: TabRecord,
+    resolvedCwd: String?,
+): WorkspaceState = state.copy(
+    tabs = if (state.tabs.any { it.id == tab.id }) state.tabs else state.tabs + tab,
+    selectedTabId = tab.id,
+    lastCwd = resolvedCwd ?: state.lastCwd,
+    messagesByTab = state.messagesByTab + (tab.id to emptyList()),
+)
+
+private fun applyReplacedTab(
+    state: WorkspaceState,
+    tab: TabRecord,
+    updatedLastCwd: String? = null,
+): WorkspaceState = state.copy(
+    tabs = state.tabs.map { if (it.id == tab.id) tab else it },
+    lastCwd = updatedLastCwd ?: state.lastCwd,
+)
+
+private fun applyDeletedTab(
+    state: WorkspaceState,
+    tabId: String,
+    resp: DeleteTabResponse?,
+): WorkspaceState {
+    val remaining = state.tabs.filterNot { it.id == tabId }
+    val nextSelected = if (state.selectedTabId == tabId) remaining.lastOrNull()?.id else state.selectedTabId
+    val nextClosed = resp?.closedTabs ?: resp?.closedTab?.let { archived ->
+        (listOf(archived) + state.closedTabs.filterNot { it.id == tabId }).take(MAX_CLOSED_TABS)
+    } ?: state.closedTabs
+    return state.copy(
+        tabs = remaining,
+        closedTabs = nextClosed,
+        selectedTabId = nextSelected,
+        messagesByTab = state.messagesByTab - tabId,
+        reopenedTabIds = state.reopenedTabIds - tabId,
+    )
+}
+
+private fun applyRevivedTab(
+    state: WorkspaceState,
+    resp: ReviveTabResponse,
+): WorkspaceState {
+    val revived = resp.tab
+    val updatedTabs = if (state.tabs.any { it.id == revived.id }) {
+        state.tabs.map { if (it.id == revived.id) revived else it }
+    } else {
+        state.tabs + revived
+    }
+    return state.copy(
+        tabs = updatedTabs,
+        closedTabs = resp.closedTabs ?: state.closedTabs.filterNot { it.id == revived.id },
+        selectedTabId = revived.id,
+        messagesByTab = state.messagesByTab + (revived.id to resp.messages),
+    )
+}
+
+private fun applyRefreshedAgentModels(
+    state: WorkspaceState,
+    agent: String,
+    resp: AgentModelsResponse,
+): WorkspaceState {
+    val info = state.serverInfo ?: return state
+    val updatedAgents = info.agents.map { existing ->
+        if (existing.type == agent) {
+            existing.copy(
+                defaultModel = resp.defaultModel ?: existing.defaultModel,
+                models = resp.models.ifEmpty { existing.models },
+            )
+        } else {
+            existing
+        }
+    }
+    return state.copy(serverInfo = info.copy(agents = updatedAgents))
 }
 
 class HerdrRepository(
@@ -458,6 +544,7 @@ class HerdrRepository(
                     handleAppStateRequest(envelope, generation)
                     return@openWebSocket
                 }
+                var selectedBefore: String? = null
                 var selectedAfter: String? = null
                 var unreadVisibleTabId: String? = null
                 val applied = synchronized(socketLock) {
@@ -465,6 +552,7 @@ class HerdrRepository(
                         false
                     } else {
                         _state.update { current ->
+                            selectedBefore = current.selectedTabId
                             val next = reduceWorkspaceEvent(current, envelope, preferredTabId = lastSavedTabId)
                             selectedAfter = next.selectedTabId
                             val visibleId = next.activeTab?.takeIf { it.unread }?.id
@@ -484,6 +572,10 @@ class HerdrRepository(
                     // The daemon sends `snapshot` first on every connection, so this is where the
                     // app announces its reporter status (the socket is assigned by then).
                     sendAppHello()
+                    selectedAfter?.let { tabId ->
+                        refreshTabMessages(tabId)
+                    }
+                } else if (applied && envelope.type == "tab_created" && selectedBefore == null) {
                     selectedAfter?.let { tabId ->
                         refreshTabMessages(tabId)
                     }
@@ -643,18 +735,8 @@ class HerdrRepository(
             val tab = api.createTab(cfg, request)
             settings.saveLastTabId(tab.id)
             val resolvedCwd = tab.cwd.trim().takeIf { it.isNotEmpty() }
-            if (resolvedCwd != null) {
-                settings.saveLastCwd(cfg.host, resolvedCwd)
-            }
-            _state.update { cur ->
-                val updated = if (cur.tabs.any { it.id == tab.id }) cur.tabs else cur.tabs + tab
-                cur.copy(
-                    tabs = updated,
-                    selectedTabId = tab.id,
-                    lastCwd = resolvedCwd ?: cur.lastCwd,
-                    messagesByTab = cur.messagesByTab + (tab.id to emptyList()),
-                )
-            }
+            if (resolvedCwd != null) settings.saveLastCwd(cfg.host, resolvedCwd)
+            _state.update { applyCreatedTab(it, tab, resolvedCwd) }
             tab
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to create tab")
@@ -666,18 +748,11 @@ class HerdrRepository(
         return runCatching {
             val tab = api.updateTab(cfg, tabId, request)
             val updatedLastCwd = if (!request.cwd.isNullOrBlank()) {
-                tab.cwd.trim().takeIf { it.isNotEmpty() }?.also {
-                    settings.saveLastCwd(cfg.host, it)
-                }
+                tab.cwd.trim().takeIf { it.isNotEmpty() }?.also { settings.saveLastCwd(cfg.host, it) }
             } else {
                 null
             }
-            _state.update { cur ->
-                cur.copy(
-                    tabs = cur.tabs.map { if (it.id == tab.id) tab else it },
-                    lastCwd = updatedLastCwd ?: cur.lastCwd,
-                )
-            }
+            _state.update { applyReplacedTab(it, tab, updatedLastCwd) }
             tab
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to update tab")
@@ -718,46 +793,53 @@ class HerdrRepository(
         forceRefresh: Boolean = false,
     ): Result<AgentModelsResponse> {
         val cfg = _state.value.config
-        if (!cfg.isValid) {
-            return Result.failure(IllegalStateException("Not connected to a VM daemon"))
-        }
+        if (!cfg.isValid) return Result.failure(IllegalStateException("Not connected to a VM daemon"))
         return runCatching {
             val resp = api.getAgentModels(cfg, agent, refresh = forceRefresh)
-            _state.update { cur ->
-                val info = cur.serverInfo ?: return@update cur
-                val updatedAgents = info.agents.map { existing ->
-                    if (existing.type == agent) {
-                        existing.copy(
-                            defaultModel = resp.defaultModel ?: existing.defaultModel,
-                            models = resp.models.ifEmpty { existing.models },
-                        )
-                    } else {
-                        existing
-                    }
-                }
-                cur.copy(serverInfo = info.copy(agents = updatedAgents))
-            }
+            _state.update { applyRefreshedAgentModels(it, agent, resp) }
             resp
         }
     }
 
-    suspend fun deleteTab(tabId: String): Result<Unit> {
+    suspend fun deleteTab(tabId: String): Result<TabRecord?> {
         val cfg = _state.value.config
         debugRecorder?.record("ui", "delete_tab", "Deleting tab $tabId")
         return runCatching {
-            api.deleteTab(cfg, tabId)
+            val resp = api.deleteTab(cfg, tabId)
+            var nextSelected: String? = null
             _state.update { cur ->
-                val remaining = cur.tabs.filterNot { it.id == tabId }
-                val nextSelected = if (cur.selectedTabId == tabId) remaining.lastOrNull()?.id else cur.selectedTabId
-                settings.saveLastTabId(nextSelected)
-                cur.copy(
-                    tabs = remaining,
-                    selectedTabId = nextSelected,
-                    messagesByTab = cur.messagesByTab - tabId,
-                )
+                applyDeletedTab(cur, tabId, resp).also { nextSelected = it.selectedTabId }
             }
+            settings.saveLastTabId(nextSelected)
+            resp?.closedTab
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to delete tab")
+        }
+    }
+
+    suspend fun refreshClosedTabs(): Result<List<TabRecord>> {
+        val cfg = _state.value.config
+        if (!cfg.isValid) return Result.failure(IllegalStateException("Not connected to a VM daemon"))
+        return runCatching {
+            val resp = api.listClosedTabs(cfg)
+            _state.update { it.copy(closedTabs = resp.closedTabs) }
+            resp.closedTabs
+        }
+    }
+
+    suspend fun reviveClosedTab(tabId: String): Result<TabRecord> = createTabMutex.withLock {
+        val workspace = _state.value
+        val cfg = workspace.config
+        debugRecorder?.record("ui", "revive_closed_tab", "Reviving closed tab $tabId")
+        runCatching {
+            check(workspace.canCreateTab) { "The limit is $MAX_OPEN_TABS open tabs. Close a tab to make room." }
+            val resp = api.reviveClosedTab(cfg, tabId)
+            settings.saveLastTabId(resp.tab.id)
+            _state.update { applyRevivedTab(it, resp) }
+            resp.tab
+        }.onFailure { err ->
+            showBanner(err.message ?: "Failed to revive tab")
+            runCatching { refreshClosedTabs() }
         }
     }
 
@@ -775,11 +857,7 @@ class HerdrRepository(
         )
         return runCatching {
             val resp = api.sendMessage(cfg, tabId, text, overridePermissionMode)
-            resp.tab?.let { updated ->
-                _state.update { cur ->
-                    cur.copy(tabs = cur.tabs.map { if (it.id == updated.id) updated else it })
-                }
-            }
+            resp.tab?.let { updated -> _state.update { applyReplacedTab(it, updated) } }
             Unit
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to send message")
@@ -799,18 +877,13 @@ class HerdrRepository(
             "Interrupting tab=$tabId processQueue=$processQueue hasText=${!text.isNullOrBlank()}",
         )
         runCatching {
-            val updated = api.interruptTab(
+            api.interruptTab(
                 config = cfg,
                 tabId = tabId,
                 processQueue = processQueue,
                 text = text,
                 overridePermissionMode = overridePermissionMode,
-            )
-            if (updated != null) {
-                _state.update { cur ->
-                    cur.copy(tabs = cur.tabs.map { if (it.id == updated.id) updated else it })
-                }
-            }
+            )?.let { updated -> _state.update { applyReplacedTab(it, updated) } }
         }.onFailure { err -> showBanner(err.message ?: "Failed to interrupt") }
     }
 
@@ -818,11 +891,8 @@ class HerdrRepository(
         val cfg = _state.value.config
         debugRecorder?.record("ui", "remove_queued_message", "Removing queued=$queuedId from tab=$tabId")
         runCatching {
-            val updated = api.removeQueuedMessage(cfg, tabId, queuedId)
-            if (updated != null) {
-                _state.update { cur ->
-                    cur.copy(tabs = cur.tabs.map { if (it.id == updated.id) updated else it })
-                }
+            api.removeQueuedMessage(cfg, tabId, queuedId)?.let { updated ->
+                _state.update { applyReplacedTab(it, updated) }
             }
         }.onFailure { err -> showBanner(err.message ?: "Failed to remove queued message") }
     }

@@ -267,6 +267,7 @@ data class TabRecord(
     val queuedMessages: List<QueuedMessage> = emptyList(),
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
+    val closedAt: Long? = null,
 ) {
     val folderName: String
         get() = cwd.trimEnd('/').substringAfterLast('/').ifBlank { cwd }
@@ -336,7 +337,41 @@ data class ChatMessage(
 data class TabsResponse(
     val tabs: List<TabRecord> = emptyList(),
     val activeTabId: String? = null,
+    val closedTabs: List<TabRecord> = emptyList(),
 )
+
+@JsonClass(generateAdapter = true)
+data class ClosedTabsResponse(
+    val closedTabs: List<TabRecord> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class DeleteTabResponse(
+    val ok: Boolean = true,
+    val closedTab: TabRecord? = null,
+    val closedTabs: List<TabRecord>? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ReviveTabResponse(
+    val tab: TabRecord,
+    val messages: List<ChatMessage> = emptyList(),
+    val closedTabs: List<TabRecord>? = null,
+)
+
+fun formatRelativeClosedTime(
+    closedAtMs: Long?,
+    nowMs: Long = System.currentTimeMillis(),
+): String {
+    if (closedAtMs == null || closedAtMs <= 0L) return "recently"
+    val elapsedMs = (nowMs - closedAtMs).coerceAtLeast(0L)
+    return when {
+        elapsedMs < 60_000L -> "just now"
+        elapsedMs < 3_600_000L -> "${elapsedMs / 60_000L}m ago"
+        elapsedMs < 86_400_000L -> "${elapsedMs / 3_600_000L}h ago"
+        else -> "${elapsedMs / 86_400_000L}d ago"
+    }
+}
 
 @JsonClass(generateAdapter = true)
 data class SingleTabResponse(
@@ -481,8 +516,10 @@ data class WsServerEnvelope(
     val type: String,
     val server: ServerInfo? = null,
     val tabs: List<TabRecord>? = null,
+    val closedTabs: List<TabRecord>? = null,
     val activeTabId: String? = null,
     val tab: TabRecord? = null,
+    val closedTab: TabRecord? = null,
     val tabId: String? = null,
     val message: ChatMessage? = null,
     val messageId: String? = null,
