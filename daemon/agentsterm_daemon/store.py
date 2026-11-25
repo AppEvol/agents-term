@@ -9,7 +9,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from .config import ensure_config_dir, home_dir, state_path
-from .util import now_ms, rand_hex
+from .util import derive_task_summary_from_messages, now_ms, rand_hex
 
 SAVE_DEBOUNCE_S = 0.25
 
@@ -97,6 +97,14 @@ class StateStore:
                         for m in msgs
                         if isinstance(m, dict)
                     ]
+            for tab in self._tabs:
+                existing_summary = _strip_or_none(tab.get("taskSummary"))
+                if existing_summary is not None:
+                    tab["taskSummary"] = existing_summary
+                else:
+                    tab["taskSummary"] = derive_task_summary_from_messages(
+                        self._messages_by_tab.get(tab.get("id") or "", [])
+                    )
         except (OSError, ValueError, AttributeError, KeyError, TypeError):
             self._tabs = []
             self._active_tab_id = None
@@ -173,6 +181,7 @@ class StateStore:
             "sessionRef": None,
             "unread": False,
             "lastMessagePreview": None,
+            "taskSummary": None,
             "queuedMessages": [],
             "createdAt": now,
             "updatedAt": now,

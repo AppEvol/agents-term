@@ -47,8 +47,11 @@ import com.example.data.resolveAgentModelCatalog
 import com.example.data.resolveDefaultSystemPrompt
 import com.example.data.resolveModelIdFromQuery
 import com.example.data.resolvePreferredNewTabCwd
+import com.example.data.resolveTabLatestDetail
+import com.example.data.resolveTabTaskSummary
 import com.example.data.sanitizeDebugText
 import com.example.data.summarizeCommandForDisplay
+import com.example.data.summarizeTaskPromptForDisplay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -902,5 +905,74 @@ class ModelsAndStateTest {
             WsServerEnvelope(type = "tab_updated", tab = withQueue),
         )
         assertEquals(listOf("Second prompt"), afterUpdate.activeTab?.queuedMessages?.map { it.text })
+    }
+
+    @Test
+    fun taskSummarySerializationAndFallbackResolutionWork() {
+        // Legacy JSON without taskSummary decodes with null
+        val legacyTab = decodeHerdrJson<TabRecord>(
+            """{"id":"tab_old","title":"Agy","agent":"agy","cwd":"/home/ned","lastMessagePreview":"Done!"}""",
+        )
+        assertNull(legacyTab.taskSummary)
+
+        // Newer daemon JSON with taskSummary decodes cleanly
+        val modernTab = decodeHerdrJson<TabRecord>(
+            """
+            {
+              "id": "tab_new",
+              "title": "Agy",
+              "agent": "agy",
+              "cwd": "/home/ned",
+              "status": "idle",
+              "lastMessagePreview": "All tests pass.",
+              "taskSummary": "Fix daemon reconnect race condition"
+            }
+            """.trimIndent(),
+        )
+        assertEquals("Fix daemon reconnect race condition", modernTab.taskSummary)
+        assertEquals("Fix daemon reconnect race condition", resolveTabTaskSummary(modernTab, emptyList()))
+        assertEquals("All tests pass.", resolveTabLatestDetail(modernTab, modernTab.taskSummary))
+        // Avoid repeating identical text in latest detail
+        assertNull(
+            resolveTabLatestDetail(
+                modernTab.copy(lastMessagePreview = "Fix daemon reconnect race condition"),
+                modernTab.taskSummary,
+            ),
+        )
+
+        // Older daemon fallback derives summary from first non-/model user message
+        val messages = listOf(
+            ChatMessage(id = "m1", tabId = "tab_old", role = "user", text = "/model opus"),
+            ChatMessage(id = "m2", tabId = "tab_old", role = "assistant", text = "Switched"),
+            ChatMessage(
+                id = "m3",
+                tabId = "tab_old",
+                role = "user",
+                text = "## Debug `ws` drop\nCheck [logs](https://example.com)",
+            ),
+        )
+        assertEquals("Debug ws drop Check logs", resolveTabTaskSummary(legacyTab, messages))
+        assertEquals("Done!", resolveTabTaskSummary(legacyTab, emptyList()))
+        assertNull(resolveTabTaskSummary(legacyTab.copy(lastMessagePreview = null), emptyList()))
+
+        // Working / blocked / error latest detail uses statusDetail or clear fallback
+        assertEquals(
+            "Running pytest",
+            resolveTabLatestDetail(modernTab.copy(status = "working", statusDetail = "Running pytest"), modernTab.taskSummary),
+        )
+        assertEquals(
+            "Waiting for approval",
+            resolveTabLatestDetail(modernTab.copy(status = "blocked", statusDetail = null), modernTab.taskSummary),
+        )
+        assertEquals(
+            "Last turn failed",
+            resolveTabLatestDetail(modernTab.copy(status = "error", statusDetail = null), modernTab.taskSummary),
+        )
+
+        // Code-block stripping and clean truncation
+        assertEquals(
+            "Investigate crash in MainActivity",
+            summarizeTaskPromptForDisplay("Investigate crash in `MainActivity`\n```kotlin\nthrow Error()\n```"),
+        )
     }
 }

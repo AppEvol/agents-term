@@ -186,4 +186,11 @@
     <string name="action_close_finished_tab">Close finished tab</string>
     <string name="action_mark_task_done">Mark task done</string>
     <string name="action_mark_tab_active">Mark as active</string>
+    <string name="task_summary_label">Task summary</string>
+    <string name="task_summary_empty">No task yet — send a prompt to summarize this tab.</string>
+    <string name="task_summary_latest_prefix">Latest: %1$s</string>
+    <string name="task_summary_show_more">Show more</string>
+    <string name="task_summary_show_less">Show less</string>
+    <string name="action_dismiss_task_summary">Dismiss task summary</string>
+    <string name="action_toggle_task_summary">Toggle task summary</string>
 </resources>

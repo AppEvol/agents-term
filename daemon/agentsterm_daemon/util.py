@@ -11,9 +11,14 @@ import math
 import re
 import secrets
 import time
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 _WS_RE = re.compile(r"\s+")
+_CODE_FENCE_RE = re.compile(r"```[^\n]*\n?(.*?)```", re.S)
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_MARKDOWN_LINE_PREFIX_RE = re.compile(r"^\s*(?:#{1,6}\s+|>\s+|[-*+]\s+)")
+_TASK_SUMMARY_WRAPPER_RE = re.compile(r"</?tab_task_summary>", re.I)
+_MODEL_SLASH_RE = re.compile(r"^/model(?:\s|$)", re.I)
 _LEADING_CD_RE = re.compile(
     r"""^\s*cd(?:\s+(?:-[LP]|--))?\s+(?:"[^"]*"|'[^']*'|(?:\\.|[^\s;&|\n])+)\s*(?:&&|;|\r?\n)\s*"""
 )
@@ -102,6 +107,45 @@ def json_pretty(value: Any) -> str:
 def truncate(s: str, max_len: int = 180) -> str:
     single = _WS_RE.sub(" ", s).strip()
     return single[: max_len - 1] + "…" if len(single) > max_len else single
+
+
+def summarize_task_prompt(raw: str, max_len: int = 160) -> Optional[str]:
+    """Normalize a task summary or first user prompt into a clean single-line summary."""
+    if not isinstance(raw, str):
+        return None
+    cleaned = _TASK_SUMMARY_WRAPPER_RE.sub("", raw).strip()
+    if not cleaned:
+        return None
+    without_fences = _CODE_FENCE_RE.sub(" ", cleaned).strip()
+    source = without_fences if without_fences else _CODE_FENCE_RE.sub(r"\1", cleaned)
+    source = _MARKDOWN_LINK_RE.sub(r"\1", source).replace("`", "")
+    lines = [_MARKDOWN_LINE_PREFIX_RE.sub("", line).strip() for line in source.splitlines()]
+    single = _WS_RE.sub(" ", " ".join(line for line in lines if line)).strip()
+    if not single:
+        return None
+    if len(single) <= max_len:
+        return single
+    cut = single[: max_len - 1].rstrip()
+    space_idx = cut.rfind(" ")
+    if space_idx >= int((max_len - 1) * 0.65):
+        cut = cut[:space_idx].rstrip(" ,;:-")
+    return cut + "…"
+
+
+def derive_task_summary_from_messages(messages: List[Dict[str, Any]], max_len: int = 160) -> Optional[str]:
+    """Derive a fallback task summary from the first substantive user message."""
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        text = msg.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if _MODEL_SLASH_RE.match(text.strip()):
+            continue
+        summary = summarize_task_prompt(text, max_len=max_len)
+        if summary:
+            return summary
+    return None
 
 
 def summarize_command(command: str) -> str:
