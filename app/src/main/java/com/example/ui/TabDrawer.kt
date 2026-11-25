@@ -132,7 +132,7 @@ fun TabSidebarBody(
                     modifier = Modifier
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(connColor)
+                        .background(connColor),
                 )
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -385,11 +385,9 @@ private fun DrawerTabRow(
                         .testTag("drawer_tab_done_icon_${tab.id}"),
                 )
             } else {
-                Box(
-                    modifier = Modifier
-                        .size(9.dp)
-                        .clip(CircleShape)
-                        .background(statusColor(tab.status))
+                TabStatusDot(
+                    status = tab.status,
+                    dotSize = 9.dp,
                 )
             }
             Spacer(Modifier.width(10.dp))
@@ -492,7 +490,7 @@ private fun DrawerTabRow(
                 Icon(
                     imageVector = if (isFinished) Icons.Rounded.Close else Icons.Rounded.DeleteOutline,
                     contentDescription = stringResource(
-                        if (isFinished) R.string.action_close_finished_tab else R.string.action_close_tab
+                        if (isFinished) R.string.action_close_finished_tab else R.string.action_close_tab,
                     ),
                     modifier = Modifier.size(18.dp),
                     tint = if (isFinished) HerdrEmerald else MaterialTheme.colorScheme.onSurfaceVariant,

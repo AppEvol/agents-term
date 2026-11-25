@@ -12,8 +12,9 @@ import kotlinx.coroutines.CancellationException
  *  - app -> daemon: {"type":"app_state_response","requestId":"…","ok":true,"result":{…}}
  *                or {"type":"app_state_response","requestId":"…","ok":false,"error":"…"}
  *
- * Every command is read-only, gated on the user's "Allow VM agents to inspect the app" setting, and
- * every text it returns goes through [sanitizeDebugText].
+ * Inspection commands are read-only and gated on the user's "Allow VM agents to inspect the app"
+ * setting. Control commands ([AppUiController.CONTROL_COMMANDS]: tap, swipe, type…) also need
+ * "Allow VM agents to control the app". Every text returned goes through [sanitizeDebugText].
  */
 interface AppStateRequestHandler {
     /** JSON text of the `app_hello` frame announcing the reporter's current status. */
@@ -52,7 +53,13 @@ class AppStateReporter(
     private val appVersion: String,
     private val device: String,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
+    /** Reads and drives the on-screen UI; null leaves the UI commands out. */
+    private val ui: AppUiController? = null,
+    private val isControlEnabled: () -> Boolean = { false },
 ) : AppStateRequestHandler {
+
+    private val commands: List<String> =
+        if (ui == null) COMMANDS else COMMANDS + AppUiController.READ_COMMANDS + AppUiController.CONTROL_COMMANDS
 
     override fun helloJson(): String = toJsonText(
         mapOf(
@@ -61,9 +68,12 @@ class AppStateReporter(
                 "enabled" to isEnabled(),
                 "appVersion" to appVersion,
                 "device" to device,
-                "commands" to COMMANDS,
+                "commands" to commands,
+                // Older daemons ignore these two fields.
+                "controlEnabled" to (ui != null && isEnabled() && isControlEnabled()),
+                "controlCommands" to if (ui == null) emptyList() else AppUiController.CONTROL_COMMANDS,
             ),
-        )
+        ),
     )
 
     override suspend fun handleRequest(requestId: String, command: String, args: Map<String, Any?>): String {
@@ -71,7 +81,12 @@ class AppStateReporter(
         val outcome: Result<Any?> = try {
             if (!isEnabled()) {
                 throw AppStateCommandException(
-                    "Remote inspection is disabled in the app (Settings > Debug sharing)."
+                    "Remote inspection is disabled in the app (Settings > Debug sharing).",
+                )
+            }
+            if (ui != null && command in AppUiController.CONTROL_COMMANDS && !isControlEnabled()) {
+                throw AppStateCommandException(
+                    "Remote control is disabled in the app (Settings > Debug sharing > Allow VM agents to control the app).",
                 )
             }
             Result.success(dispatch(command, args))
@@ -103,7 +118,7 @@ class AppStateReporter(
                         "requestId" to requestId,
                         "ok" to true,
                         "result" to result,
-                    )
+                    ),
                 )
             },
             onFailure = { err ->
@@ -113,7 +128,7 @@ class AppStateReporter(
                         "requestId" to requestId,
                         "ok" to false,
                         "error" to sanitizeDebugText(err.message ?: "Unknown error"),
-                    )
+                    ),
                 )
             },
         )
@@ -121,6 +136,7 @@ class AppStateReporter(
 
     private suspend fun dispatch(command: String, args: Map<String, Any?>): Any? = when (command) {
         "ping" -> mapOf("pong" to true, "ts" to clockMs(), "appVersion" to appVersion)
+
         "state" -> mapOf(
             "capturedAt" to clockMs(),
             "appVersion" to appVersion,
@@ -128,23 +144,33 @@ class AppStateReporter(
             "ui" to sources.uiState(),
             "workspace" to RawJson(sources.workspaceJson()),
         )
+
         "logs" -> logs(args)
+
         "logcat" -> {
             val lines = args.intArg("lines", default = 400).coerceIn(50, 2000)
             mapOf("lines" to lines, "text" to sources.logcat(lines))
         }
+
         "crash" -> {
             val text = sources.lastCrash()?.let { sanitizeDebugText(it) }
             mapOf("hasCrash" to (text != null), "text" to text)
         }
+
         "screenshot" -> mapOf("capturedAt" to clockMs(), "pngBase64" to sources.screenshotPngBase64())
+
         "dump" -> sources.uploadDump(
             note = args["note"] as? String,
             includeScreenshot = args["includeScreenshot"] as? Boolean ?: true,
         )
-        else -> throw AppStateCommandException(
-            "Unknown command '$command'. Supported: ${COMMANDS.joinToString(", ")}"
-        )
+
+        else -> if (ui != null && command in commands) {
+            ui.handle(command, args)
+        } else {
+            throw AppStateCommandException(
+                "Unknown command '$command'. Supported: ${commands.joinToString(", ")}",
+            )
+        }
     }
 
     private fun logs(args: Map<String, Any?>): Map<String, Any?> {
@@ -173,12 +199,14 @@ class AppStateReporter(
         )
     }
 
-    private fun Map<String, Any?>.intArg(name: String, default: Int): Int =
-        (this[name] as? Number)?.toInt() ?: default
+    private fun Map<String, Any?>.intArg(name: String, default: Int): Int = (this[name] as? Number)?.toInt() ?: default
 
     companion object {
+        /** Inspection commands; the UI commands of [AppUiController] are added when it is present. */
         val COMMANDS = listOf("ping", "state", "logs", "logcat", "crash", "screenshot", "dump")
-        private val UNRECORDED_COMMANDS = setOf("ping", "logs")
+
+        // `ui` is polled too (app_state_cli wait).
+        private val UNRECORDED_COMMANDS = setOf("ping", "logs", "ui")
     }
 }
 
@@ -199,9 +227,13 @@ fun toJsonText(value: Any?): String = buildString { appendJson(value) }
 private fun StringBuilder.appendJson(value: Any?) {
     when (value) {
         null -> append("null")
+
         is RawJson -> append(value.json)
+
         is String -> append(jsonStringAdapter.toJson(value))
+
         is Boolean, is Int, is Long, is Short, is Byte -> append(value.toString())
+
         is Double, is Float -> {
             val d = value.toDouble()
             when {
@@ -210,7 +242,9 @@ private fun StringBuilder.appendJson(value: Any?) {
                 else -> append(d.toString())
             }
         }
+
         is Number -> append(value.toString())
+
         is Map<*, *> -> {
             append('{')
             var first = true
@@ -223,6 +257,7 @@ private fun StringBuilder.appendJson(value: Any?) {
             }
             append('}')
         }
+
         is Iterable<*> -> {
             append('[')
             var first = true
@@ -233,8 +268,11 @@ private fun StringBuilder.appendJson(value: Any?) {
             }
             append(']')
         }
+
         is Array<*> -> appendJson(value.asList())
+
         is Enum<*> -> append(jsonStringAdapter.toJson(value.name))
+
         else -> append(jsonStringAdapter.toJson(value.toString()))
     }
 }

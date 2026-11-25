@@ -134,17 +134,20 @@ fun fallbackModelsForAgent(agentType: String): List<AgentModelOption> = when (ag
         AgentModelOption("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
         AgentModelOption("claude-sonnet-5-5-medium", "Claude Sonnet 5.5 (Medium)"),
     )
+
     "claude" -> listOf(
         AgentModelOption("opus", "Opus", "Most capable Claude model alias"),
         AgentModelOption("sonnet", "Sonnet", "Balanced Claude model alias"),
         AgentModelOption("haiku", "Haiku", "Fastest Claude model alias"),
     )
+
     "codex" -> listOf(
         AgentModelOption("gpt-6.2-sol", "GPT-6.2-Sol"),
         AgentModelOption("gpt-6.2-astra", "GPT-6.2-Astra"),
         AgentModelOption("gpt-6.1-terra", "GPT-6.1 Terra"),
         AgentModelOption("gpt-6-astra", "GPT-6-Astra"),
     )
+
     else -> emptyList()
 }
 
@@ -227,6 +230,14 @@ data class AgentSessionRef(
 )
 
 @JsonClass(generateAdapter = true)
+data class QueuedMessage(
+    val id: String,
+    val text: String,
+    val overridePermissionMode: String? = null,
+    val createdAt: Long = 0L,
+)
+
+@JsonClass(generateAdapter = true)
 data class TabRecord(
     val id: String,
     val title: String,
@@ -240,6 +251,7 @@ data class TabRecord(
     val sessionRef: AgentSessionRef? = null,
     val unread: Boolean = false,
     val lastMessagePreview: String? = null,
+    val queuedMessages: List<QueuedMessage> = emptyList(),
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
 ) {
@@ -350,12 +362,10 @@ fun resolvePreferredNewTabCwd(
     lastCwd: String?,
     activeTabCwd: String?,
     homeCwd: String?,
-): String {
-    return lastCwd?.trim()?.takeIf { it.isNotEmpty() }
-        ?: activeTabCwd?.trim()?.takeIf { it.isNotEmpty() }
-        ?: homeCwd?.trim()?.takeIf { it.isNotEmpty() }
-        ?: "/home"
-}
+): String = lastCwd?.trim()?.takeIf { it.isNotEmpty() }
+    ?: activeTabCwd?.trim()?.takeIf { it.isNotEmpty() }
+    ?: homeCwd?.trim()?.takeIf { it.isNotEmpty() }
+    ?: "/home"
 
 @JsonClass(generateAdapter = true)
 data class CreateTabRequest(
@@ -367,18 +377,18 @@ data class CreateTabRequest(
     val systemPrompt: String? = null,
 )
 
-private val FENCED_CODE_BLOCK_REGEX = Regex("```[\\s\\S]*?```")
-private val NEGATED_CLOSE_TAB_REGEX = Regex(
+private val fencedCodeBlockRegex = Regex("```[\\s\\S]*?```")
+private val negatedCloseTabRegex = Regex(
     "\\b(?:do\\s+not|don't|cannot|can't|avoid|never|wait\\s+before)\\b[^\\n.!?]{0,40}\\bclose\\s+(?:this|the)\\s+tab\\b",
     RegexOption.IGNORE_CASE,
 )
-private val CLOSE_TAB_CUE_REGEX = Regex(
+private val closeTabCueRegex = Regex(
     "(?:\\b(?:you\\s+(?:can|may)|feel\\s+free\\s+to|(?:it(?:'s|\\s+is)\\s+)?safe\\s+to|safely|good\\s+to|ready\\s+to)\\s+" +
         "(?:now\\s+)?(?:safely\\s+)?close\\s+(?:this|the)\\s+tab\\b|" +
         "\\bclose\\s+(?:this|the)\\s+tab\\s+(?:now|whenever|if\\s+you(?:'d|\\s+would)?\\s+like)\\b)",
     RegexOption.IGNORE_CASE,
 )
-private val PARAGRAPH_SPLIT_REGEX = Regex("\\n\\s*\\n")
+private val paragraphSplitRegex = Regex("\\n\\s*\\n")
 
 /**
  * Returns true when an assistant message closes by telling the user their task is finished and they
@@ -387,12 +397,12 @@ private val PARAGRAPH_SPLIT_REGEX = Regex("\\n\\s*\\n")
  */
 fun isTaskFinishedText(text: String?): Boolean {
     if (text.isNullOrBlank()) return false
-    val withoutCode = FENCED_CODE_BLOCK_REGEX.replace(text, "").trim()
+    val withoutCode = fencedCodeBlockRegex.replace(text, "").trim()
     if (withoutCode.isEmpty()) return false
-    val paragraphs = PARAGRAPH_SPLIT_REGEX.split(withoutCode).map { it.trim() }.filter { it.isNotEmpty() }
+    val paragraphs = paragraphSplitRegex.split(withoutCode).map { it.trim() }.filter { it.isNotEmpty() }
     val tail = (paragraphs.lastOrNull() ?: withoutCode).takeLast(320)
-    if (NEGATED_CLOSE_TAB_REGEX.containsMatchIn(tail)) return false
-    return CLOSE_TAB_CUE_REGEX.containsMatchIn(tail)
+    if (negatedCloseTabRegex.containsMatchIn(tail)) return false
+    return closeTabCueRegex.containsMatchIn(tail)
 }
 
 fun isTabTaskFinished(
@@ -428,8 +438,24 @@ data class SendMessageRequest(
 
 @JsonClass(generateAdapter = true)
 data class SendMessageResponse(
-    val userMessage: ChatMessage,
-    val assistantMessage: ChatMessage,
+    val userMessage: ChatMessage? = null,
+    val assistantMessage: ChatMessage? = null,
+    val queued: Boolean = false,
+    val queuedMessage: QueuedMessage? = null,
+    val tab: TabRecord? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class InterruptTabRequest(
+    val processQueue: Boolean = false,
+    val text: String? = null,
+    val overridePermissionMode: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class QueueActionResponse(
+    val ok: Boolean = true,
+    val tab: TabRecord? = null,
 )
 
 @JsonClass(generateAdapter = true)

@@ -19,9 +19,9 @@ import java.security.MessageDigest
 import java.util.Properties
 
 /**
- * Connects to a Tailscale VM over SSH and invokes `agy --dangerously-skip-permissions`
- * so the VM's Antigravity agent bootstraps the AgentsTerm daemon environment autonomously,
- * streaming live tool and response progress back to the mobile UI.
+ * Connects to a Tailscale VM over SSH to install or update the AgentsTerm daemon via
+ * `daemon/install.sh` (falling back to `agy --dangerously-skip-permissions` to repair missing
+ * prerequisites if needed), streaming live progress back to the mobile UI.
  */
 class SshBootstrapClient(
     private val settings: SettingsStore,
@@ -64,11 +64,13 @@ class SshBootstrapClient(
                             onHostFingerprint(fp)
                             HostKeyRepository.OK
                         }
+
                         stored == fp -> {
                             onLog("Verified VM host key: $fp")
                             onHostFingerprint(fp)
                             HostKeyRepository.OK
                         }
+
                         else -> {
                             hostKeyMismatch = HostKeyMismatchException(
                                 host = host,
@@ -92,9 +94,7 @@ class SshBootstrapClient(
 
         if (config.authMethod == SshAuthMethod.PRIVATE_KEY) {
             val keyText = config.privateKey.trim()
-            if (keyText.isBlank()) {
-                throw IllegalArgumentException("Paste an OpenSSH/PEM private key or switch to Tailscale SSH")
-            }
+            require(keyText.isNotBlank()) { "Paste an OpenSSH/PEM private key or switch to Tailscale SSH" }
             val passphraseBytes = config.passphrase.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8)
             jsch.addIdentity("herdr-vm-key", keyText.toByteArray(Charsets.UTF_8), null, passphraseBytes)
         }
@@ -249,7 +249,7 @@ class SshBootstrapClient(
                 }.orEmpty()
                 throw IOException(
                     "Bootstrap exited with code $exitCode: the latest daemon could not be verified. " +
-                        "Check the live output above for details.$debugHint"
+                        "Check the live output above for details.$debugHint",
                 )
             }
 
@@ -266,10 +266,11 @@ class SshBootstrapClient(
             if (exitCode == -1) {
                 val debugHint = agyConversationId?.let {
                     " VM session log: ~/.gemini/antigravity-cli/brain/$it/"
-                } ?: " Check ~/.gemini/antigravity-cli/log/ on the VM."
+                }.orEmpty()
+                val remoteProcess = if (agyConversationId != null) "remote repair agent" else "remote setup"
                 throw IOException(
-                    "SSH connection dropped before bootstrap finished (remote agy may still be running on $host). " +
-                        "Keep the screen awake and tap Retry to connect once the daemon is up.$debugHint"
+                    "SSH connection dropped before bootstrap finished ($remoteProcess may still be running on $host). " +
+                        "Keep the screen awake and tap Retry to connect once the daemon is up.$debugHint",
                 )
             }
 

@@ -24,6 +24,31 @@ def _strip_or_none(value: Any) -> Optional[str]:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _normalize_queued_messages(raw: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        qid = _strip_or_none(item.get("id"))
+        text = _strip_or_none(item.get("text"))
+        if not qid or not text:
+            continue
+        created = item.get("createdAt")
+        out.append(
+            {
+                "id": qid,
+                "text": text,
+                "overridePermissionMode": _strip_or_none(item.get("overridePermissionMode")),
+                "createdAt": int(created)
+                if isinstance(created, (int, float)) and not isinstance(created, bool)
+                else now_ms(),
+            }
+        )
+    return out
+
+
 class StateStore:
     def __init__(self) -> None:
         self._tabs: List[Dict[str, Any]] = []
@@ -45,7 +70,15 @@ class StateStore:
             now = now_ms()
             tabs = raw.get("tabs")
             self._tabs = [
-                {**t, "status": "idle", "statusDetail": None, "updatedAt": now} if t.get("status") == "working" else t
+                {
+                    **t,
+                    "queuedMessages": _normalize_queued_messages(t.get("queuedMessages")),
+                    **(
+                        {"status": "idle", "statusDetail": None, "updatedAt": now}
+                        if t.get("status") == "working"
+                        else {}
+                    ),
+                }
                 for t in (tabs if isinstance(tabs, list) else [])
                 if isinstance(t, dict)
             ]
@@ -140,6 +173,7 @@ class StateStore:
             "sessionRef": None,
             "unread": False,
             "lastMessagePreview": None,
+            "queuedMessages": [],
             "createdAt": now,
             "updatedAt": now,
         }
@@ -157,6 +191,39 @@ class StateStore:
                 self.schedule_save()
                 return updated
         return None
+
+    def enqueue_message(
+        self, tab_id: str, text: str, override_permission_mode: Optional[str] = None
+    ) -> Optional[tuple[Dict[str, Any], Dict[str, Any]]]:
+        tab = self.get_tab(tab_id)
+        if not tab:
+            return None
+        item = {
+            "id": f"q_{rand_hex(6)}",
+            "text": text,
+            "overridePermissionMode": _strip_or_none(override_permission_mode),
+            "createdAt": now_ms(),
+        }
+        queued = [*list(tab.get("queuedMessages") or []), item]
+        updated = self.update_tab(tab_id, {"queuedMessages": queued})
+        return (updated, item) if updated is not None else None
+
+    def remove_queued_message(self, tab_id: str, queued_id: str) -> Optional[Dict[str, Any]]:
+        tab = self.get_tab(tab_id)
+        if not tab:
+            return None
+        queued = [m for m in (tab.get("queuedMessages") or []) if m.get("id") != queued_id]
+        return self.update_tab(tab_id, {"queuedMessages": queued})
+
+    def pop_queued_messages(self, tab_id: str) -> Optional[tuple[Dict[str, Any], List[Dict[str, Any]]]]:
+        tab = self.get_tab(tab_id)
+        if not tab:
+            return None
+        popped = list(tab.get("queuedMessages") or [])
+        if not popped:
+            return tab, []
+        updated = self.update_tab(tab_id, {"queuedMessages": []})
+        return (updated, popped) if updated is not None else None
 
     def delete_tab(self, tab_id: str) -> bool:
         before = len(self._tabs)

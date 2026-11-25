@@ -219,10 +219,8 @@ suspend fun resolveInitialDirectoryListing(
         return result
     }
 
-    suspend fun loadHomeFallback(): Result<ResolvedDirectoryListing> {
-        return loadWithRetry(normalizedHome).map { homeListing ->
-            ResolvedDirectoryListing(listing = homeListing, fellBackToHome = true)
-        }
+    suspend fun loadHomeFallback(): Result<ResolvedDirectoryListing> = loadWithRetry(normalizedHome).map { homeListing ->
+        ResolvedDirectoryListing(listing = homeListing, fellBackToHome = true)
     }
 
     val initialResult = loadWithRetry(candidate)
@@ -288,7 +286,7 @@ class HerdrRepository(
                 config = cfg,
                 lastCwd = settings.loadLastCwd(cfg.host),
             )
-        }
+        },
     )
     val state: StateFlow<WorkspaceState> = _state.asStateFlow()
 
@@ -317,28 +315,26 @@ class HerdrRepository(
         }
     }
 
-    suspend fun testAndConnect(config: ConnectionConfig): Result<ServerInfo> {
-        return runCatching {
-            val info = api.getInfo(config)
-            settings.saveConnection(config)
-            val savedLastCwd = settings.loadLastCwd(config.host)
-            _state.update {
-                it.copy(
-                    config = config,
-                    serverInfo = info,
-                    lastCwd = savedLastCwd,
-                    connectionError = null,
-                )
-            }
-            connect(config)
-            info
-        }.onFailure { err ->
-            _state.update {
-                it.copy(
-                    connectionState = ConnectionState.ERROR,
-                    connectionError = err.message ?: "Unable to reach VM",
-                )
-            }
+    suspend fun testAndConnect(config: ConnectionConfig): Result<ServerInfo> = runCatching {
+        val info = api.getInfo(config)
+        settings.saveConnection(config)
+        val savedLastCwd = settings.loadLastCwd(config.host)
+        _state.update {
+            it.copy(
+                config = config,
+                serverInfo = info,
+                lastCwd = savedLastCwd,
+                connectionError = null,
+            )
+        }
+        connect(config)
+        info
+    }.onFailure { err ->
+        _state.update {
+            it.copy(
+                connectionState = ConnectionState.ERROR,
+                connectionError = err.message ?: "Unable to reach VM",
+            )
         }
     }
 
@@ -375,10 +371,13 @@ class HerdrRepository(
         val action = synchronized(socketLock) {
             when {
                 !shouldStayConnected -> ForegroundAction.NONE
+
                 s.connectionState == ConnectionState.CONNECTED -> ForegroundAction.REFRESH_ACTIVE_TAB
+
                 s.connectionState == ConnectionState.CONNECTING &&
                     webSocket != null &&
                     (clockMs() - lastConnectAttemptMs) < FOREGROUND_CONNECT_GRACE_MS -> ForegroundAction.NONE
+
                 else -> ForegroundAction.RECONNECT
             }
         }
@@ -736,18 +735,57 @@ class HerdrRepository(
             payload = text.take(500),
         )
         return runCatching {
-            api.sendMessage(cfg, tabId, text, overridePermissionMode)
+            val resp = api.sendMessage(cfg, tabId, text, overridePermissionMode)
+            resp.tab?.let { updated ->
+                _state.update { cur ->
+                    cur.copy(tabs = cur.tabs.map { if (it.id == updated.id) updated else it })
+                }
+            }
             Unit
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to send message")
         }
     }
 
-    suspend fun interruptTab(tabId: String) {
+    suspend fun interruptTab(
+        tabId: String,
+        processQueue: Boolean = false,
+        text: String? = null,
+        overridePermissionMode: String? = null,
+    ) {
         val cfg = _state.value.config
-        debugRecorder?.record("ui", "interrupt_tab", "Interrupting tab=$tabId")
-        runCatching { api.interruptTab(cfg, tabId) }
-            .onFailure { err -> showBanner(err.message ?: "Failed to interrupt") }
+        debugRecorder?.record(
+            "ui",
+            "interrupt_tab",
+            "Interrupting tab=$tabId processQueue=$processQueue hasText=${!text.isNullOrBlank()}",
+        )
+        runCatching {
+            val updated = api.interruptTab(
+                config = cfg,
+                tabId = tabId,
+                processQueue = processQueue,
+                text = text,
+                overridePermissionMode = overridePermissionMode,
+            )
+            if (updated != null) {
+                _state.update { cur ->
+                    cur.copy(tabs = cur.tabs.map { if (it.id == updated.id) updated else it })
+                }
+            }
+        }.onFailure { err -> showBanner(err.message ?: "Failed to interrupt") }
+    }
+
+    suspend fun removeQueuedMessage(tabId: String, queuedId: String) {
+        val cfg = _state.value.config
+        debugRecorder?.record("ui", "remove_queued_message", "Removing queued=$queuedId from tab=$tabId")
+        runCatching {
+            val updated = api.removeQueuedMessage(cfg, tabId, queuedId)
+            if (updated != null) {
+                _state.update { cur ->
+                    cur.copy(tabs = cur.tabs.map { if (it.id == updated.id) updated else it })
+                }
+            }
+        }.onFailure { err -> showBanner(err.message ?: "Failed to remove queued message") }
     }
 
     suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> {

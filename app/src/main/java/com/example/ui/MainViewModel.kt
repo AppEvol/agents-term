@@ -6,9 +6,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
 import com.example.R
+import com.example.data.AndroidUiDriver
 import com.example.data.AppStateCommandException
 import com.example.data.AppStateReporter
 import com.example.data.AppStateSources
+import com.example.data.AppUiController
 import com.example.data.BootstrapPhase
 import com.example.data.BootstrapUiState
 import com.example.data.ConnectionConfig
@@ -60,6 +62,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val debugRecorder = DebugRecorder()
 
     private val lastAutoUploadMs = AtomicLong(0L)
+    private val lastControlNoticeMs = AtomicLong(0L)
 
     private val api = HerdrApiClient(debugRecorder)
     private val repo = HerdrRepository(
@@ -119,6 +122,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         isEnabled = { _debugSettings.value.remoteInspectionActive },
         appVersion = appVersionLabel,
         device = buildDeviceInfoSummary(),
+        ui = AppUiController(
+            driver = AndroidUiDriver(activity = { ForegroundActivityTracker.current() }),
+            onControl = { notifyRemoteControl() },
+        ),
+        isControlEnabled = { _debugSettings.value.remoteControlActive },
     )
 
     init {
@@ -205,9 +213,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             category = "ui",
             event = "debug_settings_updated",
             detail = "enabled=${updated.enabled} screenshot=${updated.includeScreenshot} logcat=${updated.includeLogcat} " +
-                "autoUpload=${updated.autoUploadOnError} remoteInspection=${updated.remoteInspectionEnabled}",
+                "autoUpload=${updated.autoUploadOnError} remoteInspection=${updated.remoteInspectionEnabled} " +
+                "remoteControl=${updated.remoteControlEnabled}",
         )
-        if (previous.remoteInspectionActive != updated.remoteInspectionActive) {
+        if (previous.remoteInspectionActive != updated.remoteInspectionActive ||
+            previous.remoteControlActive != updated.remoteControlActive
+        ) {
             repo.sendAppHello()
         }
     }
@@ -218,9 +229,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _hasLastCrash.value = false
     }
 
-    fun recentDebugEvents(limit: Int = 30): List<DebugEvent> {
-        return debugRecorder.snapshot().takeLast(limit).reversed()
-    }
+    fun recentDebugEvents(limit: Int = 30): List<DebugEvent> = debugRecorder.snapshot().takeLast(limit).reversed()
 
     private suspend fun buildDebugDumpRequest(
         note: String?,
@@ -301,6 +310,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return result
     }
 
+    /** Tells the user an agent is driving the app: a toast, at most one per [CONTROL_NOTICE_INTERVAL_MS]. */
+    private fun notifyRemoteControl() {
+        val now = System.currentTimeMillis()
+        val prev = lastControlNoticeMs.get()
+        if (now - prev < CONTROL_NOTICE_INTERVAL_MS || !lastControlNoticeMs.compareAndSet(prev, now)) return
+        val activity = ForegroundActivityTracker.current() ?: return
+        viewModelScope.launch(Dispatchers.Main) {
+            Toast.makeText(activity, R.string.app_state_control_toast, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     /** Android-backed data for [AppStateReporter]; respects the user's debug sharing toggles. */
     private inner class ViewModelAppStateSources : AppStateSources {
         override fun uiState(): Map<String, Any?> {
@@ -328,6 +348,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     "includeLogcat" to debug.includeLogcat,
                     "autoUploadOnError" to debug.autoUploadOnError,
                     "remoteInspectionEnabled" to debug.remoteInspectionEnabled,
+                    "remoteControlEnabled" to debug.remoteControlEnabled,
                 ),
                 "debugEventCount" to debugRecorder.count,
                 "hasLastCrash" to CrashLogStore.hasLastCrash(getApplication()),
@@ -394,11 +415,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun createOfflineDebugZip(
         note: String? = null,
         screenshotBase64: String? = null,
-    ): Result<File> {
-        return runCatching {
-            val payload = buildDebugDumpRequest(note = note, screenshotBase64 = screenshotBase64)
-            exportDebugBundleZip(getApplication(), payload)
-        }
+    ): Result<File> = runCatching {
+        val payload = buildDebugDumpRequest(note = note, screenshotBase64 = screenshotBase64)
+        exportDebugBundleZip(getApplication(), payload)
     }
 
     private fun maybeTriggerAutoUpload(reason: String) {
@@ -493,7 +512,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _bootstrapState.update {
                         it.copy(
                             phase = BootstrapPhase.ERROR,
-                            errorMessage = "Antigravity finished setup, but could not reach ${result.connectionConfig.httpBaseUrl()}: ${lastErr ?: "connection refused"}. Verify Tailscale is active on your phone.",
+                            errorMessage = "VM bootstrap finished, but could not reach ${result.connectionConfig.httpBaseUrl()}: ${lastErr ?: "connection refused"}. Verify Tailscale is active on your phone.",
                         )
                     }
                 }
@@ -570,7 +589,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     permissionMode = permissionMode,
                     model = model?.trim()?.takeIf { it.isNotEmpty() },
                     systemPrompt = if (agent == "shell") null else systemPrompt?.trim().orEmpty(),
-                )
+                ),
             )
             if (res.isSuccess) {
                 onCreated()
@@ -675,20 +694,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun interruptActiveTab() {
+    fun interruptActiveTab(processQueue: Boolean = false, text: String? = null) {
         val tabId = state.value.activeTab?.id ?: return
         viewModelScope.launch {
-            repo.interruptTab(tabId)
+            repo.interruptTab(tabId, processQueue = processQueue, text = text)
         }
     }
 
-    suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> {
-        return repo.loadInitialDirectories(preferredPath)
+    fun removeQueuedMessage(queuedId: String) {
+        val tabId = state.value.activeTab?.id ?: return
+        viewModelScope.launch {
+            repo.removeQueuedMessage(tabId, queuedId)
+        }
     }
 
-    suspend fun loadDirectories(path: String?): Result<FsListResponse> {
-        return repo.listDirectories(path)
-    }
+    suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> = repo.loadInitialDirectories(preferredPath)
+
+    suspend fun loadDirectories(path: String?): Result<FsListResponse> = repo.listDirectories(path)
 
     fun clearBanner() {
         repo.clearBanner()
@@ -697,6 +719,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val MAX_BOOTSTRAP_LOG_LINES = 400
         private const val AUTO_UPLOAD_COOLDOWN_MS = 60_000L
+        private const val CONTROL_NOTICE_INTERVAL_MS = 30_000L
 
         @Volatile
         internal var latestDebugRecorder: DebugRecorder? = null

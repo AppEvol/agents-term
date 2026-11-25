@@ -1,0 +1,101 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ComplexCondition:AndroidUiDriver.kt$AndroidUiDriver$text == null &amp;&amp; value == null &amp;&amp; description == null &amp;&amp; tag == null &amp;&amp; !clickable &amp;&amp; !longClickable &amp;&amp; !scrollable &amp;&amp; !editable</ID>
+    <ID>ComplexCondition:AppUiControl.kt$AppUiController$x &lt; 0 || y &lt; 0 || x &gt;= snap.width || y &gt;= snap.height</ID>
+    <ID>ComplexCondition:ChatScreen.kt$(onOpenModelPicker != null &amp;&amp; !modelLabel.isNullOrBlank()) || !statusDetail.isNullOrBlank() || isHolding || showHoldHint</ID>
+    <ID>ComplexCondition:ChatScreen.kt$message.status == "complete" &amp;&amp; message.error.isNullOrBlank() &amp;&amp; message.deniedActions.isEmpty() &amp;&amp; message.thinking.isNullOrBlank()</ID>
+    <ID>ComplexCondition:ChatScreen.kt$pos.x &lt; -slop || pos.y &lt; -slop || pos.x &gt; size.width + slop || pos.y &gt; size.height + slop</ID>
+    <ID>ComplexCondition:MarkdownText.kt$t.isEmpty() || t.startsWith("```") || t.startsWith("- ") || t.startsWith("* ") || t.startsWith("• ") || headingRegex.matches(t) || numberedItemRegex.matches(t)</ID>
+    <ID>CyclomaticComplexMethod:AndroidUiDriver.kt$AndroidUiDriver$override suspend fun stroke(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, holdMs: Long): UiWindow</ID>
+    <ID>CyclomaticComplexMethod:AppUiControl.kt$UiNode$fun toMap(): Map&lt;String, Any?&gt;</ID>
+    <ID>CyclomaticComplexMethod:DebugSystemCollector.kt$suspend fun captureWindowScreenshotBase64(activity: Activity?): String?</ID>
+    <ID>CyclomaticComplexMethod:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleRequest(request: RecordedRequest): MockResponse</ID>
+    <ID>CyclomaticComplexMethod:HerdrRepository.kt$HerdrRepository$private fun openSocketNow( config: ConnectionConfig, expectedGeneration: Long? = null, )</ID>
+    <ID>CyclomaticComplexMethod:HerdrRepository.kt$fun reduceWorkspaceEvent( state: WorkspaceState, event: WsServerEnvelope, preferredTabId: String? = null, ): WorkspaceState</ID>
+    <ID>CyclomaticComplexMethod:HerdrRepository.kt$suspend fun resolveInitialDirectoryListing( preferredPath: String?, homeCwd: String?, listDirectories: suspend (String?) -&gt; Result&lt;FsListResponse&gt;, ): Result&lt;ResolvedDirectoryListing&gt;</ID>
+    <ID>CyclomaticComplexMethod:MarkdownText.kt$private fun parseMarkdownBlocks(raw: String): List&lt;MarkdownBlock&gt;</ID>
+    <ID>CyclomaticComplexMethod:MessagePresentation.kt$fun buildAssistantDisplayBlocks(message: ChatMessage): List&lt;AssistantDisplayBlock&gt;</ID>
+    <ID>CyclomaticComplexMethod:SshBootstrapClient.kt$SshBootstrapClient$suspend fun bootstrapWithAgy( config: SshBootstrapConfig, onPhase: (BootstrapPhase) -&gt; Unit, onHostFingerprint: (String) -&gt; Unit, onLog: (String) -&gt; Unit, ): SshBootstrapResult</ID>
+    <ID>CyclomaticComplexMethod:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
+    <ID>CyclomaticComplexMethod:SshBootstrapModels.kt$fun parseSshSetupInput(raw: String): SshSetupAutofill?</ID>
+    <ID>CyclomaticComplexMethod:SshBootstrapModels.kt$fun parseSshSetupUri(raw: String): SshSetupAutofill?</ID>
+    <ID>DestructuringDeclarationWithTooManyEntries:AppUiControl.kt$AppUiController$val (x1, y1, x2, y2) = coords</ID>
+    <ID>DestructuringDeclarationWithTooManyEntries:AppUiControl.kt$AppUiController$val (x1, y1, x2, y2) = when (direction) { "down" -&gt; listOf(cx, cy + dy, cx, cy - dy) "up" -&gt; listOf(cx, cy - dy, cx, cy + dy) "right" -&gt; listOf(cx + dx, cy, cx - dx, cy) else -&gt; listOf(cx - dx, cy, cx + dx, cy) }</ID>
+    <ID>DestructuringDeclarationWithTooManyEntries:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$val (workingTab, userMsg, assistantMsg, effectivePrompt) = startTurnInternal( tabId = tabId, promptText = req.text, ) ?: return jsonResponse(404, """{"error":"Tab not found"}""")</ID>
+    <ID>InstanceOfCheckForException:HerdrApiClient.kt$HerdrApiClient$err !is IOException</ID>
+    <ID>LargeClass:AgentsTermE2ETest.kt$AgentsTermE2ETest</ID>
+    <ID>LargeClass:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon : AutoCloseable</ID>
+    <ID>LargeClass:ModelsAndStateTest.kt$ModelsAndStateTest</ID>
+    <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test @Suppress("UNCHECKED_CAST") fun appStateReporterAnswersVmRequestsOnlyWhileUserAllowsInspection()</ID>
+    <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test @Suppress("UNCHECKED_CAST") fun vmAgentDrivesTheAppOnceTheUserAllowsControl()</ID>
+    <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test fun interruptWorkingAgentAndRetryBlockedPermissionWithFullAccess()</ID>
+    <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test fun modelPickerAndSlashModelCommandSwitchAgentModelEndToEnd()</ID>
+    <ID>LongMethod:AgentsTermE2ETest.kt$AgentsTermE2ETest$@Test fun systemPromptDefaultsOnNewTabCanBeEditedOrLeftEmptyEndToEnd()</ID>
+    <ID>LongMethod:DebugSystemCollector.kt$suspend fun captureWindowScreenshotBase64(activity: Activity?): String?</ID>
+    <ID>LongMethod:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun emitTurnEvents( tab: TabRecord, userMsg: ChatMessage, assistantMsg: ChatMessage, prompt: String, overridePermissionMode: String?, )</ID>
+    <ID>LongMethod:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleInterrupt(tabId: String, body: String): MockResponse</ID>
+    <ID>LongMethod:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleRequest(request: RecordedRequest): MockResponse</ID>
+    <ID>LongMethod:HerdrRepository.kt$HerdrRepository$private fun openSocketNow( config: ConnectionConfig, expectedGeneration: Long? = null, )</ID>
+    <ID>LongMethod:HerdrRepository.kt$fun reduceWorkspaceEvent( state: WorkspaceState, event: WsServerEnvelope, preferredTabId: String? = null, ): WorkspaceState</ID>
+    <ID>LongMethod:MainViewModel.kt$MainViewModel$fun startSshBootstrap(config: SshBootstrapConfig)</ID>
+    <ID>LongMethod:MarkdownText.kt$private fun parseMarkdownBlocks(raw: String): List&lt;MarkdownBlock&gt;</ID>
+    <ID>LongMethod:ModelsAndStateTest.kt$ModelsAndStateTest$@Test fun modelSlashCommandsCatalogResolutionAndUpdateSerializationWork()</ID>
+    <ID>LongMethod:ModelsAndStateTest.kt$ModelsAndStateTest$@Test fun reduceWorkspaceEventStreamsDeltasAndToolUpdates()</ID>
+    <ID>LongMethod:ModelsAndStateTest.kt$ModelsAndStateTest$@Test fun systemPromptDefaultsResolutionAndSerializationWork()</ID>
+    <ID>LongMethod:SshBootstrapClient.kt$SshBootstrapClient$suspend fun bootstrapWithAgy( config: SshBootstrapConfig, onPhase: (BootstrapPhase) -&gt; Unit, onHostFingerprint: (String) -&gt; Unit, onLog: (String) -&gt; Unit, ): SshBootstrapResult</ID>
+    <ID>LongMethod:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
+    <ID>LongMethod:SshBootstrapModels.kt$fun buildAgyBootstrapCommand( prompt: String, daemonPort: Int = 7501, repoUrl: String = AGENTSTERM_REPO_URL, ref: String = AGENTSTERM_DAEMON_REF, ): String</ID>
+    <ID>LongMethod:SshBootstrapModels.kt$fun parseSshSetupInput(raw: String): SshSetupAutofill?</ID>
+    <ID>LongParameterList:AndroidUiDriver.kt$AndroidUiDriver$(root: View, downTime: Long, eventTime: Long, action: Int, screenX: Float, screenY: Float)</ID>
+    <ID>LongParameterList:AppUiControl.kt$AppUiDriver$(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, holdMs: Long)</ID>
+    <ID>LoopWithTooManyJumpStatements:MarkdownText.kt$while</ID>
+    <ID>MatchingDeclarationName:DebugSystemCollector.kt$CrashLogStore</ID>
+    <ID>MaxLineLength:AppStateReporterTest.kt$AppStateReporterTest$private suspend fun call(command: String, args: Map&lt;String, Any?&gt; = emptyMap()): Map&lt;String, Any?&gt;</ID>
+    <ID>MaxLineLength:AppStateReporterTest.kt$AppStateReporterTest.FakeSources$override suspend fun uploadDump(note: String?, includeScreenshot: Boolean): Map&lt;String, Any?&gt;</ID>
+    <ID>MaxLineLength:AppUiControllerTest.kt$AppUiControllerTest$private</ID>
+    <ID>MaxLineLength:BootstrapScriptE2ETest.kt$BootstrapScriptE2ETest$private</ID>
+    <ID>MaxLineLength:BootstrapScriptE2ETest.kt$BootstrapScriptE2ETest$private fun hasTool(name: String)</ID>
+    <ID>MaxLineLength:ChatToolCallsUiTest.kt$ChatToolCallsUiTest$ToolCallItem("t1", "Bash", "cd ~/projects/app &amp;&amp; git status", """{"command":"cd ~/projects/app &amp;&amp; git status","description":"Check git status"}""", "clean", "done", 120L)</ID>
+    <ID>MaxLineLength:ChatToolCallsUiTest.kt$ChatToolCallsUiTest$ToolCallItem("t2", "Bash", "cd ~/projects/app &amp;&amp; git diff", """{"command":"cd ~/projects/app &amp;&amp; git diff","description":"Inspect diff"}""", "0 changes", "done", 90L)</ID>
+    <ID>MaxLineLength:ChatToolCallsUiTest.kt$ChatToolCallsUiTest$ToolCallItem("t3", "Bash", "cd ~/projects/app &amp;&amp; git log -n 5", """{"command":"cd ~/projects/app &amp;&amp; git log -n 5","description":"Read recent commits"}""", "abc123", "done", 80L)</ID>
+    <ID>MaxLineLength:ChatToolCallsUiTest.kt$ChatToolCallsUiTest$ToolCallItem("t4", "Bash", "cd ~/projects/app &amp;&amp; ls -la", """{"command":"cd ~/projects/app &amp;&amp; ls -la","description":"List workspace files"}""", "README.md", "done", 60L)</ID>
+    <ID>MaxLineLength:ChatToolCallsUiTest.kt$ChatToolCallsUiTest$ToolCallItem("t5", "Bash", "cd ~/projects/app &amp;&amp; pytest", """{"command":"cd ~/projects/app &amp;&amp; pytest","description":"Run daemon tests"}""", "28 passed", "done", 450L)</ID>
+    <ID>MaxLineLength:ChatToolCallsUiTest.kt$ChatToolCallsUiTest$ToolCallItem("t6", "Bash", "cd ~/projects/app &amp;&amp; gradle test", """{"command":"cd ~/projects/app &amp;&amp; gradle test","description":"Run Android unit tests"}""", null, "running", null)</ID>
+    <ID>MaxLineLength:ChatToolCallsUiTest.kt$ChatToolCallsUiTest$assertTrue("Expected step1 &lt; group1 &lt; step2 &lt; group2 &lt; final", step1Top &lt; group1Top &amp;&amp; group1Top &lt; step2Top &amp;&amp; step2Top &lt; group2Top &amp;&amp; group2Top &lt; finalTop)</ID>
+    <ID>MaxLineLength:DebugSystemCollector.kt$fun buildDeviceInfoSummary(): String</ID>
+    <ID>MaxLineLength:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private</ID>
+    <ID>MaxLineLength:FakeSshVmServer.kt$SimulatedAgyBootstrapCommand$"""{"event":"result","result":{"conversation_id":"e2e-ssh-conv-1234","status":"SUCCESS","response":"AgentsTerm daemon ready:\n$pairingUri\n","duration_seconds":0.9,"num_turns":1}}"""</ID>
+    <ID>MaxLineLength:FakeSshVmServer.kt$SimulatedAgyBootstrapCommand$"""{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"AgentsTerm daemon is running and verified.\n$pairingUri\n"}}"""</ID>
+    <ID>MaxLineLength:FakeSshVmServer.kt$SimulatedAgyBootstrapCommand$"""{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"toolSummary":"Verify AgentsTerm daemon on port $daemonPort"}}}}"""</ID>
+    <ID>MaxLineLength:FakeSshVmServer.kt$SimulatedAgyBootstrapCommand$"""{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":0.4,"tool_info":{"output":"Daemon healthy on 127.0.0.1:$daemonPort\n$pairingUri\n"}}}"""</ID>
+    <ID>MaxLineLength:MainViewModel.kt$MainViewModel$appendBootstrapLog("Waiting for daemon on ${result.connectionConfig.host}:${result.connectionConfig.port} (attempt $attempt/3)…")</ID>
+    <ID>MaxLineLength:MainViewModel.kt$MainViewModel$errorMessage = "VM bootstrap finished, but could not reach ${result.connectionConfig.httpBaseUrl()}: ${lastErr ?: "connection refused"}. Verify Tailscale is active on your phone."</ID>
+    <ID>MaxLineLength:MarkdownRenderTest.kt$MarkdownRenderTest$private</ID>
+    <ID>MaxLineLength:ModelsAndStateTest.kt$ModelsAndStateTest$"""{"event":"result","result":{"conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","status":"SUCCESS","response":"herdr://connect?host=100.71.219.26&amp;port=7501&amp;token=tok123\n","duration_seconds":5.3,"num_turns":2}}"""</ID>
+    <ID>MaxLineLength:ModelsAndStateTest.kt$ModelsAndStateTest$"""{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"npm run build","toolSummary":"Build server"}}}}"""</ID>
+    <ID>MaxLineLength:ModelsAndStateTest.kt$ModelsAndStateTest$"""{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":1.25,"tool_info":{"output":"herdr://connect?host=100.71.219.26&amp;port=7501&amp;token=abc"}}}"""</ID>
+    <ID>MaxLineLength:ModelsAndStateTest.kt$ModelsAndStateTest$"""{"ok":true,"dumpId":"abcd1234","remoteDir":"/home/ned/.config/herdr-mobile/debug-dumps/latest","latestSymlink":"/home/ned/.config/herdr-mobile/debug-dumps/latest","files":["summary.md","events.ndjson"]}"""</ID>
+    <ID>MaxLineLength:ModelsAndStateTest.kt$ModelsAndStateTest$val rawSecret = "Authorization: Bearer super_secret_tok_99 and ws://100.1.2.3:7501/ws?token=abc_secret_2 and Token: -PpQT9y2xIYJ0u9U"</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$"${workspaceState.config.host}:${workspaceState.config.port} · ${workspaceState.connectionState.name.lowercase()}"</ID>
+    <ID>MaxLineLength:SshBootstrapClient.kt$SshBootstrapClient$debugRecorder?.record("ssh", "ssh_bootstrap_exit", "Remote bootstrap exited with status $exitCode (conv=${agyConversationId ?: "none"})")</ID>
+    <ID>MaxLineLength:SshBootstrapClient.kt$SshBootstrapClient$debugRecorder?.record("ssh", "ssh_connect_start", "Connecting to $username@$host:${config.sshPort} (auth=${config.authMethod.storageKey})")</ID>
+    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine(" - exit 3 (missing prerequisite): install python3 (&gt;= 3.9) or git with the system package manager, or bring Tailscale up (`sudo tailscale up`). If GitHub is unreachable, say so clearly.")</ID>
+    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine(" - exit 4 (daemon unhealthy): inspect `systemctl --user status herdr-mobile.service` or ~/.config/herdr-mobile/daemon.log (for example, another process holding port $daemonPort).")</ID>
+    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine(" install.sh is idempotent: it updates the checkout to the latest $ref, installs the herdr-mobile.service systemd --user unit (or a detached process), restarts the daemon unless it already runs that commit, replaces any legacy Node daemon, verifies http://&lt;tailscale-ip&gt;:$daemonPort/api/info reports that commit, and prints a herdr://connect pairing URI.")</ID>
+    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine("3. End your final response with the exact `herdr://connect?host=...&amp;port=$daemonPort&amp;token=...` line that install.sh printed, on its own line.")</ID>
+    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine("Repair this VM so the AgentsTerm Android app can connect over Tailscale. The automatic install of the AgentsTerm daemon just failed here, or could not start.")</ID>
+    <ID>MaxLineLength:SshBootstrapModels.kt$appendLine("The VM daemon is the Python 3 program in `daemon/` of $repoUrl, installed by its `daemon/install.sh`. Do not write your own daemon.")</ID>
+    <ID>NestedBlockDepth:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleRequest(request: RecordedRequest): MockResponse</ID>
+    <ID>NestedBlockDepth:MarkdownText.kt$private fun parseMarkdownBlocks(raw: String): List&lt;MarkdownBlock&gt;</ID>
+    <ID>NestedBlockDepth:MessagePresentation.kt$@Suppress("UNCHECKED_CAST") fun formatToolCallSummary(toolCall: ToolCallItem): String</ID>
+    <ID>NestedBlockDepth:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
+    <ID>SwallowedException:AgentsTermE2ETest.kt$AgentsTermE2ETest$e: androidx.compose.ui.test.ComposeTimeoutException</ID>
+    <ID>ThrowsCount:AppUiControl.kt$AppUiController$private suspend fun type(args: Map&lt;String, Any?&gt;): Map&lt;String, Any?&gt;</ID>
+    <ID>TooGenericExceptionCaught:AndroidUiDriver.kt$AndroidUiDriver$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:AppStateReporter.kt$AppStateReporter$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:HerdrApiClient.kt$HerdrApiClient$err: Throwable</ID>
+    <ID>TooGenericExceptionCaught:MainViewModel.kt$MainViewModel$err: Throwable</ID>
+  </CurrentIssues>
+</SmellBaseline>

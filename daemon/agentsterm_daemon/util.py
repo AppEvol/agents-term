@@ -11,7 +11,7 @@ import math
 import re
 import secrets
 import time
-from typing import Any, Optional
+from typing import Any
 
 _WS_RE = re.compile(r"\s+")
 _LEADING_CD_RE = re.compile(
@@ -86,7 +86,7 @@ def first_not_none(*values: Any) -> Any:
 
 def js_round(x: float) -> int:
     """Math.round: rounds half up (toward +infinity)."""
-    return int(math.floor(x + 0.5))
+    return math.floor(x + 0.5)
 
 
 def json_compact(value: Any) -> str:
@@ -118,7 +118,7 @@ def summarize_command(command: str) -> str:
         match = _LEADING_CD_RE.match(s)
         if not match:
             break
-        rest = s[match.end():].strip()
+        rest = s[match.end() :].strip()
         if not rest:
             break
         s = rest
@@ -149,7 +149,3 @@ def summarize_tool_input(value: Any) -> str:
         except (TypeError, ValueError):
             return ""
     return js_str(value)
-
-
-def str_or_none(value: Any) -> Optional[str]:
-    return value.strip() if isinstance(value, str) and value.strip() else None

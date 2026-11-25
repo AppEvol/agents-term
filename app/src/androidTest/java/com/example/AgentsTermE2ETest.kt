@@ -11,6 +11,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -19,6 +20,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
@@ -104,14 +106,12 @@ class AgentsTermE2ETest {
     private fun startDaemon(
         initialTabs: List<TabRecord> = emptyList(),
         initialMessages: Map<String, List<ChatMessage>> = emptyMap(),
-    ): FakeAgentsTermDaemon {
-        return FakeAgentsTermDaemon(
-            initialTabs = initialTabs,
-            initialMessages = initialMessages,
-        ).also {
-            it.start()
-            daemon = it
-        }
+    ): FakeAgentsTermDaemon = FakeAgentsTermDaemon(
+        initialTabs = initialTabs,
+        initialMessages = initialMessages,
+    ).also {
+        it.start()
+        daemon = it
     }
 
     private fun launchMainActivity(intent: Intent? = null) {
@@ -297,19 +297,64 @@ class AgentsTermE2ETest {
         waitForText("Antigravity · app")
         waitForTag("composer_input")
 
-        // 1) Trigger a long-running working turn and interrupt it via Stop button
+        // 1) Trigger a long-running working turn; tapping send while empty shows hint and does NOT interrupt
         composeRule.onNodeWithTag("composer_input").performTextInput("hold_working long job")
         composeRule.onNodeWithTag("send_button").performClick()
 
-        waitForTag("stop_agent_button")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("stop_agent_button").performClick()
+        waitForText("Processing prompt...")
+        waitForTag("working_progress_bar")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForTag("hold_to_interrupt_hint")
+        assertTrue("Accidental tap must not interrupt active turn", activeDaemon.interruptedTabIds.isEmpty())
+
+        // 2) Typing while working queues messages by default; queued items can be inspected and removed
+        composeRule.onNodeWithTag("composer_input").performTextInput("First queued follow-up")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForTag("queued_messages_tray")
+        waitForText("Queued (1)")
+        waitForText("First queued follow-up")
+        assertTrue("Queueing must not interrupt active turn", activeDaemon.interruptedTabIds.isEmpty())
+
+        composeRule.onNodeWithTag("composer_input").performTextInput("Drop this queued item")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForText("Queued (2)")
+        waitForText("Drop this queued item")
+
+        // Remove the second queued item via its close button
+        composeRule.onAllNodesWithTag("remove_queued_q_104").let { nodes ->
+            if (nodes.fetchSemanticsNodes().isNotEmpty()) {
+                nodes[0].performClick()
+            } else {
+                // Fallback by content description if counter shifts
+                composeRule.onAllNodes(
+                    androidx.compose.ui.test.hasContentDescription("Remove queued message"),
+                )[1].performClick()
+            }
+        }
+        waitForText("Queued (1)")
+
+        // 3) Press & hold send button with a draft to force interrupt AND process all queued messages + draft
+        composeRule.onNodeWithTag("composer_input").performTextInput("Final urgent follow-up")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("send_button").performTouchInput { longClick() }
 
         waitForText("Interrupted by user")
-        waitForTag("send_button")
+        waitForText("First queued follow-up\n\nFinal urgent follow-up")
+        waitForText("Repository is clean on main branch.")
         assertTrue(activeDaemon.interruptedTabIds.contains("tab_seed"))
+        assertTrue(composeRule.onAllNodesWithTag("queued_messages_tray").fetchSemanticsNodes().isEmpty())
 
-        // 2) Trigger a permission-blocked turn and retry with Full Access
+        // 4) Trigger another working turn and press & hold empty send button to stop cleanly
+        composeRule.onNodeWithTag("composer_input").performTextInput("hold_working stop only")
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForText("Processing prompt...")
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("send_button").performTouchInput { longClick() }
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithText("Processing prompt...").fetchSemanticsNodes().isEmpty()
+        }
+
+        // 5) Trigger a permission-blocked turn and retry with Full Access
         composeRule.onNodeWithTag("composer_input").performTextInput("needs_permission run tests")
         composeRule.onNodeWithTag("send_button").performClick()
 
@@ -520,6 +565,144 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("debug_remote_inspection_switch").performScrollTo().performClick()
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("enabled") == false }
         assertEquals(false, activeDaemon.requestAppState("state")["ok"])
+    }
+
+    @Test
+    @Suppress("UNCHECKED_CAST")
+    fun vmAgentDrivesTheAppOnceTheUserAllowsControl() {
+        val tab1 = TabRecord(
+            id = "tab_1",
+            title = "Antigravity · app",
+            agent = "agy",
+            cwd = "/home/ci/projects",
+            status = "idle",
+        )
+        val activeDaemon = startDaemon(initialTabs = listOf(tab1))
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForText("Antigravity · app")
+
+        // What the VM agent does, through the same frames the daemon relays for app_state_cli.
+        // Under the Compose test rule the UI only advances while the test thread is inside the rule,
+        // so each step ends with waitForIdle and waits go through waitUntil.
+        fun agent(command: String, argsJson: String = "{}"): Map<String, Any?> {
+            val response = activeDaemon.requestAppState(command, argsJson)
+            composeRule.waitForIdle()
+            assertEquals("'$command' $argsJson failed: ${response["error"]}", true, response["ok"])
+            return response["result"] as Map<String, Any?>
+        }
+        fun nodes(argsJson: String = "{}") = agent("ui", argsJson)["nodes"] as List<Map<String, Any?>>
+        fun screen() = (agent("state")["ui"] as Map<String, Any?>)["screen"]
+        fun agentWaitsFor(what: String, condition: () -> Boolean) {
+            try {
+                composeRule.waitUntil(timeoutMillis = 10_000L) { condition() }
+            } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+                throw AssertionError("Timed out waiting for $what. On screen: ${nodes().map { it["tag"] ?: it["text"] }}")
+            }
+        }
+
+        // Like `app_state_cli wait --tag … && app_state_cli tap --tag …`: screens change asynchronously.
+        fun agentTaps(tag: String): Map<String, Any?> {
+            agentWaitsFor("'$tag' to tap") { nodes("""{"tag":"$tag"}""").isNotEmpty() }
+            return agent("tap", """{"tag":"$tag"}""")
+        }
+
+        // The user allows inspection only: the agent can read the screen but not touch it.
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        composeRule.onNodeWithTag("menu_app_settings").performClick()
+        waitForTag("debug_sharing_switch")
+        composeRule.onNodeWithTag("debug_sharing_switch").performScrollTo().performClick()
+        composeRule.onNodeWithTag("debug_remote_inspection_switch").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("enabled") == true }
+        assertEquals(false, activeDaemon.latestAppHello()!!["controlEnabled"])
+        composeRule.onNodeWithTag("debug_remote_control_switch").performScrollTo()
+        assertEquals(
+            "on screen: ${nodes()}",
+            "off",
+            nodes("""{"tag":"debug_remote_control_switch"}""").singleOrNull()?.get("toggle"),
+        )
+        val refused = activeDaemon.requestAppState("key", """{"key":"back"}""")
+        assertEquals(false, refused["ok"])
+        assertTrue((refused["error"] as String).contains("Remote control is disabled"))
+        assertEquals("settings", screen())
+
+        // The user allows control too.
+        composeRule.onNodeWithTag("debug_remote_control_switch").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("controlEnabled") == true }
+        // The hello can reach the daemon before the switch is redrawn.
+        agentWaitsFor("the control switch to show on") {
+            nodes("""{"tag":"debug_remote_control_switch"}""").singleOrNull()?.get("toggle") == "on"
+        }
+        assertTrue(
+            (activeDaemon.latestAppHello()!!["commands"] as List<String>)
+                .containsAll(listOf("ui", "tap", "long_press", "swipe", "scroll", "type", "key")),
+        )
+
+        // Scroll the settings list back up, by dragging it.
+        val scrolled = agent("scroll", """{"direction":"up"}""")
+        assertEquals("activity", (scrolled["window"] as Map<String, Any?>)["type"])
+        agentWaitsFor("the top of Settings") { nodes("""{"tag":"settings_back_button"}""").isNotEmpty() }
+
+        // Back leaves Settings.
+        assertEquals("handled", agent("key", """{"key":"back"}""")["outcome"])
+        agentWaitsFor("the workspace") { screen() == "workspace" }
+
+        // Open the overflow menu. It is a separate window, and shows up in the UI tree and screenshot.
+        agentTaps("overflow_menu_button")
+        agentWaitsFor("the overflow menu") { nodes("""{"tag":"menu_app_settings"}""").isNotEmpty() }
+        val menuItem = nodes("""{"tag":"menu_app_settings"}""").single()
+        assertTrue("the menu item should be in a window above the Activity", (menuItem["window"] as Number).toInt() >= 1)
+        val shot = agent("screenshot")
+        val png = android.util.Base64.decode(shot["pngBase64"] as String, android.util.Base64.DEFAULT)
+        val bitmap = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size)
+        val ui = agent("ui")
+        assertEquals("ui and screenshot share one coordinate space", bitmap.width, (ui["width"] as Number).toInt())
+        assertEquals(bitmap.height, (ui["height"] as Number).toInt())
+
+        // Back closes the menu and nothing else.
+        agent("key", """{"key":"back"}""")
+        agentWaitsFor("the menu to close") { nodes("""{"tag":"menu_app_settings"}""").isEmpty() }
+        assertEquals("workspace", screen())
+
+        // Tap a menu item by the position read from the UI tree, like an agent working from a screenshot.
+        agentTaps("overflow_menu_button")
+        agentWaitsFor("the overflow menu") { nodes("""{"tag":"menu_app_settings"}""").isNotEmpty() }
+        val center = nodes("""{"tag":"menu_app_settings"}""").single()["center"] as List<Number>
+        val tapped = agent("tap", """{"x":${center[0].toInt()},"y":${center[1].toInt()}}""")
+        assertEquals("popup", (tapped["window"] as Map<String, Any?>)["type"])
+        agentWaitsFor("Settings") { screen() == "settings" }
+        agentTaps("settings_back_button")
+        agentWaitsFor("the workspace") { screen() == "workspace" }
+
+        // Write a prompt and send it.
+        agentWaitsFor("the composer") { nodes("""{"tag":"composer_input"}""").isNotEmpty() }
+        val typed = agent("type", """{"tag":"composer_input","text":"Summarize the repo"}""")
+        assertEquals(18, (typed["chars"] as Number).toInt())
+        agentWaitsFor("the prompt in the composer") {
+            nodes("""{"tag":"composer_input"}""").singleOrNull()?.get("value") == "Summarize the repo"
+        }
+        agentTaps("send_button")
+        agentWaitsFor("the agent's reply") { nodes("""{"text":"Repository is clean on main branch."}""").isNotEmpty() }
+        waitForText("Repository is clean on main branch.")
+
+        // Every control action is in the app's debug log, and no frame leaked the token.
+        val logged = (agent("logs", """{"categories":["app_state"],"limit":200}""")["events"] as List<Map<String, Any?>>)
+            .map { it["detail"] as String }
+        assertTrue(logged.any { it.contains("'tap'") })
+        assertTrue(logged.any { it.contains("'type'") })
+        assertTrue(activeDaemon.receivedAppFrames.none { it.contains(activeDaemon.token) })
+
+        // Turning control off takes effect immediately; inspection keeps working.
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        composeRule.onNodeWithTag("menu_app_settings").performClick()
+        waitForTag("debug_sharing_switch")
+        composeRule.onNodeWithTag("debug_remote_control_switch").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("controlEnabled") == false }
+        assertEquals(false, activeDaemon.requestAppState("tap", """{"tag":"settings_back_button"}""")["ok"])
+        assertEquals("settings", screen())
     }
 
     @Test

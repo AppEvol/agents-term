@@ -163,56 +163,54 @@ internal const val INLINE_CODE_TAG = "inline-code"
 internal fun parseInlineStyles(
     text: String,
     inlineCodeFg: Color,
-): AnnotatedString {
-    return buildAnnotatedString {
-        var idx = 0
-        val len = text.length
-        while (idx < len) {
-            // Inline code `...`
-            if (text[idx] == '`') {
-                val end = text.indexOf('`', idx + 1)
-                if (end > idx) {
-                    pushStringAnnotation(INLINE_CODE_TAG, "")
-                    withStyle(
-                        SpanStyle(
-                            fontFamily = MonoFontFamily,
-                            color = inlineCodeFg,
-                            fontSize = 13.sp,
-                        )
-                    ) {
-                        // The surrounding spaces are the chip's inner padding.
-                        append(" ${text.substring(idx + 1, end)} ")
-                    }
-                    pop()
-                    idx = end + 1
-                    continue
+): AnnotatedString = buildAnnotatedString {
+    var idx = 0
+    val len = text.length
+    while (idx < len) {
+        // Inline code `...`
+        if (text[idx] == '`') {
+            val end = text.indexOf('`', idx + 1)
+            if (end > idx) {
+                pushStringAnnotation(INLINE_CODE_TAG, "")
+                withStyle(
+                    SpanStyle(
+                        fontFamily = MonoFontFamily,
+                        color = inlineCodeFg,
+                        fontSize = 13.sp,
+                    ),
+                ) {
+                    // The surrounding spaces are the chip's inner padding.
+                    append(" ${text.substring(idx + 1, end)} ")
                 }
+                pop()
+                idx = end + 1
+                continue
             }
-            // Bold **...**
-            if (idx + 1 < len && text[idx] == '*' && text[idx + 1] == '*') {
-                val end = text.indexOf("**", idx + 2)
-                if (end > idx) {
-                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                        append(text.substring(idx + 2, end))
-                    }
-                    idx = end + 2
-                    continue
-                }
-            }
-            // Italic *...*
-            if (text[idx] == '*') {
-                val end = text.indexOf('*', idx + 1)
-                if (end > idx + 1 && !text.substring(idx + 1, end).contains('\n')) {
-                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                        append(text.substring(idx + 1, end))
-                    }
-                    idx = end + 1
-                    continue
-                }
-            }
-            append(text[idx])
-            idx++
         }
+        // Bold **...**
+        if (idx + 1 < len && text[idx] == '*' && text[idx + 1] == '*') {
+            val end = text.indexOf("**", idx + 2)
+            if (end > idx) {
+                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                    append(text.substring(idx + 2, end))
+                }
+                idx = end + 2
+                continue
+            }
+        }
+        // Italic *...*
+        if (text[idx] == '*') {
+            val end = text.indexOf('*', idx + 1)
+            if (end > idx + 1 && !text.substring(idx + 1, end).contains('\n')) {
+                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                    append(text.substring(idx + 1, end))
+                }
+                idx = end + 1
+                continue
+            }
+        }
+        append(text[idx])
+        idx++
     }
 }
 
@@ -240,7 +238,7 @@ internal fun inlineCodeLineRects(layout: TextLayoutResult): List<Rect> {
                     top = layout.getLineTop(line),
                     right = maxOf(first.right, last.right),
                     bottom = layout.getLineBottom(line),
-                )
+                ),
             )
         }
     }

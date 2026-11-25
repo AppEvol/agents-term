@@ -13,8 +13,11 @@ data class DebugSharingSettings(
     val autoUploadOnError: Boolean = false,
     /** Lets agents on the connected VM query live app state (logs, state, screenshots) via the daemon. */
     val remoteInspectionEnabled: Boolean = false,
+    /** Also lets those agents tap, swipe and type in the app (app_state_cli tap/swipe/type/key). */
+    val remoteControlEnabled: Boolean = false,
 ) {
     val remoteInspectionActive: Boolean get() = enabled && remoteInspectionEnabled
+    val remoteControlActive: Boolean get() = remoteInspectionActive && remoteControlEnabled
 }
 
 data class DebugDumpUploadState(
@@ -31,7 +34,7 @@ private val queryTokenRegex = Regex("""(?i)((?:[?&]|\b)token=)[^&\s"'`<>)\]]+"""
 private val labelTokenRegex = Regex("""(?i)(\btoken\s*:\s*)\S+""")
 private val jsonTokenRegex = Regex("""(?i)("token"\s*:\s*")([^"]*)(")""")
 private val privateKeyBlockRegex = Regex(
-    """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----"""
+    """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----""",
 )
 
 /**
@@ -53,9 +56,7 @@ fun formatIsoUtc(epochMs: Long): String {
     return fmt.format(Date(epochMs))
 }
 
-fun generateDebugDumpId(): String {
-    return UUID.randomUUID().toString().substring(0, 8)
-}
+fun generateDebugDumpId(): String = UUID.randomUUID().toString().substring(0, 8)
 
 /**
  * Thread-safe bounded ring buffer capturing sanitized HTTP, WebSocket, SSH, and UI events

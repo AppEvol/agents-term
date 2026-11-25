@@ -1,7 +1,6 @@
 package com.example.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -74,7 +72,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.data.AgentModelOption
 import com.example.data.ConnectionState
 import com.example.data.ModelSlashCommand
 import com.example.data.TabRecord
@@ -91,7 +88,6 @@ import com.example.ui.theme.HerdrAmber
 import com.example.ui.theme.HerdrEmerald
 import com.example.ui.theme.HerdrRed
 import com.example.ui.theme.MonoFontFamily
-import com.example.ui.theme.statusColor
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -233,7 +229,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                     viewModel.updateTabStatus(tab.id, nextStatus) {
                         scope.launch {
                             snackbarHostState.showSnackbar(
-                                if (markDone) "Tab marked as done" else "Tab marked as active"
+                                if (markDone) "Tab marked as done" else "Tab marked as active",
                             )
                         }
                     }
@@ -252,6 +248,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                     }
                     when (modelCmd) {
                         is ModelSlashCommand.OpenPicker -> openModelPickerForActiveTab()
+
                         is ModelSlashCommand.ResetToDefault -> {
                             if (current != null) {
                                 viewModel.updateTabModel(current.id, null) {
@@ -261,6 +258,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                                 }
                             }
                         }
+
                         is ModelSlashCommand.SetModel -> {
                             if (current != null) {
                                 val (models, _) = resolveAgentModelCatalog(
@@ -276,10 +274,17 @@ fun HerdrApp(viewModel: MainViewModel) {
                                 }
                             }
                         }
+
                         null -> viewModel.sendMessage(rawText)
                     }
                 },
                 onInterrupt = { viewModel.interruptActiveTab() },
+                onForceInterrupt = { draftText ->
+                    viewModel.interruptActiveTab(processQueue = true, text = draftText)
+                },
+                onRemoveQueuedMessage = { queuedId ->
+                    viewModel.removeQueuedMessage(queuedId)
+                },
                 onRetryFullAccess = { viewModel.retryLastUserPromptWithFullAccess() },
             )
         }
@@ -417,7 +422,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                             viewModel.renameTab(current.id, titleInput.trim())
                         }
                         showRenameDialog = false
-                    }
+                    },
                 ) { Text(stringResource(R.string.action_save)) }
             },
             dismissButton = {
@@ -555,7 +560,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         viewModel.updateTabSystemPrompt(current.id, effective) {
                             scope.launch {
                                 snackbarHostState.showSnackbar(
-                                    if (effective.isEmpty()) "System prompt cleared" else "System prompt updated"
+                                    if (effective.isEmpty()) "System prompt cleared" else "System prompt updated",
                                 )
                             }
                         }
@@ -700,6 +705,8 @@ private fun WorkspaceScaffold(
     onReconnect: () -> Unit,
     onSendMessage: (String) -> Unit,
     onInterrupt: () -> Unit,
+    onForceInterrupt: (String?) -> Unit,
+    onRemoveQueuedMessage: (String) -> Unit,
     onRetryFullAccess: () -> Unit,
 ) {
     val activeTab = state.activeTab
@@ -736,7 +743,7 @@ private fun WorkspaceScaffold(
                                         if (state.attentionCount > 0) {
                                             Badge { Text(state.attentionCount.toString()) }
                                         }
-                                    }
+                                    },
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.Menu,
@@ -770,11 +777,10 @@ private fun WorkspaceScaffold(
                                                 .testTag("topbar_done_icon"),
                                         )
                                     } else {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(7.dp)
-                                                .clip(CircleShape)
-                                                .background(statusColor(activeTab.status))
+                                        TabStatusDot(
+                                            status = activeTab.status,
+                                            dotSize = 7.dp,
+                                            modifier = Modifier.testTag("top_bar_status_dot"),
                                         )
                                     }
                                     Text(
@@ -887,8 +893,8 @@ private fun WorkspaceScaffold(
                                                                 R.string.action_mark_tab_active
                                                             } else {
                                                                 R.string.action_mark_task_done
-                                                            }
-                                                        )
+                                                            },
+                                                        ),
                                                     )
                                                 },
                                                 onClick = {
@@ -1015,6 +1021,8 @@ private fun WorkspaceScaffold(
                 onOpenModelPicker = if (activeTab.agent != "shell") onChangeModel else null,
                 onSendMessage = onSendMessage,
                 onInterrupt = onInterrupt,
+                onForceInterrupt = onForceInterrupt,
+                onRemoveQueuedMessage = onRemoveQueuedMessage,
                 onRetryFullAccess = onRetryFullAccess,
                 modifier = Modifier.padding(innerPadding),
             )
@@ -1075,11 +1083,9 @@ private fun QuickTabStrip(
                                     .testTag("quick_tab_done_icon_${tab.id}"),
                             )
                         } else {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(statusColor(tab.status))
+                            TabStatusDot(
+                                status = tab.status,
+                                dotSize = 8.dp,
                             )
                         }
                         Text(
