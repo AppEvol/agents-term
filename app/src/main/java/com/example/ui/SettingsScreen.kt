@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -57,7 +56,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -78,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.AppThemeId
 import com.example.data.ConnectionState
 import com.example.data.DebugDumpUploadState
 import com.example.data.DebugEvent
@@ -86,12 +85,11 @@ import com.example.data.SshProfile
 import com.example.data.WorkspaceState
 import com.example.data.captureWindowScreenshotBase64
 import com.example.data.shareDebugBundleFile
-import com.example.ui.theme.HerdrAmber
-import com.example.ui.theme.HerdrBlue
-import com.example.ui.theme.HerdrEmerald
-import com.example.ui.theme.HerdrIdleSlate
-import com.example.ui.theme.HerdrRed
+import com.example.ui.theme.AppTheme
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.TitleBarBackground
+import com.example.ui.theme.themedCorner
+import com.example.ui.theme.titleBarColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -108,6 +106,8 @@ fun SettingsScreen(
     workspaceState: WorkspaceState,
     sshProfile: SshProfile = SshProfile(),
     debugSettings: DebugSharingSettings,
+    appTheme: AppThemeId = AppThemeId.Default,
+    onSelectTheme: (AppThemeId) -> Unit = {},
     uploadState: DebugDumpUploadState,
     eventCount: Int,
     hasLastCrash: Boolean,
@@ -144,29 +144,29 @@ fun SettingsScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-                navigationIcon = {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("settings_back_button"),
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = stringResource(R.string.action_back),
+            TitleBarBackground {
+                TopAppBar(
+                    colors = titleBarColors(),
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.testTag("settings_back_button"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = stringResource(R.string.action_back),
+                            )
+                        }
+                    },
+                    title = {
+                        Text(
+                            text = stringResource(R.string.settings_title),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
                         )
-                    }
-                },
-                title = {
-                    Text(
-                        text = stringResource(R.string.settings_title),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                },
-            )
+                    },
+                )
+            }
         },
     ) { innerPadding ->
         Box(
@@ -184,9 +184,11 @@ fun SettingsScreen(
                     .padding(horizontal = 18.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                ThemePickerCard(selected = appTheme, onSelect = onSelectTheme)
+
                 // 1. VM Connection Card
                 Surface(
-                    shape = RoundedCornerShape(18.dp),
+                    shape = themedCorner(18.dp),
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.fillMaxWidth(),
@@ -217,10 +219,10 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             val dotColor = when (workspaceState.connectionState) {
-                                ConnectionState.CONNECTED -> HerdrEmerald
-                                ConnectionState.CONNECTING -> HerdrBlue
-                                ConnectionState.ERROR -> HerdrRed
-                                ConnectionState.DISCONNECTED -> HerdrIdleSlate
+                                ConnectionState.CONNECTED -> AppTheme.colors.success
+                                ConnectionState.CONNECTING -> AppTheme.colors.info
+                                ConnectionState.ERROR -> AppTheme.colors.danger
+                                ConnectionState.DISCONNECTED -> AppTheme.colors.idle
                             }
                             Box(
                                 modifier = Modifier
@@ -250,7 +252,7 @@ fun SettingsScreen(
 
                         OutlinedButton(
                             onClick = onOpenVmConnection,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = themedCorner(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("settings_open_vm_connection"),
@@ -273,7 +275,7 @@ fun SettingsScreen(
                                         snackbarHostState.showSnackbar(copiedLinkMsg)
                                     }
                                 },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = themedCorner(12.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("settings_copy_setup_link_button"),
@@ -292,7 +294,7 @@ fun SettingsScreen(
 
                 // 2. Debug Sharing to VM Card
                 Surface(
-                    shape = RoundedCornerShape(18.dp),
+                    shape = themedCorner(18.dp),
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     border = BorderStroke(
                         width = 1.dp,
@@ -394,7 +396,7 @@ fun SettingsScreen(
 
                         // VM destination path indicator
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = themedCorner(12.dp),
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -425,7 +427,7 @@ fun SettingsScreen(
                             minLines = 2,
                             maxLines = 4,
                             enabled = !uploadState.isUploading,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = themedCorner(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("debug_note_input"),
@@ -433,7 +435,7 @@ fun SettingsScreen(
 
                         if (!uploadState.lastError.isNullOrBlank()) {
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = themedCorner(12.dp),
                                 color = MaterialTheme.colorScheme.errorContainer,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
@@ -461,7 +463,7 @@ fun SettingsScreen(
                             Text(
                                 text = stringResource(R.string.settings_debug_disconnected_hint),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = HerdrAmber,
+                                color = AppTheme.colors.warning,
                             )
                         }
 
@@ -477,7 +479,7 @@ fun SettingsScreen(
                                 }
                             },
                             enabled = isConnected && !uploadState.isUploading,
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(50.dp)
@@ -532,7 +534,7 @@ fun SettingsScreen(
                                 }
                             },
                             enabled = !isExportingZip,
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
@@ -550,9 +552,9 @@ fun SettingsScreen(
                         // Last Uploaded Dump confirmation card
                         if (!uploadState.lastRemoteDir.isNullOrBlank()) {
                             Surface(
-                                shape = RoundedCornerShape(14.dp),
-                                color = HerdrEmerald.copy(alpha = 0.12f),
-                                border = BorderStroke(1.dp, HerdrEmerald.copy(alpha = 0.45f)),
+                                shape = themedCorner(14.dp),
+                                color = AppTheme.colors.success.copy(alpha = 0.12f),
+                                border = BorderStroke(1.dp, AppTheme.colors.success.copy(alpha = 0.45f)),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("last_uploaded_dump_card"),
@@ -568,13 +570,13 @@ fun SettingsScreen(
                                         Icon(
                                             imageVector = Icons.Rounded.CheckCircle,
                                             contentDescription = null,
-                                            tint = HerdrEmerald,
+                                            tint = AppTheme.colors.success,
                                             modifier = Modifier.size(18.dp),
                                         )
                                         Text(
                                             text = stringResource(R.string.settings_debug_last_upload_title),
                                             style = MaterialTheme.typography.labelLarge,
-                                            color = HerdrEmerald,
+                                            color = AppTheme.colors.success,
                                             modifier = Modifier.weight(1f),
                                         )
                                         IconButton(
@@ -593,7 +595,7 @@ fun SettingsScreen(
                                             Icon(
                                                 imageVector = if (copiedPath) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
                                                 contentDescription = stringResource(R.string.settings_debug_copy_path),
-                                                tint = HerdrEmerald,
+                                                tint = AppTheme.colors.success,
                                                 modifier = Modifier.size(16.dp),
                                             )
                                         }
@@ -617,7 +619,7 @@ fun SettingsScreen(
 
                 // 3. Diagnostics Buffer Card
                 Surface(
-                    shape = RoundedCornerShape(18.dp),
+                    shape = themedCorner(18.dp),
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.fillMaxWidth(),
@@ -662,14 +664,14 @@ fun SettingsScreen(
                             Text(
                                 text = stringResource(R.string.settings_debug_crash_detected),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = HerdrRed,
+                                color = AppTheme.colors.danger,
                             )
                         }
 
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(themedCorner(10.dp))
                                 .clickable { showRecentEvents = !showRecentEvents }
                                 .padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -698,7 +700,7 @@ fun SettingsScreen(
                                     .verticalScroll(rememberScrollState())
                                     .background(
                                         color = MaterialTheme.colorScheme.surfaceContainerLowest,
-                                        shape = RoundedCornerShape(10.dp),
+                                        shape = themedCorner(10.dp),
                                     )
                                     .padding(10.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -719,7 +721,7 @@ fun SettingsScreen(
                                                 lineHeight = 15.sp,
                                             ),
                                             color = if (evt.category == "error") {
-                                                HerdrRed
+                                                AppTheme.colors.danger
                                             } else {
                                                 MaterialTheme.colorScheme.onSurface
                                             },

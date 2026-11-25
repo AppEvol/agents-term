@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -50,6 +49,7 @@ import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,6 +60,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -105,13 +106,15 @@ import com.example.data.TailscaleStatus
 import com.example.data.defaultAgyBootstrapPrompt
 import com.example.data.parseSshSetupInput
 import com.example.data.tailscaleStatusFlow
+import com.example.ui.theme.AppTheme
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkOnSurface
-import com.example.ui.theme.HerdrAmber
 import com.example.ui.theme.HerdrBlue
 import com.example.ui.theme.HerdrEmerald
-import com.example.ui.theme.HerdrRed
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.TitleBarBackground
+import com.example.ui.theme.themedCorner
+import com.example.ui.theme.titleBarColors
 import kotlinx.coroutines.delay
 import java.util.Locale
 
@@ -128,7 +131,7 @@ private fun rememberTailscaleStatus(): TailscaleStatus? {
 @Composable
 private fun TailscaleStatusHint(status: TailscaleStatus) {
     val active = status as? TailscaleStatus.Active
-    val tint = if (active != null) HerdrEmerald else HerdrAmber
+    val tint = if (active != null) AppTheme.colors.success else AppTheme.colors.warning
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -160,7 +163,7 @@ private enum class ConnectMode {
     DIRECT_URI,
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectScreen(
     initialConfig: ConnectionConfig,
@@ -289,12 +292,49 @@ fun ConnectScreen(
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TitleBarBackground {
+                TopAppBar(
+                    colors = titleBarColors(),
+                    navigationIcon = {
+                        if (canCancel) {
+                            IconButton(
+                                onClick = onCancel,
+                                modifier = Modifier.testTag("connect_back_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                    contentDescription = stringResource(R.string.action_back),
+                                )
+                            }
+                        }
+                    },
+                    title = {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = onOpenAppSettings,
+                            modifier = Modifier.testTag("connect_settings_button"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Settings,
+                                contentDescription = stringResource(R.string.action_app_settings),
+                            )
+                        }
+                    },
+                )
+            }
+        },
     ) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .statusBarsPadding()
                 .navigationBarsPadding()
                 .imePadding(),
             contentAlignment = Alignment.TopCenter,
@@ -307,36 +347,9 @@ fun ConnectScreen(
                     .padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = if (canCancel) Arrangement.SpaceBetween else Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (canCancel) {
-                        IconButton(
-                            onClick = onCancel,
-                            modifier = Modifier.testTag("connect_back_button"),
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                                contentDescription = stringResource(R.string.action_back),
-                            )
-                        }
-                    }
-                    IconButton(
-                        onClick = onOpenAppSettings,
-                        modifier = Modifier.testTag("connect_settings_button"),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Settings,
-                            contentDescription = stringResource(R.string.action_app_settings),
-                        )
-                    }
-                }
-
-                // Atmospheric hero header card
+                // Atmospheric hero header card. It sits on a dark photo, so its colors are fixed, not themed.
                 Surface(
-                    shape = RoundedCornerShape(22.dp),
+                    shape = themedCorner(22.dp),
                     color = DarkBackground,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier
@@ -370,7 +383,7 @@ fun ConnectScreen(
                             verticalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Surface(
-                                shape = RoundedCornerShape(10.dp),
+                                shape = themedCorner(10.dp),
                                 color = HerdrBlue.copy(alpha = 0.22f),
                                 border = BorderStroke(1.dp, HerdrBlue.copy(alpha = 0.45f)),
                             ) {
@@ -415,7 +428,7 @@ fun ConnectScreen(
 
                 // Mode switcher: SSH + agy Auto-Setup vs Direct / Pairing URI
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = themedCorner(16.dp),
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.fillMaxWidth(),
@@ -450,7 +463,7 @@ fun ConnectScreen(
                 if (mode == ConnectMode.SSH_BOOTSTRAP) {
                     // SSH + Antigravity (agy) zero-touch setup card
                     Surface(
-                        shape = RoundedCornerShape(18.dp),
+                        shape = themedCorner(18.dp),
                         color = MaterialTheme.colorScheme.surfaceContainer,
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
                         modifier = Modifier.fillMaxWidth(),
@@ -488,13 +501,13 @@ fun ConnectScreen(
                                     Icon(
                                         imageVector = Icons.Rounded.CheckCircle,
                                         contentDescription = null,
-                                        tint = HerdrEmerald,
+                                        tint = AppTheme.colors.success,
                                         modifier = Modifier.size(15.dp),
                                     )
                                     Text(
                                         text = stringResource(R.string.ssh_already_bootstrapped),
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = HerdrEmerald,
+                                        color = AppTheme.colors.success,
                                     )
                                 }
                             }
@@ -524,7 +537,7 @@ fun ConnectScreen(
                                     .fillMaxWidth()
                                     .height(44.dp)
                                     .testTag("ssh_autofill_clipboard_button"),
-                                shape = RoundedCornerShape(12.dp),
+                                shape = themedCorner(12.dp),
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.ContentPaste,
@@ -573,7 +586,7 @@ fun ConnectScreen(
                                 contentType = ContentType("ssh_host") + ContentType("hostname")
                             }
                             .testTag("ssh_host_input"),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = themedCorner(14.dp),
                     )
 
                     OutlinedTextField(
@@ -595,7 +608,7 @@ fun ConnectScreen(
                                 contentType = ContentType.Username
                             }
                             .testTag("ssh_username_input"),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = themedCorner(14.dp),
                     )
 
                     Row(
@@ -614,7 +627,7 @@ fun ConnectScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("ssh_port_input"),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                         )
                         OutlinedTextField(
                             value = daemonPortText,
@@ -635,7 +648,7 @@ fun ConnectScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("ssh_daemon_port_input"),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                         )
                     }
 
@@ -705,7 +718,7 @@ fun ConnectScreen(
                                     contentType = ContentType.Password
                                 }
                                 .testTag("ssh_password_input"),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                         )
                     } else if (sshAuthMethod == SshAuthMethod.PRIVATE_KEY) {
                         OutlinedTextField(
@@ -720,7 +733,7 @@ fun ConnectScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("ssh_private_key_input"),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                         )
                         OutlinedTextField(
                             value = sshPassphrase,
@@ -740,13 +753,13 @@ fun ConnectScreen(
                                     contentType = ContentType.Password
                                 }
                                 .testTag("ssh_passphrase_input"),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                         )
                     }
 
                     // Expandable agy prompt customization
                     Surface(
-                        shape = RoundedCornerShape(14.dp),
+                        shape = themedCorner(14.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         modifier = Modifier.fillMaxWidth(),
@@ -800,7 +813,7 @@ fun ConnectScreen(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .testTag("agy_prompt_input"),
-                                        shape = RoundedCornerShape(12.dp),
+                                        shape = themedCorner(12.dp),
                                     )
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -835,13 +848,13 @@ fun ConnectScreen(
                     if (bootstrapState.isRunning) {
                         OutlinedButton(
                             onClick = onCancelSshBootstrap,
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = HerdrRed),
-                            border = BorderStroke(1.dp, HerdrRed.copy(alpha = 0.6f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AppTheme.colors.danger),
+                            border = BorderStroke(1.dp, AppTheme.colors.danger.copy(alpha = 0.6f)),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(54.dp)
                                 .testTag("cancel_bootstrap_button"),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                         ) {
                             Icon(Icons.Rounded.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
@@ -867,7 +880,7 @@ fun ConnectScreen(
                                 .fillMaxWidth()
                                 .height(54.dp)
                                 .testTag("ssh_bootstrap_button"),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.AutoAwesome,
@@ -884,7 +897,7 @@ fun ConnectScreen(
                 } else {
                     // Direct / Pairing URI mode
                     Surface(
-                        shape = RoundedCornerShape(18.dp),
+                        shape = themedCorner(18.dp),
                         color = MaterialTheme.colorScheme.surfaceContainer,
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         modifier = Modifier.fillMaxWidth(),
@@ -920,7 +933,7 @@ fun ConnectScreen(
                                     .fillMaxWidth()
                                     .height(48.dp)
                                     .testTag("paste_uri_button"),
-                                shape = RoundedCornerShape(12.dp),
+                                shape = themedCorner(12.dp),
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.ContentPaste,
@@ -970,7 +983,7 @@ fun ConnectScreen(
                                 contentType = ContentType("vm_host") + ContentType("hostname")
                             }
                             .testTag("host_input"),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = themedCorner(14.dp),
                     )
 
                     OutlinedTextField(
@@ -984,7 +997,7 @@ fun ConnectScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("port_input"),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = themedCorner(14.dp),
                     )
 
                     OutlinedTextField(
@@ -1024,12 +1037,12 @@ fun ConnectScreen(
                                 contentType = ContentType.Password
                             }
                             .testTag("token_input"),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = themedCorner(14.dp),
                     )
 
                     if (!errorMessage.isNullOrBlank()) {
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = themedCorner(12.dp),
                             color = MaterialTheme.colorScheme.errorContainer,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -1059,7 +1072,7 @@ fun ConnectScreen(
                             .fillMaxWidth()
                             .height(54.dp)
                             .testTag("connect_button"),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = themedCorner(14.dp),
                     ) {
                         if (isTesting) {
                             CircularProgressIndicator(
@@ -1078,7 +1091,7 @@ fun ConnectScreen(
                     }
 
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = themedCorner(12.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -1116,11 +1129,11 @@ private fun ModeTabButton(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = themedCorner(12.dp),
         color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
         modifier = modifier
             .height(44.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(themedCorner(12.dp))
             .clickable(onClick = onClick),
     ) {
         Row(
@@ -1194,13 +1207,13 @@ private fun BootstrapConsoleCard(
     }
 
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = themedCorner(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLowest,
         border = BorderStroke(
             width = 1.dp,
             color = when (state.phase) {
-                BootstrapPhase.ERROR -> HerdrRed.copy(alpha = 0.6f)
-                BootstrapPhase.SUCCEEDED -> HerdrEmerald.copy(alpha = 0.6f)
+                BootstrapPhase.ERROR -> AppTheme.colors.danger.copy(alpha = 0.6f)
+                BootstrapPhase.SUCCEEDED -> AppTheme.colors.success.copy(alpha = 0.6f)
                 else -> MaterialTheme.colorScheme.outlineVariant
             },
         ),
@@ -1218,7 +1231,7 @@ private fun BootstrapConsoleCard(
                     CircularProgressIndicator(
                         modifier = Modifier.size(15.dp),
                         strokeWidth = 2.dp,
-                        color = HerdrBlue,
+                        color = AppTheme.colors.info,
                     )
                 }
                 Text(
@@ -1257,7 +1270,7 @@ private fun BootstrapConsoleCard(
                         Icon(
                             imageVector = if (copiedLogs) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
                             contentDescription = stringResource(R.string.ssh_copy_logs),
-                            tint = if (copiedLogs) HerdrEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (copiedLogs) AppTheme.colors.success else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp),
                         )
                     }
@@ -1270,7 +1283,7 @@ private fun BootstrapConsoleCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = when (state.phase) {
                         BootstrapPhase.ERROR -> MaterialTheme.colorScheme.error
-                        BootstrapPhase.SUCCEEDED -> HerdrEmerald
+                        BootstrapPhase.SUCCEEDED -> AppTheme.colors.success
                         else -> MaterialTheme.colorScheme.onSurface
                     },
                 )
@@ -1292,7 +1305,7 @@ private fun BootstrapConsoleCard(
                         .verticalScroll(logScrollState)
                         .background(
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
-                            shape = RoundedCornerShape(10.dp),
+                            shape = themedCorner(10.dp),
                         )
                         .padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -1306,9 +1319,9 @@ private fun BootstrapConsoleCard(
                                 lineHeight = 16.sp,
                             ),
                             color = when {
-                                line.startsWith("[stderr]") -> HerdrAmber
-                                line.startsWith("[tool done]") -> HerdrEmerald
-                                line.startsWith("[tool]") -> HerdrBlue
+                                line.startsWith("[stderr]") -> AppTheme.colors.warning
+                                line.startsWith("[tool done]") -> AppTheme.colors.success
+                                line.startsWith("[tool]") -> AppTheme.colors.info
                                 line.startsWith(">>>") -> MaterialTheme.colorScheme.primary
                                 else -> MaterialTheme.colorScheme.onSurface
                             },
@@ -1321,10 +1334,10 @@ private fun BootstrapConsoleCard(
                 Button(
                     onClick = onTrustNewKeyAndRetry,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = HerdrAmber,
-                        contentColor = Color.Black,
+                        containerColor = AppTheme.colors.warning,
+                        contentColor = AppTheme.colors.onWarning,
                     ),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = themedCorner(10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)

@@ -50,3 +50,49 @@ val LightOnSurfaceVariant = Color(0xFF475569)
 val LightOutline = Color(0xFFCBD5E1)
 val LightOutlineVariant = Color(0xFFE2E8F0)
 val LightError = Color(0xFFDC2626)
+
+// Semantic colors tuned for the light palette, where the dark palette's pastels wash out.
+val LightInfo = Color(0xFF1D4ED8)
+val LightSuccess = Color(0xFF047857)
+val LightWarning = Color(0xFFB45309)
+val LightAccent = Color(0xFF6D28D9)
+val LightIdle = Color(0xFF64748B)
+
+// Windows XP "Luna" palette
+val LunaBlue = Color(0xFF0054E3)
+val LunaNavy = Color(0xFF0A246A)
+val LunaSelection = Color(0xFF316AC5)
+val LunaSelectionSoft = Color(0xFFC1D2EE)
+val LunaBeige = Color(0xFFECE9D8)
+val LunaBeigeLight = Color(0xFFF7F5EC)
+val LunaBeigeDeep = Color(0xFFE2DEC9)
+val LunaBeigeDeeper = Color(0xFFD6D1BA)
+val LunaBeigeShadow = Color(0xFFBDB9A5)
+val LunaInputBorder = Color(0xFF7F9DB9)
+val LunaInk = Color(0xFF000000)
+val LunaInkMuted = Color(0xFF4A473A)
+val LunaStartGreen = Color(0xFF388E2B)
+val LunaGreen = Color(0xFF1F7A16)
+val LunaOrange = Color(0xFFB85C00)
+val LunaRed = Color(0xFFC4210F)
+val LunaPurple = Color(0xFF6B3FA0)
+val LunaIdle = Color(0xFF7A7868)
+val LunaTooltip = Color(0xFFFFFFE1)
+
+// The Luna title bar: a bright highlight at the top edge, falling to a deep blue at the bottom.
+val LunaTitleBarStops = arrayOf(
+    0.00f to Color(0xFF0997FF),
+    0.08f to Color(0xFF0053EE),
+    0.40f to Color(0xFF0050EE),
+    0.88f to Color(0xFF0066FF),
+    1.00f to Color(0xFF003DD7),
+)
+val LunaOnTitleBarMuted = Color(0xFFD6E4FF)
+
+// Status colors that stay readable on the blue title bar.
+val LunaTitleInfo = Color(0xFFBFDCFF)
+val LunaTitleSuccess = Color(0xFF9BF57A)
+val LunaTitleWarning = Color(0xFFFFD75E)
+val LunaTitleDanger = Color(0xFFFFB3A8)
+val LunaTitleAccent = Color(0xFFE0CCFF)
+val LunaTitleIdle = Color(0xFFC9D8F5)

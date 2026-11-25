@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
+import com.example.data.AppThemeId
 import com.example.ui.theme.HerdrTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -55,7 +56,7 @@ class CodeChipRenderTest {
         var background = 0
         var codeBackground = 0
         compose.setContent {
-            HerdrTheme(darkTheme = darkTheme) {
+            HerdrTheme(theme = if (darkTheme) AppThemeId.MIDNIGHT else AppThemeId.DAYLIGHT) {
                 background = MaterialTheme.colorScheme.background.toArgb()
                 codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest.toArgb()
                 Box(

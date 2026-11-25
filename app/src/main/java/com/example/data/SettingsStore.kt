@@ -1,6 +1,7 @@
 package com.example.data
 
 import android.content.Context
+import androidx.core.content.edit
 
 interface ConnectionSettings {
     fun loadConnection(): ConnectionConfig
@@ -108,6 +109,12 @@ class SettingsStore(context: Context) : ConnectionSettings {
         prefs.edit().putStringSet(KEY_BOOTSTRAPPED_HOSTS, updated).apply()
     }
 
+    fun loadAppTheme(): AppThemeId = AppThemeId.fromStorageKey(prefs.getString(KEY_APP_THEME, null))
+
+    fun saveAppTheme(theme: AppThemeId) {
+        prefs.edit { putString(KEY_APP_THEME, theme.storageKey) }
+    }
+
     fun loadDebugSharingSettings(): DebugSharingSettings = DebugSharingSettings(
         enabled = prefs.getBoolean(KEY_DEBUG_SHARING_ENABLED, false),
         includeScreenshot = prefs.getBoolean(KEY_DEBUG_INCLUDE_SCREENSHOT, true),
@@ -167,6 +174,7 @@ class SettingsStore(context: Context) : ConnectionSettings {
         private const val KEY_SSH_DAEMON_PORT = "ssh_daemon_port"
         private const val KEY_HOST_KEY_PREFIX = "ssh_host_fp_"
         private const val KEY_BOOTSTRAPPED_HOSTS = "bootstrapped_hosts"
+        private const val KEY_APP_THEME = "app_theme"
         private const val KEY_DEBUG_SHARING_ENABLED = "debug_sharing_enabled"
         private const val KEY_DEBUG_INCLUDE_SCREENSHOT = "debug_include_screenshot"
         private const val KEY_DEBUG_INCLUDE_LOGCAT = "debug_include_logcat"

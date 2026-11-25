@@ -27,7 +27,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
-import com.example.ui.theme.HerdrBlue
+import com.example.ui.theme.AppTheme
+import com.example.ui.theme.SemanticColors
 import com.example.ui.theme.statusColor
 import kotlin.math.PI
 import kotlin.math.sin
@@ -53,8 +54,9 @@ fun TabStatusDot(
     status: String,
     dotSize: Dp = 8.dp,
     modifier: Modifier = Modifier,
+    colors: SemanticColors = AppTheme.colors,
 ) {
-    val color = statusColor(status)
+    val color = statusColor(status, colors)
     if (status == "working") {
         val transition = rememberInfiniteTransition(label = "tab_working_dot")
         val progress by transition.animateFloat(
@@ -104,7 +106,7 @@ fun TabStatusDot(
  */
 @Composable
 fun WorkingPulseDots(
-    color: Color = HerdrBlue,
+    color: Color = AppTheme.colors.info,
     dotSize: Dp = 5.dp,
     modifier: Modifier = Modifier,
 ) {

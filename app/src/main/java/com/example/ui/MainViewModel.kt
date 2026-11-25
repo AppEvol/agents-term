@@ -10,6 +10,7 @@ import com.example.data.AndroidUiDriver
 import com.example.data.AppStateCommandException
 import com.example.data.AppStateReporter
 import com.example.data.AppStateSources
+import com.example.data.AppThemeId
 import com.example.data.AppUiController
 import com.example.data.BootstrapPhase
 import com.example.data.BootstrapUiState
@@ -98,6 +99,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _debugSettings = MutableStateFlow(settings.loadDebugSharingSettings())
     val debugSettings: StateFlow<DebugSharingSettings> = _debugSettings.asStateFlow()
+
+    private val _appTheme = MutableStateFlow(settings.loadAppTheme())
+    val appTheme: StateFlow<AppThemeId> = _appTheme.asStateFlow()
 
     private val _debugUploadState = MutableStateFlow(settings.loadLastDebugUpload())
     val debugUploadState: StateFlow<DebugDumpUploadState> = _debugUploadState.asStateFlow()
@@ -202,6 +206,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeAppSettings() {
         _showSettingsScreen.value = false
+    }
+
+    fun setAppTheme(theme: AppThemeId) {
+        if (_appTheme.value == theme) return
+        _appTheme.value = theme
+        settings.saveAppTheme(theme)
+        debugRecorder.record(category = "ui", event = "app_theme_changed", detail = theme.storageKey)
     }
 
     fun updateDebugSettings(transform: (DebugSharingSettings) -> DebugSharingSettings) {
@@ -332,6 +343,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _showConnectScreen.value -> "connect"
                     else -> "workspace"
                 },
+                "theme" to _appTheme.value.storageKey,
                 "appInForeground" to (ForegroundActivityTracker.current() != null),
                 "isTestingConnection" to _isTestingConnection.value,
                 "hasPendingPairing" to (_pendingPairingConfig.value != null),

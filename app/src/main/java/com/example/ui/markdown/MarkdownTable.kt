@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -21,6 +20,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.theme.themedCorner
 
 private val CellPaddingHorizontal = 10.dp
 private val CellPaddingVertical = 7.dp
@@ -62,7 +62,7 @@ internal fun MarkdownTable(table: MdBlock.Table, style: MarkdownStyle) {
     val columns = table.header.cells.size
     if (columns == 0) return
     val rows = listOf(table.header) + table.rows
-    val shape = RoundedCornerShape(8.dp)
+    val shape = themedCorner(8.dp)
     val cellStyle = style.body.copy(fontSize = 14.sp, lineHeight = 20.sp)
     val headerStyle = cellStyle.copy(fontWeight = FontWeight.SemiBold)
     BoxWithConstraints {

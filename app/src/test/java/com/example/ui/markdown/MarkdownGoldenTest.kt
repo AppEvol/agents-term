@@ -13,6 +13,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ActivityScenario
+import com.example.data.AppThemeId
 import com.example.ui.theme.HerdrTheme
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Rule
@@ -85,7 +86,7 @@ class MarkdownGoldenTest(private val sample: String, private val viewport: Viewp
         ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 activity.setContent {
-                    HerdrTheme(darkTheme = viewport.darkTheme) {
+                    HerdrTheme(theme = if (viewport.darkTheme) AppThemeId.MIDNIGHT else AppThemeId.DAYLIGHT) {
                         Box(
                             Modifier
                                 .testTag(ROOT_TAG)
