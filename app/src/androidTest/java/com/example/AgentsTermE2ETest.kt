@@ -199,10 +199,6 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("auth_private_key").performScrollTo().performClick()
         composeRule.onNodeWithTag("ssh_private_key_input").performScrollTo().assertIsDisplayed()
 
-        // Expand custom agy bootstrap prompt editor
-        composeRule.onNodeWithTag("toggle_prompt_editor").performScrollTo().performClick()
-        composeRule.onNodeWithTag("agy_prompt_input").performScrollTo().assertIsDisplayed()
-
         // Switch to Direct / URI mode
         composeRule.onNodeWithTag("mode_direct_uri").performScrollTo().performClick()
         composeRule.onNodeWithTag("host_input").performScrollTo().assertIsDisplayed()
@@ -741,7 +737,7 @@ class AgentsTermE2ETest {
         // verifies /api/info on FakeAgentsTermDaemon, and opens the workspace automatically.
         waitForText("Connected to ci-test-vm", timeoutMs = 20_000L)
         assertTrue(fakeSsh.receivedCommands.isNotEmpty())
-        assertTrue(fakeSsh.receivedCommands.first().contains("base64 -d | bash -s"))
+        assertTrue(fakeSsh.receivedCommands.first().contains("base64 -d | sh -s"))
 
         // Create an Antigravity (agy) agent tab and verify full agent streaming workflow
         composeRule.onNodeWithTag("empty_new_tab_button").performClick()

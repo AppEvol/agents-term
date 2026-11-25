@@ -3,20 +3,33 @@ set -euo pipefail
 
 DAEMON_PORT="${DAEMON_PORT:-7591}"
 BRIDGE_PORT="${BRIDGE_PORT:-17591}"
+RELEASE_HTTP_PORT="${RELEASE_HTTP_PORT:-18080}"
 
-# Ensure SSH host keys exist.
 ssh-keygen -A >/dev/null 2>&1
 
-# Optional SSH public key mounted by the test runner for passwordless key auth.
 if [ -f /mnt/ssh-pubkey ]; then
   install -d -m 700 -o vmuser -g vmuser /home/vmuser/.ssh
   install -m 600 -o vmuser -g vmuser /mnt/ssh-pubkey /home/vmuser/.ssh/authorized_keys
 fi
 
-# Create a local bare git remote from /mnt/repo so `git clone https://github.com/nedn/agents-term.git`
-# transparently clones the exact PR commit under test with zero app changes.
-git config --system --add safe.directory '*'
-if [ -d /mnt/repo ]; then
+# Serve prebuilt static Rust daemon release artifacts over local HTTP if mounted.
+# Point vmuser's ~/.profile at the local mirror so the unmodified Android bootstrap script
+# fetches the freshly-built PR binary without touching GitHub.
+if [ -d /mnt/release ]; then
+  mkdir -p /opt/agentsterm-release
+  cp -a /mnt/release/. /opt/agentsterm-release/
+  chown -R vmuser:vmuser /opt/agentsterm-release
+  busybox httpd -p "127.0.0.1:${RELEASE_HTTP_PORT}" -h /opt/agentsterm-release
+  cat > /home/vmuser/.profile <<EOF
+export AGENTSTERM_RELEASE_BASE_URL="http://127.0.0.1:${RELEASE_HTTP_PORT}"
+export PATH="\$HOME/.local/bin:\$PATH"
+EOF
+  chown vmuser:vmuser /home/vmuser/.profile
+fi
+
+# Optional legacy git mirror for Python -> Rust live upgrade testing.
+if [ -d /mnt/repo ] && command -v git >/dev/null 2>&1; then
+  git config --system --add safe.directory '*'
   rm -rf /opt/agentsterm-repo
   git clone --bare /mnt/repo /opt/agentsterm-repo >/dev/null
   chown -R vmuser:vmuser /opt/agentsterm-repo
@@ -52,11 +65,8 @@ EOF
 
 chown -R vmuser:vmuser /home/vmuser/.claude /home/vmuser/.codex /home/vmuser/.gemini
 
-# Start cron so @reboot crontab persistence works inside the container.
 cron
 
-# Bridge external container traffic (mapped to host loopback) to 127.0.0.1:${DAEMON_PORT}
-# where the daemon binds using the fake Tailscale IP (127.0.0.1).
 socat "TCP-LISTEN:${BRIDGE_PORT},bind=0.0.0.0,fork,reuseaddr" "TCP:127.0.0.1:${DAEMON_PORT}" &
 
 exec /usr/sbin/sshd -D -e

@@ -474,7 +474,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         bootstrapJob = viewModelScope.launch {
             try {
-                val result = sshClient.bootstrapWithAgy(
+                val result = sshClient.bootstrapVm(
                     config = config,
                     onPhase = { phase ->
                         _bootstrapState.update { it.copy(phase = phase) }

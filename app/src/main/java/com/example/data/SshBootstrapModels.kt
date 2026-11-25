@@ -1,8 +1,8 @@
 package com.example.data
 
+import com.example.BuildConfig
 import java.net.URLDecoder
 import java.net.URLEncoder
-import java.util.Locale
 
 enum class SshAuthMethod(val storageKey: String) {
     TAILSCALE_SSH("tailscale_ssh"),
@@ -73,7 +73,6 @@ data class SshBootstrapConfig(
     val privateKey: String = "",
     val passphrase: String = "",
     val daemonPort: Int = 7501,
-    val prompt: String = defaultAgyBootstrapPrompt(daemonPort),
 ) {
     val isValid: Boolean
         get() = isValidHost(host) &&
@@ -85,7 +84,7 @@ data class SshBootstrapConfig(
 enum class BootstrapPhase {
     IDLE,
     CONNECTING_SSH,
-    RUNNING_AGY,
+    INSTALLING_DAEMON,
     VERIFYING_DAEMON,
     SUCCEEDED,
     ERROR,
@@ -101,7 +100,7 @@ data class BootstrapUiState(
 ) {
     val isRunning: Boolean
         get() = phase == BootstrapPhase.CONNECTING_SSH ||
-            phase == BootstrapPhase.RUNNING_AGY ||
+            phase == BootstrapPhase.INSTALLING_DAEMON ||
             phase == BootstrapPhase.VERIFYING_DAEMON
 }
 
@@ -118,15 +117,6 @@ data class SshBootstrapResult(
     val connectionConfig: ConnectionConfig,
     val rawPairingUri: String,
     val hostFingerprint: String,
-)
-
-data class ParsedAgyStreamLine(
-    val displayLines: List<String> = emptyList(),
-    val pairingSourceText: String? = null,
-    val textDelta: String? = null,
-    val conversationId: String? = null,
-    val isResult: Boolean = false,
-    val resultStatus: String? = null,
 )
 
 private val hostAllowedRegex = Regex("^[A-Za-z0-9._:\\-]+$")
@@ -148,45 +138,8 @@ fun cleanHost(raw: String): String = raw.trim().removePrefix("http://").removePr
 
 fun stripAnsiCodes(line: String): String = ansiEscapeRegex.replace(line, "")
 
-/** Git repo + ref the VM daemon (Python, `daemon/` in this repo) is installed from. */
-const val AGENTSTERM_REPO_URL = "https://github.com/nedn/agents-term.git"
-const val AGENTSTERM_DAEMON_REF = "main"
-
-/** Checkout used by the VM daemon service, relative to `$HOME`. */
-const val AGENTSTERM_INSTALL_SUBDIR = ".local/share/agentsterm/agents-term"
-
-fun defaultAgyBootstrapPrompt(
-    daemonPort: Int = 7501,
-    repoUrl: String = AGENTSTERM_REPO_URL,
-    ref: String = AGENTSTERM_DAEMON_REF,
-): String {
-    val dir = "\$HOME/$AGENTSTERM_INSTALL_SUBDIR"
-    val install = "bash \"$dir/daemon/install.sh\" --port $daemonPort --ref $ref"
-    return buildString {
-        appendLine("Repair this VM so the AgentsTerm Android app can connect over Tailscale. The automatic install of the AgentsTerm daemon just failed here, or could not start.")
-        appendLine("The VM daemon is the Python 3 program in `daemon/` of $repoUrl, installed by its `daemon/install.sh`. Do not write your own daemon.")
-        appendLine("1. Run the installer to see the failure:")
-        appendLine("   if [ -d \"$dir/.git\" ]; then $install; else git clone --depth 1 --branch $ref $repoUrl \"$dir\" && $install; fi")
-        appendLine(
-            "   install.sh is idempotent: it updates the checkout to the latest $ref, " +
-                "enables lingering and installs the herdr-mobile.service systemd --user unit " +
-                "(or falls back to a detached process with an @reboot crontab entry), " +
-                "restarts the daemon unless it already runs that commit, replaces any legacy Node daemon, " +
-                "verifies http://<tailscale-ip>:$daemonPort/api/info reports that commit, " +
-                "and prints a herdr://connect pairing URI.",
-        )
-        appendLine("2. If it exits non-zero, read its ERROR line, fix the root cause, and run step 1 again:")
-        appendLine("   - exit 3 (missing prerequisite): install python3 (>= 3.9) or git with the system package manager, or bring Tailscale up (`sudo tailscale up`). If GitHub is unreachable, say so clearly.")
-        appendLine("   - exit 4 (daemon unhealthy): inspect `systemctl --user status herdr-mobile.service` or ~/.config/herdr-mobile/daemon.log (for example, another process holding port $daemonPort).")
-        appendLine(
-            "   - reboot persistence: if install.sh reports it could not enable linger or fell back " +
-                "from systemd --user, enable lingering with `sudo loginctl enable-linger \"\$(id -un)\"` " +
-                "(so systemd --user starts at boot without an interactive login) and re-run install.sh " +
-                "with `--force-restart`.",
-        )
-        appendLine("3. End your final response with the exact `herdr://connect?host=...&port=$daemonPort&token=...` line that install.sh printed, on its own line.")
-    }.trim()
-}
+/** Base URL hosting the prebuilt static Rust daemon binaries and `.sha256` checksum files. */
+val AGENTSTERM_RELEASE_BASE_URL: String = BuildConfig.DAEMON_RELEASE_BASE_URL
 
 /**
  * Pure Kotlin RFC-4648 Base64 encoder (works on Android API 24+ and JVM unit tests).
@@ -211,204 +164,96 @@ fun encodeBase64Utf8(input: String): String {
 }
 
 /**
- * Parses a single NDJSON line emitted by `agy --output-format stream-json`.
- * Returns `null` when the line is plain text rather than an Antigravity stream-json event.
- */
-@Suppress("UNCHECKED_CAST")
-fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine? {
-    val trimmed = rawLine.trim()
-    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
-
-    val root = runCatching {
-        HerdrMoshi.adapter(Map::class.java).lenient().fromJson(trimmed) as? Map<String, Any?>
-    }.getOrNull() ?: return null
-
-    val event = root["event"] as? String ?: return null
-    val topConvId = root["conversation_id"] as? String
-
-    return when (event) {
-        "init" -> {
-            val initObj = root["init"] as? Map<String, Any?>
-            val cwd = initObj?.get("cwd") as? String
-            val shortId = topConvId?.take(8)
-            val label = buildString {
-                append(">>> Antigravity session")
-                if (!shortId.isNullOrBlank()) append(" $shortId")
-                append(" started")
-                if (!cwd.isNullOrBlank()) append(" ($cwd)")
-            }
-            ParsedAgyStreamLine(
-                displayLines = listOf(label),
-                conversationId = topConvId,
-            )
-        }
-
-        "step_update" -> {
-            val step = root["step_update"] as? Map<String, Any?> ?: return ParsedAgyStreamLine(conversationId = topConvId)
-            val convId = (step["conversation_id"] as? String) ?: topConvId
-            val stepType = step["step_type"] as? String
-            val state = step["state"] as? String
-
-            when (stepType) {
-                "tool" -> {
-                    val toolName = (step["tool_name"] as? String)
-                        ?: ((step["tool_info"] as? Map<String, Any?>)?.get("name") as? String)
-                        ?: "tool"
-                    val toolInfo = step["tool_info"] as? Map<String, Any?>
-                    val params = toolInfo?.get("parameters") as? Map<String, Any?>
-                    val output = toolInfo?.get("output") as? String
-
-                    if (state == "ACTIVE") {
-                        val detail = extractToolSummary(params)
-                        val msg = if (!detail.isNullOrBlank()) {
-                            "[tool] $toolName: $detail"
-                        } else {
-                            "[tool] $toolName"
-                        }
-                        ParsedAgyStreamLine(displayLines = listOf(msg), conversationId = convId)
-                    } else if (state == "DONE") {
-                        val dur = (step["duration_seconds"] as? Number)?.toDouble()
-                        val durText = dur?.let { String.format(Locale.US, " (%.1fs)", it) }.orEmpty()
-                        ParsedAgyStreamLine(
-                            displayLines = listOf("[tool done] $toolName$durText"),
-                            pairingSourceText = output,
-                            conversationId = convId,
-                        )
-                    } else {
-                        ParsedAgyStreamLine(conversationId = convId)
-                    }
-                }
-
-                "agent_response" -> {
-                    val delta = step["text_delta"] as? String
-                    ParsedAgyStreamLine(
-                        textDelta = delta,
-                        conversationId = convId,
-                    )
-                }
-
-                else -> ParsedAgyStreamLine(conversationId = convId)
-            }
-        }
-
-        "result" -> {
-            val res = root["result"] as? Map<String, Any?> ?: return ParsedAgyStreamLine(
-                isResult = true,
-                conversationId = topConvId,
-            )
-            val convId = (res["conversation_id"] as? String) ?: topConvId
-            val status = (res["status"] as? String) ?: "DONE"
-            val response = res["response"] as? String
-            val dur = (res["duration_seconds"] as? Number)?.toDouble()
-            val turns = (res["num_turns"] as? Number)?.toInt()
-            val summary = buildString {
-                append(">>> Antigravity finished ($status")
-                if (dur != null) append(String.format(Locale.US, " in %.1fs", dur))
-                if (turns != null) append(", $turns turn${if (turns == 1) "" else "s"}")
-                append(")")
-            }
-            ParsedAgyStreamLine(
-                displayLines = listOf(summary),
-                pairingSourceText = response,
-                conversationId = convId,
-                isResult = true,
-                resultStatus = status,
-            )
-        }
-
-        else -> ParsedAgyStreamLine(conversationId = topConvId)
-    }
-}
-
-private fun extractToolSummary(params: Map<String, Any?>?): String? {
-    if (params == null) return null
-    val candidates = listOf("toolSummary", "CommandLine", "Path", "TargetFile", "Query", "SearchPath")
-    for (key in candidates) {
-        val raw = params[key] as? String ?: continue
-        val singleLine = raw.trim().lineSequence().firstOrNull()?.trim().orEmpty()
-        if (singleLine.isNotBlank()) {
-            return if (singleLine.length > 96) singleLine.take(93) + "…" else singleLine
-        }
-    }
-    return null
-}
-
-/**
- * Constructs the remote shell command for the SSH bootstrap. Every run ends with the latest daemon
- * code ([ref] of [repoUrl]) running, or with a non-zero exit code:
+ * Constructs the minimal POSIX remote shell command for SSH bootstrap.
  *
- * 1. Clones the repo if needed and runs `daemon/install.sh`, which updates the checkout, restarts the
- *    daemon unless it already runs that exact commit, verifies the commit the daemon reports, and
- *    prints the pairing URI. On success the script exits here; Antigravity is not involved.
- * 2. If that fails (missing python3/git, Tailscale down, ...), invokes
- *    `agy --dangerously-skip-permissions` with the base64-encoded [prompt] (no shell injection risk)
- *    to repair the VM.
- * 3. Runs `install.sh` once more as the authoritative check. Its exit code is the script's exit code.
+ * Requires only POSIX `sh` + `curl` or `wget` + `sha256sum` or `shasum` on the VM (zero `git`,
+ * `python3`, `bash`, or `agy` dependencies):
+ * 1. Detects `Linux` + `x86_64` / `aarch64`.
+ * 2. Downloads the release `.sha256` file and compares it against `~/.local/bin/agentsterm-daemon`
+ *    (skipping the binary download if already current).
+ * 3. Downloads and verifies the static binary, atomically replaces `~/.local/bin/agentsterm-daemon`
+ *    (avoiding `ETXTBSY` on a running daemon), and executes `agentsterm-daemon install --port <port>`.
  */
-fun buildAgyBootstrapCommand(
-    prompt: String,
-    daemonPort: Int = 7501,
-    repoUrl: String = AGENTSTERM_REPO_URL,
-    ref: String = AGENTSTERM_DAEMON_REF,
-): String {
-    require(daemonPort in 1..65535) { "Invalid daemon port: $daemonPort" }
-    require(shellSafeRegex.matches(repoUrl)) { "Unsafe repository URL: $repoUrl" }
-    require(shellSafeRegex.matches(ref)) { "Unsafe git ref: $ref" }
-    val promptB64 = encodeBase64Utf8(prompt)
-    val script = """
-        set -e
+private val daemonBootstrapScriptTemplate = """
+        set -eu
         [ -f "${'$'}HOME/.profile" ] && . "${'$'}HOME/.profile" >/dev/null 2>&1 || true
         export PATH="${'$'}HOME/.local/bin:${'$'}HOME/.npm-global/bin:${'$'}HOME/.cargo/bin:/usr/local/bin:${'$'}PATH"
-        if [ -d "${'$'}HOME/.nvm/versions/node" ]; then
-          NVM_LATEST=${'$'}(ls -1 "${'$'}HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -n 1)
-          [ -n "${'$'}NVM_LATEST" ] && export PATH="${'$'}HOME/.nvm/versions/node/${'$'}NVM_LATEST/bin:${'$'}PATH"
-        fi
         export FORCE_COLOR=0
-        AGENTSTERM_DIR="${'$'}HOME/$AGENTSTERM_INSTALL_SUBDIR"
-        AGENTSTERM_INSTALL="${'$'}AGENTSTERM_DIR/daemon/install.sh"
-        agentsterm_install() { bash "${'$'}AGENTSTERM_INSTALL" --port $daemonPort --ref $ref; }
-
-        # 1. Install or update to the latest daemon and make sure that exact commit is running.
-        if command -v git >/dev/null 2>&1; then
-          if [ ! -d "${'$'}AGENTSTERM_DIR/.git" ]; then
-            echo ">>> Fetching the AgentsTerm daemon ($ref)..."
-            git clone -q --depth 1 --branch $ref $repoUrl "${'$'}AGENTSTERM_DIR" || true
-          elif [ ! -f "${'$'}AGENTSTERM_INSTALL" ]; then
-            { git -C "${'$'}AGENTSTERM_DIR" fetch -q --depth 1 origin $ref && git -C "${'$'}AGENTSTERM_DIR" checkout -q -B agentsterm-deploy FETCH_HEAD; } || true
+        BASE_URL="${'$'}{AGENTSTERM_RELEASE_BASE_URL:-__RELEASE_BASE_URL__}"
+        BIN_DIR="${'$'}{AGENTSTERM_BIN_DIR:-${'$'}HOME/.local/bin}"
+        BIN_PATH="${'$'}BIN_DIR/agentsterm-daemon"
+        die() { code="${'$'}1"; shift; printf 'ERROR: %s\n' "${'$'}*" >&2; exit "${'$'}code"; }
+        OS=${'$'}(uname -s)
+        [ "${'$'}OS" = "Linux" ] || die 3 "Unsupported OS: ${'$'}OS (Linux required)."
+        RAW_ARCH=${'$'}(uname -m)
+        case "${'$'}RAW_ARCH" in
+          x86_64|amd64) ARCH="x86_64" ;;
+          aarch64|arm64) ARCH="aarch64" ;;
+          *) die 3 "Unsupported architecture: ${'$'}RAW_ARCH (supported: x86_64, aarch64)." ;;
+        esac
+        ASSET="agentsterm-daemon-linux-${'$'}ARCH"
+        BIN_URL="${'$'}{BASE_URL%/}/${'$'}ASSET"
+        SHA_URL="${'$'}BIN_URL.sha256"
+        fetch() {
+          if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --retry 3 -o "${'$'}2" "${'$'}1"
+          elif command -v wget >/dev/null 2>&1; then
+            wget -qO "${'$'}2" "${'$'}1"
+          else
+            die 3 "Neither 'curl' nor 'wget' is installed on this VM."
+          fi
+        }
+        sha256_of() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${'$'}1" | awk '{print ${'$'}1}'
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "${'$'}1" | awk '{print ${'$'}1}'
+          else
+            die 3 "Neither 'sha256sum' nor 'shasum' is installed on this VM."
+          fi
+        }
+        mkdir -p "${'$'}BIN_DIR"
+        TMP_DIR=${'$'}(mktemp -d "${'$'}{TMPDIR:-/tmp}/agentsterm-dl.XXXXXX")
+        trap 'rm -rf "${'$'}TMP_DIR"' EXIT INT TERM
+        printf '>>> Checking latest AgentsTerm daemon (%s)...\n' "${'$'}ASSET"
+        fetch "${'$'}SHA_URL" "${'$'}TMP_DIR/checksum.sha256" || die 3 "Failed to download checksum from ${'$'}SHA_URL"
+        EXPECTED_SHA=${'$'}(awk 'NR==1 {print ${'$'}1}' "${'$'}TMP_DIR/checksum.sha256")
+        [ -n "${'$'}EXPECTED_SHA" ] || die 3 "Checksum file from ${'$'}SHA_URL was empty."
+        NEED_DL=1
+        if [ -x "${'$'}BIN_PATH" ]; then
+          CURRENT_SHA=${'$'}(sha256_of "${'$'}BIN_PATH" || true)
+          if [ "${'$'}CURRENT_SHA" = "${'$'}EXPECTED_SHA" ]; then
+            printf '>>> Installed binary already matches release SHA-256.\n'
+            NEED_DL=0
           fi
         fi
-        if [ -f "${'$'}AGENTSTERM_INSTALL" ]; then
-          echo ">>> Installing the latest AgentsTerm daemon ($ref)..."
-          if agentsterm_install; then
-            exit 0
-          fi
-          echo ">>> The installer failed (see ERROR above). Asking Antigravity to repair this VM..."
+        if [ "${'$'}NEED_DL" = 1 ]; then
+          printf '>>> Downloading %s...\n' "${'$'}BIN_URL"
+          fetch "${'$'}BIN_URL" "${'$'}TMP_DIR/${'$'}ASSET" || die 3 "Failed to download daemon binary from ${'$'}BIN_URL"
+          ACTUAL_SHA=${'$'}(sha256_of "${'$'}TMP_DIR/${'$'}ASSET")
+          [ "${'$'}ACTUAL_SHA" = "${'$'}EXPECTED_SHA" ] || die 3 "SHA-256 mismatch for ${'$'}ASSET (expected ${'$'}EXPECTED_SHA, got ${'$'}ACTUAL_SHA)."
+          chmod 755 "${'$'}TMP_DIR/${'$'}ASSET"
+          mv "${'$'}TMP_DIR/${'$'}ASSET" "${'$'}BIN_DIR/.agentsterm-daemon.tmp.${'$'}${'$'}"
+          mv -f "${'$'}BIN_DIR/.agentsterm-daemon.tmp.${'$'}${'$'}" "${'$'}BIN_PATH"
+          printf '>>> Installed verified binary at %s\n' "${'$'}BIN_PATH"
         fi
+        rm -rf "${'$'}TMP_DIR"
+        trap - EXIT INT TERM
+        exec "${'$'}BIN_PATH" install --port __DAEMON_PORT__
+""".trimIndent()
 
-        # 2. Something is missing on this VM: let Antigravity repair it.
-        if ! command -v agy >/dev/null 2>&1; then
-          echo "ERROR: the AgentsTerm daemon could not be installed, and 'agy' (Antigravity CLI) was not found in PATH to repair this VM." >&2
-          echo "Checked PATH: ${'$'}PATH" >&2
-          exit 127
-        fi
-        HERDR_PROMPT=${'$'}(printf '%s' '$promptB64' | base64 -d)
-        echo ">>> Invoking Antigravity (agy --dangerously-skip-permissions) on ${'$'}(hostname)..."
-        if agy --help 2>&1 | grep -q -- '--output-format'; then
-          agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT" --output-format stream-json || true
-        else
-          agy --dangerously-skip-permissions --print="${'$'}HERDR_PROMPT" || true
-        fi
-
-        # 3. Authoritative check: the latest daemon must now be installed, running and verified.
-        if [ ! -f "${'$'}AGENTSTERM_INSTALL" ]; then
-          echo "ERROR: the AgentsTerm daemon is still not installed at ${'$'}AGENTSTERM_DIR." >&2
-          exit 3
-        fi
-        echo ">>> Verifying the latest AgentsTerm daemon is running..."
-        agentsterm_install
-    """.trimIndent()
+fun buildDaemonBootstrapCommand(
+    daemonPort: Int = 7501,
+    releaseBaseUrl: String = AGENTSTERM_RELEASE_BASE_URL,
+): String {
+    require(daemonPort in 1..65535) { "Invalid daemon port: $daemonPort" }
+    val trimmedBase = releaseBaseUrl.trimEnd('/')
+    require(shellSafeRegex.matches(trimmedBase)) { "Unsafe release base URL: $releaseBaseUrl" }
+    val script = daemonBootstrapScriptTemplate
+        .replace("__RELEASE_BASE_URL__", trimmedBase)
+        .replace("__DAEMON_PORT__", daemonPort.toString())
     val scriptB64 = encodeBase64Utf8(script)
-    return "printf '%s' '$scriptB64' | base64 -d | bash -s"
+    return "printf '%s' '$scriptB64' | base64 -d | sh -s"
 }
 
 /**

@@ -17,3 +17,5 @@ local.properties
 .env
 debug.keystore
 __pycache__/
+daemon-rs/target/
+dist-daemon/

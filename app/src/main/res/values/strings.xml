@@ -15,7 +15,7 @@
     <string name="connect_token_label">Bearer Token (blank if --no-auth)</string>
     <string name="connect_button">Connect to VM</string>
     <string name="connect_button_testing">Connecting…</string>
-    <string name="connect_vm_hint">VM daemon: bash daemon/install.sh</string>
+    <string name="connect_vm_hint">VM daemon: agentsterm-daemon install</string>
     <string name="action_back">Back</string>
     <string name="action_tabs">Open tabs drawer</string>
     <string name="action_new_tab">New Agent Tab</string>
@@ -87,7 +87,7 @@
     <string name="connect_mode_ssh_bootstrap">SSH Auto-Setup</string>
     <string name="connect_mode_direct">Direct / URI</string>
     <string name="ssh_bootstrap_banner_title">Zero-touch VM setup over SSH</string>
-    <string name="ssh_bootstrap_banner_body">Connect over Tailscale SSH to install, update, and launch the AgentsTerm daemon automatically (with automatic agent repair if prerequisites are missing).</string>
+    <string name="ssh_bootstrap_banner_body">Connect over Tailscale SSH to download, verify, and launch the static AgentsTerm daemon automatically (zero VM runtime dependencies).</string>
     <string name="ssh_username_label">VM SSH Username</string>
     <string name="ssh_username_placeholder">ned or ubuntu</string>
     <string name="ssh_port_label">SSH Port</string>
@@ -100,8 +100,6 @@
     <string name="ssh_private_key_label">OpenSSH / PEM Private Key (memory only)</string>
     <string name="ssh_private_key_placeholder">-----BEGIN OPENSSH PRIVATE KEY-----</string>
     <string name="ssh_passphrase_label">Key Passphrase (optional)</string>
-    <string name="ssh_prompt_customize">Customize repair agent prompt</string>
-    <string name="ssh_prompt_reset">Reset default</string>
     <string name="ssh_bootstrap_button">SSH &amp; Bootstrap VM</string>
     <string name="ssh_bootstrap_cancel">Cancel</string>
     <string name="ssh_console_title">LIVE VM BOOTSTRAP OUTPUT</string>
@@ -109,7 +107,7 @@
     <string name="ssh_keep_screen_on_hint">Keeping screen awake while bootstrapping…</string>
     <string name="ssh_trust_new_key">Trust New Host Key &amp; Retry</string>
     <string name="ssh_phase_connecting">Connecting to VM over Tailscale SSH…</string>
-    <string name="ssh_phase_running_agy">Installing AgentsTerm daemon on VM…</string>
+    <string name="ssh_phase_installing_daemon">Installing AgentsTerm daemon on VM…</string>
     <string name="ssh_phase_verifying">Pairing with AgentsTerm VM daemon…</string>
     <string name="ssh_phase_succeeded">VM ready — opening workspace</string>
     <string name="ssh_already_bootstrapped">Previously bootstrapped over SSH</string>

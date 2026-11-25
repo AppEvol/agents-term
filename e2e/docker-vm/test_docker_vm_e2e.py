@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Cross-boundary Docker VM end-to-end test suite.
+"""Cross-boundary Docker VM end-to-end test suite for the static Rust daemon (#63).
 
-Starts a real Linux Docker container running OpenSSH, cron, a fake Tailscale shim,
-deterministic fake agent CLIs (agy/claude/codex), and a local git mirror of the
-current worktree, then exercises the full SSH bootstrap -> HTTP -> WebSocket ->
-agent runner -> live app debugging -> restart recovery contract.
-
-Standard library only; requires Docker and an `ssh` / `ssh-keygen` client on PATH.
+Tests TWO real Linux Docker container topologies:
+1. `MinimalContainerRustDaemonE2ETest` (`vm-minimal` target — ZERO `git` and ZERO `python3`!):
+   Verifies zero-dependency POSIX SSH bootstrap, SHA-256 verification, idempotency,
+   `@reboot` crontab (`ensure-running`), native `app_state_cli` symlink, Shell + #52
+   child-process-group cleanup, `agy`/`claude`/`codex` runners, `/api/fs`, `/api/debug/dumps`,
+   and #61/#62 mid-turn `sessionRef` persistence + explicit restart interruption reason + timestamps.
+2. `PythonToRustLiveUpgradeE2ETest` (`vm-legacy-python` target):
+   Boots the legacy Python daemon with existing `config.json`, bearer token, tabs, messages,
+   and `@reboot` crontab, then runs the new Rust SSH bootstrap in place and verifies seamless
+   migration with zero data/token loss.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 SCRIPT_DIR = Path(__file__).resolve().parent
 START_VM_SCRIPT = SCRIPT_DIR / "start_vm.sh"
 PAIRING_URI_RE = re.compile(r"(?:agentsterm|herdr)://connect\?[^\s\"'`<>)\]]+", re.IGNORECASE)
+ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[(?:INFO|WARN|ERROR)\]")
 
 
 def free_port() -> int:
@@ -119,14 +124,14 @@ class MinimalWsClient:
             payload = self._read_exact(length)
             if mask:
                 payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-            if opcode == 0x9:  # ping -> pong
+            if opcode == 0x9:
                 self._send_pong(payload)
                 continue
-            if opcode == 0xA:  # pong
+            if opcode == 0xA:
                 continue
-            if opcode == 0x8:  # close
+            if opcode == 0x8:
                 raise ConnectionError("WebSocket closed by server")
-            if opcode == 0x1:  # text
+            if opcode == 0x1:
                 return json.loads(payload.decode("utf-8"))
 
     def _send_pong(self, payload: bytes) -> None:
@@ -142,31 +147,85 @@ class MinimalWsClient:
             pass
 
 
-def build_bootstrap_command(daemon_port: int) -> str:
-    """Matches the production base64-encoded SSH bootstrap command from SshBootstrapModels.kt."""
-    script = f"""set -e
+def build_rust_bootstrap_command(
+    daemon_port: int,
+    release_base_url: str = "https://github.com/nedn/agents-term/releases/latest/download",
+) -> str:
+    """Matches the production POSIX bootstrap command from SshBootstrapModels.kt."""
+    script = f"""set -eu
 [ -f "$HOME/.profile" ] && . "$HOME/.profile" >/dev/null 2>&1 || true
 export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
 export FORCE_COLOR=0
-AGENTSTERM_DIR="$HOME/.local/share/agentsterm/agents-term"
-AGENTSTERM_INSTALL="$AGENTSTERM_DIR/daemon/install.sh"
-if command -v git >/dev/null 2>&1; then
-  if [ ! -d "$AGENTSTERM_DIR/.git" ]; then
-    git clone -q --depth 1 --branch main https://github.com/nedn/agents-term.git "$AGENTSTERM_DIR"
+BASE_URL="${{AGENTSTERM_RELEASE_BASE_URL:-{release_base_url}}}"
+BIN_DIR="${{AGENTSTERM_BIN_DIR:-$HOME/.local/bin}}"
+BIN_PATH="$BIN_DIR/agentsterm-daemon"
+die() {{ code="$1"; shift; printf 'ERROR: %s\\n' "$*" >&2; exit "$code"; }}
+OS=$(uname -s)
+[ "$OS" = "Linux" ] || die 3 "Unsupported OS: $OS"
+RAW_ARCH=$(uname -m)
+case "$RAW_ARCH" in
+  x86_64|amd64) ARCH="x86_64" ;;
+  aarch64|arm64) ARCH="aarch64" ;;
+  *) die 3 "Unsupported arch: $RAW_ARCH" ;;
+esac
+ASSET="agentsterm-daemon-linux-$ARCH"
+BIN_URL="${{BASE_URL%/}}/$ASSET"
+SHA_URL="$BIN_URL.sha256"
+fetch() {{
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 3 -o "$2" "$1"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$2" "$1"
+  else
+    die 3 "Neither curl nor wget found."
+  fi
+}}
+sha256_of() {{
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{{print $1}}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{{print $1}}'
+  else
+    die 3 "Neither sha256sum nor shasum found."
+  fi
+}}
+mkdir -p "$BIN_DIR"
+TMP_DIR=$(mktemp -d "${{TMPDIR:-/tmp}}/agentsterm-dl.XXXXXX")
+trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+fetch "$SHA_URL" "$TMP_DIR/checksum.sha256" || die 3 "Failed to download $SHA_URL"
+EXPECTED_SHA=$(awk 'NR==1 {{print $1}}' "$TMP_DIR/checksum.sha256")
+[ -n "$EXPECTED_SHA" ] || die 3 "Empty checksum"
+NEED_DL=1
+if [ -x "$BIN_PATH" ]; then
+  CURRENT_SHA=$(sha256_of "$BIN_PATH" || true)
+  if [ "$CURRENT_SHA" = "$EXPECTED_SHA" ]; then
+    printf '>>> Installed binary already matches release SHA-256.\\n'
+    NEED_DL=0
   fi
 fi
-bash "$AGENTSTERM_INSTALL" --port {daemon_port} --ref main
+if [ "$NEED_DL" = 1 ]; then
+  fetch "$BIN_URL" "$TMP_DIR/$ASSET" || die 3 "Failed to download $BIN_URL"
+  ACTUAL_SHA=$(sha256_of "$TMP_DIR/$ASSET")
+  [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ] || die 3 "SHA-256 mismatch"
+  chmod 755 "$TMP_DIR/$ASSET"
+  mv "$TMP_DIR/$ASSET" "$BIN_DIR/.agentsterm-daemon.tmp.$$"
+  mv -f "$BIN_DIR/.agentsterm-daemon.tmp.$$" "$BIN_PATH"
+fi
+rm -rf "$TMP_DIR"
+trap - EXIT INT TERM
+exec "$BIN_PATH" install --port {daemon_port}
 """
     b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
-    return f"printf '%s' '{b64}' | base64 -d | bash -s"
+    return f"printf '%s' '{b64}' | base64 -d | sh -s"
 
 
-class DockerVmE2ETest(unittest.TestCase):
+class BaseDockerVmTest(unittest.TestCase):
+    docker_target: str = "vm-minimal"
     container_name: str = ""
     ssh_port: int = 0
     daemon_port: int = 0
     snapshot_dir: Optional[Path] = None
-    snapshot_commit: str = ""
+    binary_hash: str = ""
     key_dir: Optional[Path] = None
     key_path: Optional[Path] = None
     token: str = ""
@@ -182,7 +241,7 @@ class DockerVmE2ETest(unittest.TestCase):
         )
         cls.ssh_port = free_port()
         cls.daemon_port = free_port()
-        cls.container_name = f"agentsterm-headless-e2e-{os.getpid()}"
+        cls.container_name = f"agentsterm-{cls.docker_target}-{os.getpid()}"
 
         proc = subprocess.run(
             [
@@ -194,6 +253,8 @@ class DockerVmE2ETest(unittest.TestCase):
                 str(cls.ssh_port),
                 "--daemon-port",
                 str(cls.daemon_port),
+                "--target",
+                cls.docker_target,
                 "--pubkey",
                 str(cls.key_path) + ".pub",
             ],
@@ -207,8 +268,9 @@ class DockerVmE2ETest(unittest.TestCase):
                 k, v = line.split("=", 1)
                 meta[k.strip()] = v.strip()
         cls.snapshot_dir = Path(meta["SNAPSHOT_DIR"])
-        cls.snapshot_commit = meta["SNAPSHOT_COMMIT"]
+        cls.binary_hash = meta["BINARY_HASH"]
         cls.base_url = f"http://127.0.0.1:{cls.daemon_port}"
+        cls.token = ""
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -245,7 +307,7 @@ class DockerVmE2ETest(unittest.TestCase):
 
     def docker_exec(self, command: str, user: str = "vmuser") -> subprocess.CompletedProcess:
         return subprocess.run(
-            ["docker", "exec", "-u", user, self.container_name, "bash", "-lc", command],
+            ["docker", "exec", "-u", user, self.container_name, "sh", "-lc", command],
             capture_output=True,
             text=True,
             timeout=30,
@@ -294,10 +356,16 @@ class DockerVmE2ETest(unittest.TestCase):
             time.sleep(0.15)
         raise AssertionError(f"Tab {tab_id} did not reach {allowed_statuses} within {timeout}s")
 
+
+class MinimalContainerRustDaemonE2ETest(BaseDockerVmTest):
+    """Full cross-boundary E2E against a zero-dependency container (NO git, NO python3)."""
+
+    docker_target = "vm-minimal"
+
     def ensure_bootstrapped(self) -> None:
         if self.token:
             return
-        res = self.ssh_exec(build_bootstrap_command(self.daemon_port))
+        res = self.ssh_exec(build_rust_bootstrap_command(self.daemon_port))
         self.assertEqual(res.returncode, 0, f"SSH bootstrap failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
         match = PAIRING_URI_RE.search(res.stdout + "\n" + res.stderr)
         self.assertIsNotNone(match, f"No pairing URI in bootstrap output:\n{res.stdout}")
@@ -309,49 +377,58 @@ class DockerVmE2ETest(unittest.TestCase):
         self.assertTrue(len(token) >= 16)
         type(self).token = token
 
-    def test_01_fresh_ssh_bootstrap_and_idempotency(self) -> None:
+    def test_01_zero_dependency_ssh_bootstrap_and_idempotency(self) -> None:
+        # Confirm neither git nor python3 is installed inside this container!
+        self.assertNotEqual(self.docker_exec("command -v git").returncode, 0)
+        self.assertNotEqual(self.docker_exec("command -v python3").returncode, 0)
+
         self.ensure_bootstrapped()
 
-        # Unauthenticated requests must be rejected.
         unauth_status, _ = self.api("GET", "/api/info", token=None)
         self.assertEqual(unauth_status, 401)
 
-        # Authenticated /api/info reports container hostname and expected snapshot commit.
-        status, info = self.api("GET", "/api/info")
-        self.assertEqual(status, 200)
+        st, info = self.api("GET", "/api/info")
+        self.assertEqual(st, 200)
         self.assertEqual(info["hostname"], "docker-e2e-vm")
-        self.assertEqual(info["commit"], self.snapshot_commit)
+        self.assertEqual(info["runtime"], "rust")
+        self.assertEqual(info["buildHash"], self.binary_hash)
+        self.assertEqual(info["commit"], self.binary_hash)
+        self.assertIn("live-debugging.md", info["defaultSystemPrompt"])
+
+        # Embedded live-debugging.md and app_state_cli symlink must be installed.
+        self.assertEqual(self.docker_exec("test -f ~/.config/herdr-mobile/live-debugging.md").returncode, 0)
+        self.assertEqual(self.docker_exec("test -L ~/.local/bin/app_state_cli").returncode, 0)
 
         pid_before = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
-        self.assertTrue(pid_before.isdigit(), f"Unexpected daemon.pid: {pid_before!r}")
+        self.assertTrue(pid_before.isdigit())
 
-        # Re-running SSH bootstrap with no new commits must NOT restart the daemon.
-        res2 = self.ssh_exec(build_bootstrap_command(self.daemon_port))
+        # Second SSH bootstrap skips download and preserves live daemon PID.
+        res2 = self.ssh_exec(build_rust_bootstrap_command(self.daemon_port))
         self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+        self.assertIn("already matches release SHA-256", res2.stdout)
         pid_after = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
-        self.assertEqual(pid_before, pid_after, "Idempotent bootstrap should not restart daemon")
+        self.assertEqual(pid_before, pid_after)
 
-        # Verify @reboot crontab entry was installed.
+        # @reboot crontab invokes native `ensure-running` subcommand (no Python start-daemon.sh).
         cron_out = self.docker_exec("crontab -l").stdout
         self.assertIn("@reboot", cron_out)
-        self.assertIn("start-daemon.sh", cron_out)
+        self.assertIn("ensure-running", cron_out)
 
-    def test_02_shell_tab_ws_streaming_cwd_queue_and_interrupt(self) -> None:
+    def test_02_shell_ws_queue_and_issue_52_child_process_group_cleanup(self) -> None:
         self.ensure_bootstrapped()
         ws = MinimalWsClient("127.0.0.1", self.daemon_port, "/ws", self.token)
         try:
             snap = ws.recv_json()
             self.assertEqual(snap["type"], "snapshot")
 
-            status, created = self.api(
+            st, created = self.api(
                 "POST",
                 "/api/tabs",
                 {"agent": "shell", "title": "Docker Shell", "cwd": "/home/vmuser"},
             )
-            self.assertEqual(status, 200)
+            self.assertEqual(st, 200)
             tab_id = created["tab"]["id"]
 
-            # Drain WS events until we see tab_created.
             seen_types = []
             for _ in range(10):
                 ev = ws.recv_json(timeout=5)
@@ -360,51 +437,64 @@ class DockerVmE2ETest(unittest.TestCase):
                     break
             self.assertIn("tab_created", seen_types)
 
-            # Run a real shell command that changes cwd and prints output.
-            st, _ = self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "cd /tmp && echo DOCKER_SHELL_OK && pwd"})
+            # Real command + cwd persistence.
+            st, _ = self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "cd /tmp && echo RUST_DOCKER_OK && pwd"})
             self.assertEqual(st, 200)
             tab, msgs = self.wait_for_tab_idle(tab_id)
             self.assertEqual(tab["cwd"], "/tmp")
-            self.assertIn("DOCKER_SHELL_OK", msgs[-1]["text"])
+            self.assertIn("RUST_DOCKER_OK", msgs[-1]["text"])
 
-            # Start a slow shell command, queue a follow-up, then remove the queued item and interrupt.
-            st, _ = self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "echo START_WAIT && sleep 10"})
+            # Issue #52 exact reproduction: interrupting must kill child process group so `finished` never appears.
+            self.docker_exec("rm -rf /tmp/issue52 && mkdir -p /tmp/issue52")
+            st, _ = self.api(
+                "POST",
+                f"/api/tabs/{tab_id}/messages",
+                {"text": "sh -c 'touch /tmp/issue52/started && sleep 3 && touch /tmp/issue52/finished'"},
+            )
             self.assertEqual(st, 200)
-            time.sleep(0.4)
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if self.docker_exec("test -f /tmp/issue52/started").returncode == 0:
+                    break
+                time.sleep(0.1)
+            self.assertEqual(self.docker_exec("test -f /tmp/issue52/started").returncode, 0)
+
+            # Queue a follow-up, delete it from queue, then interrupt.
             st, queued = self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "echo SHOULD_NOT_RUN"})
             self.assertEqual(st, 200)
-            self.assertTrue(queued.get("queued"), f"Expected queued response: {queued}")
+            self.assertTrue(queued.get("queued"))
             q_id = queued["queuedMessage"]["id"]
-            d_st, _ = self.api("DELETE", f"/api/tabs/{tab_id}/queue/{q_id}")
-            self.assertEqual(d_st, 200)
+            self.assertEqual(self.api("DELETE", f"/api/tabs/{tab_id}/queue/{q_id}")[0], 200)
 
-            i_st, _ = self.api("POST", f"/api/tabs/{tab_id}/interrupt")
-            self.assertEqual(i_st, 200)
+            self.assertEqual(self.api("POST", f"/api/tabs/{tab_id}/interrupt", {})[0], 200)
             _, msgs_after = self.wait_for_tab_idle(tab_id)
             self.assertEqual(msgs_after[-1]["status"], "interrupted")
 
-            # Clean up tab via PATCH & DELETE.
-            p_st, patched = self.api("PATCH", f"/api/tabs/{tab_id}", {"title": "Renamed Shell"})
+            time.sleep(3.2)
+            self.assertNotEqual(
+                self.docker_exec("test -f /tmp/issue52/finished").returncode,
+                0,
+                "Issue #52 regression: orphaned child process created /tmp/issue52/finished after interrupt",
+            )
+
+            # PATCH / read / DELETE.
+            p_st, patched = self.api("PATCH", f"/api/tabs/{tab_id}", {"title": "Renamed Rust Shell"})
             self.assertEqual(p_st, 200)
-            self.assertEqual(patched["tab"]["title"], "Renamed Shell")
-            r_st, _ = self.api("POST", f"/api/tabs/{tab_id}/read")
-            self.assertEqual(r_st, 200)
-            del_st, _ = self.api("DELETE", f"/api/tabs/{tab_id}")
-            self.assertEqual(del_st, 200)
+            self.assertEqual(patched["tab"]["title"], "Renamed Rust Shell")
+            self.assertEqual(self.api("POST", f"/api/tabs/{tab_id}/read")[0], 200)
+            self.assertEqual(self.api("DELETE", f"/api/tabs/{tab_id}")[0], 200)
         finally:
             ws.close()
 
     def test_03_coding_agents_streaming_resume_models_and_permissions(self) -> None:
         self.ensure_bootstrapped()
 
-        # Verify model discovery endpoints for all three agents.
         for agent, expected_id in [("agy", "gemini-4-pro"), ("claude", "sonnet"), ("codex", "gpt-5.3-codex")]:
             st, data = self.api("GET", f"/api/agents/{agent}/models?refresh=1")
             self.assertEqual(st, 200)
             ids = [m["id"] for m in data["models"]]
             self.assertIn(expected_id, ids, f"{agent} models missing {expected_id}: {data}")
 
-        # Exercise agy, claude, and codex end-to-end (turn 1 summary + tool calls + turn 2 resume + /model).
         for agent, expected_summary in [
             ("agy", "Docker E2E Agy Task"),
             ("claude", "Docker E2E Claude Task"),
@@ -418,31 +508,26 @@ class DockerVmE2ETest(unittest.TestCase):
             self.assertEqual(st, 200)
             tab_id = created["tab"]["id"]
 
-            # Turn 1: trigger <tab_task_summary> extraction and tool call tracking.
-            st, _ = self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "Check container status"})
-            self.assertEqual(st, 200)
+            self.assertEqual(self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "Check status"})[0], 200)
             tab1, msgs1 = self.wait_for_tab_idle(tab_id)
             self.assertEqual(tab1.get("taskSummary"), expected_summary)
             self.assertNotIn("<tab_task_summary>", msgs1[-1]["text"])
-            self.assertTrue(msgs1[-1].get("toolCalls"), f"{agent} should record toolCalls")
-            self.assertIsNotNone(tab1.get("sessionRef"), f"{agent} should persist sessionRef")
+            self.assertTrue(msgs1[-1].get("toolCalls"))
+            self.assertIsNotNone(tab1.get("sessionRef"))
             self.assertIn("resumed=no", msgs1[-1]["text"])
 
-            # Switch model with /model command.
             target_model = {"agy": "gemini-4-flash", "claude": "opus", "codex": "o4-mini"}[agent]
-            st, _ = self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": f"/model {target_model}"})
-            self.assertEqual(st, 200)
+            self.assertEqual(
+                self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": f"/model {target_model}"})[0], 200
+            )
             tab_m, _ = self.wait_for_tab_idle(tab_id)
             self.assertEqual(tab_m.get("model"), target_model)
 
-            # Turn 2: verify sessionRef resume and switched model.
-            st, _ = self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "Follow up turn"})
-            self.assertEqual(st, 200)
+            self.assertEqual(self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "Follow up"})[0], 200)
             _, msgs2 = self.wait_for_tab_idle(tab_id)
             self.assertIn("resumed=yes", msgs2[-1]["text"])
             self.assertIn(f"model={target_model}", msgs2[-1]["text"])
 
-        # Verify permission denial + full-access retry on claude.
         st, created = self.api(
             "POST",
             "/api/tabs",
@@ -451,9 +536,9 @@ class DockerVmE2ETest(unittest.TestCase):
         self.assertEqual(st, 200)
         perm_tab = created["tab"]["id"]
         self.api("POST", f"/api/tabs/{perm_tab}/messages", {"text": "DENY_TOOL please"})
-        perm_tab_state, denied_msgs = self.wait_for_tab_idle(perm_tab, allowed_statuses=("blocked",))
-        self.assertEqual(perm_tab_state["status"], "blocked")
-        self.assertTrue(denied_msgs[-1].get("deniedActions"), "Expected deniedActions on default permissionMode")
+        perm_state, denied_msgs = self.wait_for_tab_idle(perm_tab, allowed_statuses=("blocked",))
+        self.assertEqual(perm_state["status"], "blocked")
+        self.assertTrue(denied_msgs[-1].get("deniedActions"))
 
         self.api("PATCH", f"/api/tabs/{perm_tab}", {"permissionMode": "full-access"})
         self.api("POST", f"/api/tabs/{perm_tab}/messages", {"text": "DENY_TOOL retry"})
@@ -461,24 +546,20 @@ class DockerVmE2ETest(unittest.TestCase):
         self.assertFalse(retry_msgs[-1].get("deniedActions"))
         self.assertIn("perms=1", retry_msgs[-1]["text"])
 
-    def test_04_fs_debug_dumps_and_app_state_cli_roundtrip(self) -> None:
+    def test_04_fs_debug_dumps_and_native_app_state_cli_without_python(self) -> None:
         self.ensure_bootstrapped()
 
-        # /api/fs lists home directory.
         st, fs_data = self.api("GET", "/api/fs?path=/home/vmuser")
         self.assertEqual(st, 200)
-        self.assertEqual(fs_data["path"], "/home/vmuser")
         self.assertTrue(fs_data["exists"])
-        dir_names = [e["name"] for e in fs_data["directories"]]
-        self.assertIn("projects", dir_names)
+        self.assertIn("projects", [e["name"] for e in fs_data["directories"]])
 
-        # /api/debug/dumps upload & listing.
         st, uploaded = self.api(
             "POST",
             "/api/debug/dumps",
             {
-                "dumpId": "docker-e2e-dump",
-                "note": "Docker E2E dump",
+                "dumpId": "rust-docker-dump",
+                "note": "Zero-dep Rust E2E dump",
                 "appVersion": "0.3.e2e",
                 "deviceInfo": "DockerE2EPhone",
                 "eventsNdjson": '{"event":"test"}\n',
@@ -486,13 +567,11 @@ class DockerVmE2ETest(unittest.TestCase):
         )
         self.assertEqual(st, 200)
         self.assertTrue(uploaded.get("ok"))
-        self.assertEqual(uploaded["dumpId"], "docker-e2e-dump")
         st, listed = self.api("GET", "/api/debug/dumps")
         self.assertEqual(st, 200)
-        self.assertTrue(any("docker-e2e-dump" in d["dirName"] for d in listed["dumps"]))
+        self.assertTrue(any("rust-docker-dump" in d["dirName"] for d in listed["dumps"]))
 
-        # Simulate connected Android phone over WebSocket answering AppStateBroker requests,
-        # then invoke app_state_cli.py from INSIDE the Docker container.
+        # Invoke native `app_state_cli` symlink (Rust binary, ZERO Python) inside the container.
         ws = MinimalWsClient("127.0.0.1", self.daemon_port, "/ws", self.token)
         stop_flag = threading.Event()
 
@@ -515,7 +594,7 @@ class DockerVmE2ETest(unittest.TestCase):
                     )
 
         try:
-            ws.recv_json()  # snapshot
+            ws.recv_json()
             ws.send_json(
                 {
                     "type": "app_hello",
@@ -529,24 +608,14 @@ class DockerVmE2ETest(unittest.TestCase):
                     },
                 }
             )
-            t = threading.Thread(target=responder, daemon=True)
-            t.start()
+            threading.Thread(target=responder, daemon=True).start()
             time.sleep(0.2)
 
-            cli_cmd = (
-                f"python3 ~/.local/share/agentsterm/agents-term/app_state_cli/app_state_cli.py "
-                f"--port {self.daemon_port} status"
-            )
-            status_res = self.docker_exec(cli_cmd)
+            status_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} status")
             self.assertEqual(status_res.returncode, 0, status_res.stdout + status_res.stderr)
-            status_json = json.loads(status_res.stdout)
-            self.assertTrue(status_json["ready"])
+            self.assertTrue(json.loads(status_res.stdout)["ready"])
 
-            state_cmd = (
-                f"python3 ~/.local/share/agentsterm/agents-term/app_state_cli/app_state_cli.py "
-                f"--port {self.daemon_port} state"
-            )
-            state_res = self.docker_exec(state_cmd)
+            state_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} state")
             self.assertEqual(state_res.returncode, 0, state_res.stdout + state_res.stderr)
             state_json = json.loads(state_res.stdout)
             self.assertTrue(state_json["ok"])
@@ -555,55 +624,118 @@ class DockerVmE2ETest(unittest.TestCase):
             stop_flag.set()
             ws.close()
 
-    def test_05_live_upgrade_preserves_token_and_tabs_and_recovers_inflight_turn(self) -> None:
+    def test_05_issues_61_and_62_mid_turn_restart_and_timestamped_logs(self) -> None:
         self.ensure_bootstrapped()
 
-        # Create a tab and start a SLOW_TURN so a streaming message is in flight during upgrade/restart.
         st, created = self.api(
             "POST",
             "/api/tabs",
-            {"agent": "agy", "title": "Persist Across Upgrade", "cwd": "/home/vmuser"},
+            {"agent": "claude", "title": "MidTurn Restart", "cwd": "/home/vmuser"},
         )
         self.assertEqual(st, 200)
         tab_id = created["tab"]["id"]
-        self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "SLOW_TURN test"})
-        time.sleep(0.5)
 
-        pid_before = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
+        self.assertEqual(self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "SLOW_TURN check #62"})[0], 200)
 
-        # Publish a new commit into /opt/agentsterm-repo inside the container.
-        new_commit = self.docker_exec(
-            'tmp=$(mktemp -d) && git clone -q /opt/agentsterm-repo "$tmp" && '
-            'cd "$tmp" && echo upgrade-marker >> daemon/README.md && '
-            "git -c user.name=E2E -c user.email=e2e@example.invalid -c commit.gpgsign=false "
-            "commit -q -am 'e2e upgrade commit' && git push -q origin main && "
-            'git rev-parse HEAD && rm -rf "$tmp"'
-        ).stdout.strip()
-        self.assertNotEqual(new_commit, self.snapshot_commit)
+        # Verify sessionRef is written to state.json WHILE turn 1 is still streaming (#62).
+        deadline = time.time() + 5
+        saved_ref = None
+        while time.time() < deadline:
+            raw = self.docker_exec("cat ~/.config/herdr-mobile/state.json").stdout
+            if raw.strip():
+                state = json.loads(raw)
+                tab = next((t for t in state.get("tabs", []) if t["id"] == tab_id), None)
+                if tab and isinstance(tab.get("sessionRef"), dict):
+                    saved_ref = tab["sessionRef"].get("value")
+                    if saved_ref:
+                        break
+            time.sleep(0.1)
+        self.assertEqual(saved_ref, "claude-sess-e2e-1", "Issue #62: sessionRef not persisted mid-turn")
 
-        # Re-run SSH bootstrap: daemon must upgrade to new_commit, preserve token & tabs,
-        # and mark the interrupted in-flight message as interrupted.
-        res = self.ssh_exec(build_bootstrap_command(self.daemon_port))
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        # Restart daemon mid-turn via --force-restart.
+        restart_res = self.docker_exec(
+            f"$HOME/.local/bin/agentsterm-daemon install --port {self.daemon_port} --force-restart"
+        )
+        self.assertEqual(restart_res.returncode, 0, restart_res.stdout + restart_res.stderr)
 
-        pid_after = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
-        self.assertNotEqual(pid_before, pid_after, "Daemon should restart on new commit")
-
-        # Existing token must still authenticate and report the upgraded commit!
-        st, info = self.api("GET", "/api/info")
+        st, resp = self.api("GET", f"/api/tabs/{tab_id}/messages")
         self.assertEqual(st, 200)
-        self.assertEqual(info["commit"], new_commit)
+        self.assertEqual(resp["tab"]["sessionRef"]["value"], "claude-sess-e2e-1")
+        last_msg = resp["messages"][-1]
+        self.assertEqual(last_msg["status"], "interrupted")
+        self.assertIn("daemon restarted", last_msg.get("error") or "")
 
-        # Tab and messages survived, with the in-flight streaming turn recovered as interrupted.
-        st, tabs_resp = self.api("GET", "/api/tabs")
-        self.assertEqual(st, 200)
-        tabs = tabs_resp["tabs"] if isinstance(tabs_resp, dict) else tabs_resp
-        self.assertTrue(any(t["id"] == tab_id for t in tabs))
+        # Verify daemon.log has ISO-8601 UTC timestamps (#61).
+        daemon_log = self.docker_exec("cat ~/.config/herdr-mobile/daemon.log").stdout
+        self.assertRegex(daemon_log, ISO_TS_RE, f"Expected ISO-8601 timestamps in daemon.log:\n{daemon_log}")
 
-        st, msgs_resp = self.api("GET", f"/api/tabs/{tab_id}/messages")
+
+class PythonToRustLiveUpgradeE2ETest(BaseDockerVmTest):
+    """Verifies seamless in-place upgrade from the legacy Python daemon to the static Rust daemon."""
+
+    docker_target = "vm-legacy-python"
+
+    def test_live_python_to_rust_upgrade_preserves_token_tabs_and_migrates_cron(self) -> None:
+        # 1. Start the legacy Python daemon directly inside the container and create a tab + message.
+        py_start = self.docker_exec(
+            f"mkdir -p ~/.config/herdr-mobile; "
+            f"git clone -q /opt/agentsterm-repo ~/.local/share/agentsterm/agents-term; "
+            f"nohup python3 ~/.local/share/agentsterm/agents-term/daemon/agentsterm-daemon "
+            f"serve --host 127.0.0.1 --port {self.daemon_port} "
+            f">> ~/.config/herdr-mobile/daemon.log 2>&1 < /dev/null & "
+            f"echo $! > ~/.config/herdr-mobile/daemon.pid; "
+            f"(crontab -l 2>/dev/null; echo '@reboot /home/vmuser/.config/herdr-mobile/start-daemon.sh') | crontab -"
+        )
+        self.assertEqual(py_start.returncode, 0, py_start.stdout + py_start.stderr)
+
+        # Wait for Python daemon to create config.json and start listening.
+        deadline = time.time() + 10
+        legacy_token = ""
+        while time.time() < deadline:
+            cfg_out = self.docker_exec("cat ~/.config/herdr-mobile/config.json 2>/dev/null || true").stdout
+            if cfg_out.strip():
+                legacy_token = json.loads(cfg_out)["token"]
+                st, info = self.api("GET", "/api/info", token=legacy_token)
+                if st == 200 and info.get("runtime") != "rust":
+                    break
+            time.sleep(0.2)
+        self.assertTrue(len(legacy_token) >= 16, "Legacy Python daemon did not start")
+        type(self).token = legacy_token
+
+        # Create a tab and run a shell turn on the legacy Python daemon.
+        st, created = self.api(
+            "POST",
+            "/api/tabs",
+            {"agent": "shell", "title": "Legacy Python Tab", "cwd": "/home/vmuser"},
+        )
         self.assertEqual(st, 200)
-        msgs = msgs_resp["messages"] if isinstance(msgs_resp, dict) else msgs_resp
-        self.assertEqual(msgs[-1]["status"], "interrupted")
+        legacy_tab_id = created["tab"]["id"]
+        self.assertEqual(
+            self.api("POST", f"/api/tabs/{legacy_tab_id}/messages", {"text": "echo FROM_PYTHON_DAEMON"})[0], 200
+        )
+        self.wait_for_tab_idle(legacy_tab_id)
+
+        # 2. Run the new static Rust SSH bootstrap command in place over real SSH!
+        upgrade_res = self.ssh_exec(build_rust_bootstrap_command(self.daemon_port))
+        self.assertEqual(upgrade_res.returncode, 0, upgrade_res.stdout + upgrade_res.stderr)
+
+        # 3. Verify the Rust daemon took over cleanly using the EXACT same token & tabs.
+        st, info = self.api("GET", "/api/info", token=legacy_token)
+        self.assertEqual(st, 200, "Legacy bearer token should remain valid after Python -> Rust upgrade")
+        self.assertEqual(info.get("runtime"), "rust")
+        self.assertEqual(info.get("buildHash"), self.binary_hash)
+
+        st, msgs_resp = self.api("GET", f"/api/tabs/{legacy_tab_id}/messages", token=legacy_token)
+        self.assertEqual(st, 200)
+        self.assertEqual(msgs_resp["tab"]["title"], "Legacy Python Tab")
+        self.assertTrue(any("FROM_PYTHON_DAEMON" in m.get("text", "") for m in msgs_resp["messages"]))
+
+        # Verify legacy Python process is gone and crontab migrated to `ensure-running`.
+        ps_out = self.docker_exec("ps aux").stdout
+        self.assertNotIn("python3", ps_out, f"Legacy Python daemon still running:\n{ps_out}")
+        cron_out = self.docker_exec("crontab -l").stdout
+        self.assertNotIn("start-daemon.sh", cron_out)
+        self.assertIn("ensure-running", cron_out)
 
 
 if __name__ == "__main__":

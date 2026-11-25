@@ -46,6 +46,68 @@ jobs:
       - name: Run static checks (ruff, vulture, ktlint, detekt, shellcheck, actionlint)
         run: scripts/static-checks.sh
 
+  rust-daemon-build-and-test:
+    name: Rust VM Daemon (format, clippy, tests, static musl binaries)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain and musl targets
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+
+      - name: Cache Cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            daemon-rs/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('daemon-rs/Cargo.toml', 'daemon-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Check formatting and Clippy
+        working-directory: daemon-rs
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Run Rust daemon unit and integration tests
+        working-directory: daemon-rs
+        run: cargo test -- --nocapture
+
+      - name: Build static musl release binaries (x86_64 and aarch64)
+        working-directory: daemon-rs
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
+            cargo build --release --target aarch64-unknown-linux-musl
+          mkdir -p ../dist-daemon
+          cp target/x86_64-unknown-linux-musl/release/agentsterm-daemon ../dist-daemon/agentsterm-daemon-linux-x86_64
+          cp target/aarch64-unknown-linux-musl/release/agentsterm-daemon ../dist-daemon/agentsterm-daemon-linux-aarch64
+          chmod 755 ../dist-daemon/agentsterm-daemon-linux-x86_64 ../dist-daemon/agentsterm-daemon-linux-aarch64
+          (
+            cd ../dist-daemon
+            sha256sum agentsterm-daemon-linux-x86_64 > agentsterm-daemon-linux-x86_64.sha256
+            sha256sum agentsterm-daemon-linux-aarch64 > agentsterm-daemon-linux-aarch64.sha256
+          )
+          file ../dist-daemon/agentsterm-daemon-linux-x86_64 ../dist-daemon/agentsterm-daemon-linux-aarch64
+          ls -lh ../dist-daemon
+
+      - name: Upload static Rust daemon binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-binaries
+          path: dist-daemon/
+          if-no-files-found: error
+
   build-and-unit-test:
     name: Build APK & Unit Tests
     runs-on: ubuntu-latest
@@ -106,9 +168,16 @@ jobs:
         env:
           APP_VERSION_CODE: ${{ github.run_number }}
           GITHUB_SHA_FULL: ${{ github.sha }}
+          PUBLISH_PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           SHORT_SHA="${GITHUB_SHA_FULL::7}"
           export APP_VERSION_NAME="${APP_MAJOR_MINOR}.${APP_VERSION_CODE}-${SHORT_SHA}"
+          if [ "$PUBLISH_PRERELEASE" = "true" ]; then
+            PRERELEASE_TAG="v${APP_VERSION_NAME}-preview"
+            export AGENTSTERM_DAEMON_RELEASE_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PRERELEASE_TAG}"
+            echo "Building preview APK pointing daemon bootstrap at ${AGENTSTERM_DAEMON_RELEASE_BASE_URL}"
+          fi
           echo "Building AgentsTerm ${APP_VERSION_NAME} (versionCode=${APP_VERSION_CODE})"
           gradle :app:lintDebug :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
 
@@ -135,7 +204,6 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
 
-      # For each golden image test that failed: the golden, the new rendering and their difference.
       - name: Upload golden image differences
         if: failure()
         uses: actions/upload-artifact@v4
@@ -145,7 +213,7 @@ jobs:
           if-no-files-found: ignore
 
   daemon-and-cli-tests:
-    name: VM Daemon & CLI Tests (Python ${{ matrix.python }})
+    name: Legacy Python Daemon & Installer Script Tests (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -162,38 +230,57 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Run VM daemon tests (unit, process end-to-end, install.sh)
+      - name: Run daemon tests (unit, process end-to-end, POSIX install.sh)
         run: python3 -W error::ResourceWarning -m unittest discover -s daemon/tests -v
 
       - name: Run app_state_cli tests
         run: python3 -W error::ResourceWarning -m unittest discover -s app_state_cli -v
 
   docker-vm-e2e:
-    name: Docker VM Cross-Boundary E2E Tests
+    name: Docker VM Cross-Boundary E2E Tests (zero-dep minimal + Python-to-Rust upgrade)
     runs-on: ubuntu-latest
+    needs: [rust-daemon-build-and-test]
     timeout-minutes: 15
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Download static Rust daemon binary
+        uses: actions/download-artifact@v4
+        with:
+          name: daemon-binaries
+          path: dist-daemon
+
+      - name: Place static Rust binary where start_vm.sh expects it
+        run: |
+          mkdir -p daemon-rs/target/x86_64-unknown-linux-musl/release
+          cp dist-daemon/agentsterm-daemon-linux-x86_64 daemon-rs/target/x86_64-unknown-linux-musl/release/agentsterm-daemon
+          chmod 755 daemon-rs/target/x86_64-unknown-linux-musl/release/agentsterm-daemon
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
-      - name: Run headless Docker VM E2E suite (real SSH, daemon, WS, agents, upgrade)
+      - name: Run headless Docker VM E2E suite (minimal zero-dep + Python->Rust upgrade)
         run: python3 -W error::ResourceWarning -m unittest discover -s e2e/docker-vm -v
 
   e2e-tests:
     name: End-to-End Android Instrumented Tests
     runs-on: ubuntu-latest
-    needs: build-and-unit-test
+    needs: [build-and-unit-test, rust-daemon-build-and-test]
     timeout-minutes: 30
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download static Rust daemon binary
+        uses: actions/download-artifact@v4
+        with:
+          name: daemon-binaries
+          path: dist-daemon
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -246,14 +333,15 @@ jobs:
           echo "APP_VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
           echo "APP_VERSION_NAME=${APP_MAJOR_MINOR}.${GITHUB_RUN_NUMBER}-${SHORT_SHA}" >> "$GITHUB_ENV"
 
-      - name: Start Docker E2E VM container
+      - name: Start zero-dependency Docker E2E VM container
         id: docker_vm
         run: |
-          META="$(bash e2e/docker-vm/start_vm.sh --name agentsterm-ci-vm --ssh-port 2222 --daemon-port 7591)"
+          chmod 755 dist-daemon/agentsterm-daemon-linux-x86_64
+          META="$(bash e2e/docker-vm/start_vm.sh --name agentsterm-ci-vm --ssh-port 2222 --daemon-port 7591 --target vm-minimal --binary dist-daemon/agentsterm-daemon-linux-x86_64)"
           printf '%s\n' "$META"
           printf '%s\n' "$META" >> "$GITHUB_OUTPUT"
 
-      - name: Run E2E instrumented tests on Android Emulator (mock + real Docker VM)
+      - name: Run E2E instrumented tests on Android Emulator (mock + real zero-dep Docker VM)
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -286,10 +374,68 @@ jobs:
           path: app/build/reports/androidTests/connected/
           if-no-files-found: ignore
 
-  publish-apk:
-    name: Publish Verified APK Release
+  publish-branch-prerelease:
+    name: Publish Branch Pre-Release (APK + Rust Daemon Binaries)
     runs-on: ubuntu-latest
-    needs: [static-checks, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
+    needs: [static-checks, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    permissions:
+      contents: write
+    timeout-minutes: 10
+
+    steps:
+      - name: Download verified debug APK
+        uses: actions/download-artifact@v4
+        with:
+          name: app-debug-apk
+          path: dist
+
+      - name: Download static Rust daemon binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: daemon-binaries
+          path: dist
+
+      - name: Publish pre-release without touching latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA::7}"
+          VERSION="${APP_MAJOR_MINOR}.${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
+          TAG="v${VERSION}-preview"
+          STABLE_APK="dist/AgentsTerm-debug.apk"
+          VERSIONED_APK="dist/AgentsTerm-${TAG}-debug.apk"
+          cp dist/app-debug.apk "$STABLE_APK"
+          cp dist/app-debug.apk "$VERSIONED_APK"
+
+          # shellcheck disable=SC2016  # backticks are literal Markdown
+          NOTES=$(printf 'Preview pre-release built and verified on branch `%s` (`%s`) for live testing against the static Rust VM daemon before merging to `main`.\n\n- **Version:** `%s` (`versionCode=%s`)\n- **Daemon download base URL baked into preview APK:** `https://github.com/%s/releases/download/%s`\n- **CI run:** https://github.com/%s/actions/runs/%s\n\n### Live Testing Steps\n1. Install `AgentsTerm-debug.apk` from this pre-release on your phone.\n2. Open **Settings > Edit VM Connection > SSH Auto-Setup** and run **SSH & Bootstrap VM** against your VM (it will download and verify the static Rust daemon from this pre-release and migrate in place, preserving your token and tabs).\n3. Or manually install on your VM:\n   ```sh\n   AGENTSTERM_RELEASE_BASE_URL=https://github.com/%s/releases/download/%s sh daemon/install.sh\n   ```\n' \
+            "$GITHUB_REF_NAME" "$SHORT_SHA" "$VERSION" "$GITHUB_RUN_NUMBER" "$GITHUB_REPOSITORY" "$TAG" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$TAG")
+
+          gh release create "$TAG" \
+            "$STABLE_APK" \
+            "$VERSIONED_APK" \
+            dist/agentsterm-daemon-linux-x86_64 \
+            dist/agentsterm-daemon-linux-x86_64.sha256 \
+            dist/agentsterm-daemon-linux-aarch64 \
+            dist/agentsterm-daemon-linux-aarch64.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "AgentsTerm Preview ${TAG}" \
+            --notes "$NOTES" \
+            --prerelease \
+            --latest=false \
+            --repo "${GITHUB_REPOSITORY}"
+
+  publish-apk:
+    name: Publish Verified APK & Static Daemon Release
+    runs-on: ubuntu-latest
+    needs: [static-checks, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
@@ -302,7 +448,13 @@ jobs:
           name: app-debug-apk
           path: dist
 
-      - name: Publish versioned APK release and update rolling latest alias
+      - name: Download static Rust daemon binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: daemon-binaries
+          path: dist
+
+      - name: Publish versioned release and update rolling latest alias
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_SHA: ${{ github.sha }}
@@ -319,8 +471,17 @@ jobs:
           cp dist/app-debug.apk "$STABLE_APK"
           cp dist/app-debug.apk "$VERSIONED_APK"
 
+          ASSETS=(
+            "$STABLE_APK"
+            "$VERSIONED_APK"
+            dist/agentsterm-daemon-linux-x86_64
+            dist/agentsterm-daemon-linux-x86_64.sha256
+            dist/agentsterm-daemon-linux-aarch64
+            dist/agentsterm-daemon-linux-aarch64.sha256
+          )
+
           EXISTING_TAGS=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=30" --jq '.[].tag_name' \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-' || true)
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]+$' || true)
 
           IS_NEWEST="true"
           EXISTING_MAX=$(printf '%s\n' "$EXISTING_TAGS" \
@@ -340,11 +501,11 @@ jobs:
             | sort -nr | head -n 1 | awk '{print $2}' || true)
 
           # shellcheck disable=SC2016  # backticks are literal Markdown
-          NOTES=$(printf 'Verified Android debug APK automatically built and tested on green `main` commit `%s`.\n\n- **Version:** `%s` (`versionCode=%s`)\n- **Build & unit tests:** passed\n- **Android Emulator E2E tests:** passed\n- **CI run:** https://github.com/%s/actions/runs/%s\n\n### Install on Android\n1. Download `AgentsTerm-debug.apk` directly on your Android phone (always-latest link: https://github.com/%s/releases/latest/download/AgentsTerm-debug.apk).\n2. Open the downloaded APK and allow installing from your browser/files app if prompted.\n' \
+          NOTES=$(printf 'Verified Android debug APK and static Linux Rust VM daemon binaries automatically built and tested on green `main` commit `%s`.\n\n- **Version:** `%s` (`versionCode=%s`)\n- **Static Rust VM daemon:** `agentsterm-daemon-linux-x86_64` & `agentsterm-daemon-linux-aarch64` (+ `.sha256`)\n- **Build & unit tests:** passed\n- **Android Emulator + Docker VM E2E tests:** passed\n- **CI run:** https://github.com/%s/actions/runs/%s\n\n### Install on Android\n1. Download `AgentsTerm-debug.apk` directly on your Android phone (always-latest link: https://github.com/%s/releases/latest/download/AgentsTerm-debug.apk).\n2. Open the downloaded APK and allow installing from your browser/files app if prompted.\n' \
             "$SHORT_SHA" "$VERSION" "$GITHUB_RUN_NUMBER" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY")
 
           if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$STABLE_APK" "$VERSIONED_APK" --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
             gh release edit "$TAG" \
               --title "AgentsTerm ${TAG}" \
               --notes "$NOTES" \
@@ -355,7 +516,7 @@ jobs:
             if [ -n "${PREV_TAG:-}" ]; then
               NOTES_ARGS+=(--notes-start-tag "$PREV_TAG")
             fi
-            gh release create "$TAG" "$STABLE_APK" "$VERSIONED_APK" \
+            gh release create "$TAG" "${ASSETS[@]}" \
               --target "$GITHUB_SHA" \
               --title "AgentsTerm ${TAG}" \
               "${NOTES_ARGS[@]}" \
@@ -363,7 +524,6 @@ jobs:
               --repo "${GITHUB_REPOSITORY}"
           fi
 
-          # Keep the rolling `latest` tag & release asset in sync for /releases/download/latest/AgentsTerm-debug.apk links
           if [ "$IS_NEWEST" = "true" ]; then
             if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/latest" >/dev/null 2>&1; then
               gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" -X PATCH \
@@ -373,7 +533,13 @@ jobs:
               # shellcheck disable=SC2016  # backticks are literal Markdown
               ROLLING_NOTES=$(printf 'Rolling alias pointing to verified release [`%s`](https://github.com/%s/releases/tag/%s).\n\n%s\n' \
                 "$TAG" "$GITHUB_REPOSITORY" "$TAG" "$NOTES")
-              gh release upload latest "$STABLE_APK" --clobber --repo "${GITHUB_REPOSITORY}"
+              gh release upload latest \
+                "$STABLE_APK" \
+                dist/agentsterm-daemon-linux-x86_64 \
+                dist/agentsterm-daemon-linux-x86_64.sha256 \
+                dist/agentsterm-daemon-linux-aarch64 \
+                dist/agentsterm-daemon-linux-aarch64.sha256 \
+                --clobber --repo "${GITHUB_REPOSITORY}"
               gh release edit latest \
                 --title "AgentsTerm Rolling Latest (${TAG})" \
                 --notes "$ROLLING_NOTES" \

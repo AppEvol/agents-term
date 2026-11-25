@@ -26,8 +26,8 @@ import com.example.data.ToolCallItem
 import com.example.data.UpdateTabRequest
 import com.example.data.WorkspaceState
 import com.example.data.WsServerEnvelope
-import com.example.data.buildAgyBootstrapCommand
 import com.example.data.buildAssistantDisplayBlocks
+import com.example.data.buildDaemonBootstrapCommand
 import com.example.data.buildSanitizedWorkspaceJson
 import com.example.data.decodeHerdrJson
 import com.example.data.encodeBase64Utf8
@@ -39,7 +39,6 @@ import com.example.data.formatToolRunSummary
 import com.example.data.isTabTaskFinished
 import com.example.data.isTaskFinishedText
 import com.example.data.normalizeFsPath
-import com.example.data.parseAgyStreamJsonLine
 import com.example.data.parseModelSlashCommand
 import com.example.data.parseSshSetupInput
 import com.example.data.parseSshSetupUri
@@ -206,101 +205,34 @@ class ModelsAndStateTest {
     }
 
     @Test
-    fun buildAgyBootstrapCommandSafelyEncodesPromptAndUsesSkipPermissions() {
-        val trickyPrompt = "Setup VM with 'quotes' and \$(whoami) and `backticks`\nline2"
-        val cmd = buildAgyBootstrapCommand(prompt = trickyPrompt, daemonPort = 7501)
-
-        // Outer command passes base64 script to bash without raw prompt interpolation
+    fun buildDaemonBootstrapCommandDownloadsVerifiesAndInstallsStaticBinary() {
+        val cmd = buildDaemonBootstrapCommand(daemonPort = 7600, releaseBaseUrl = "https://example.invalid/releases")
         assertTrue(cmd.startsWith("printf '%s' '"))
-        assertTrue(cmd.endsWith("' | base64 -d | bash -s"))
-        assertFalse(cmd.contains("\$(whoami)"))
+        assertTrue(cmd.endsWith("' | base64 -d | sh -s"))
 
-        val b64Payload = cmd.removePrefix("printf '%s' '").removeSuffix("' | base64 -d | bash -s")
-        val decodedScript = String(Base64.getDecoder().decode(b64Payload), Charsets.UTF_8)
-        assertTrue(decodedScript.contains("agy --dangerously-skip-permissions --print="))
-        assertTrue(decodedScript.contains("--output-format stream-json"))
-        assertTrue(decodedScript.contains(encodeBase64Utf8(trickyPrompt)))
-        assertTrue(decodedScript.contains("--port 7501 --ref main"))
+        val b64Payload = cmd.removePrefix("printf '%s' '").removeSuffix("' | base64 -d | sh -s")
+        val script = String(Base64.getDecoder().decode(b64Payload), Charsets.UTF_8)
+        assertTrue(script.contains("https://example.invalid/releases"))
+        assertTrue(script.contains("agentsterm-daemon-linux-"))
+        assertTrue(script.contains(".sha256"))
+        assertTrue(script.contains("exec \"\$BIN_PATH\" install --port 7600"))
+        assertFalse(script.contains("agy --dangerously-skip-permissions"))
+        assertFalse(script.contains("git clone"))
+        assertFalse(script.contains("python3"))
     }
 
     @Test
-    fun bootstrapAlwaysRunsInstallerAndNeverShortCircuitsOnAHealthyDaemon() {
-        val cmd = buildAgyBootstrapCommand(prompt = "p", daemonPort = 7600)
-        val script = String(
-            Base64.getDecoder().decode(cmd.removePrefix("printf '%s' '").removeSuffix("' | base64 -d | bash -s")),
-            Charsets.UTF_8,
-        )
-        assertTrue(script.contains("AGENTSTERM_DIR=\"\$HOME/.local/share/agentsterm/agents-term\""))
-        assertTrue(script.contains("git clone -q --depth 1 --branch main https://github.com/nedn/agents-term.git"))
-        assertTrue(script.contains("agentsterm_install() { bash \"\$AGENTSTERM_INSTALL\" --port 7600 --ref main; }"))
-        // No "daemon looks healthy, skip the update" shortcut, and the last command is the verification.
-        assertFalse(script.contains("DAEMON_OK"))
-        assertFalse(script.contains("already running"))
-        assertEquals("agentsterm_install", script.trim().lines().last().trim())
-        assertFalse(script.contains("agent-terminal/server"))
-        assertFalse(script.contains("node "))
-
-        val prompt = com.example.data.defaultAgyBootstrapPrompt(daemonPort = 7600)
-        assertTrue(prompt.contains("git clone --depth 1 --branch main https://github.com/nedn/agents-term.git"))
-        assertTrue(prompt.contains("bash \"\$HOME/.local/share/agentsterm/agents-term/daemon/install.sh\" --port 7600 --ref main"))
-        assertTrue(prompt.contains("Do not write your own daemon"))
-        assertTrue(prompt.contains("sudo loginctl enable-linger"))
-        assertFalse(prompt.contains("Node.js"))
-    }
-
-    @Test
-    fun bootstrapRejectsUnsafeRepoOrRefAndTreatsNonZeroExitAsFailure() {
-        for (bad in listOf("main; rm -rf ~", "\$(whoami)", "a b", "x'y", "")) {
-            assertTrue(runCatching { buildAgyBootstrapCommand("p", ref = bad) }.isFailure)
-            assertTrue(runCatching { buildAgyBootstrapCommand("p", repoUrl = bad) }.isFailure)
+    fun bootstrapRejectsUnsafeReleaseUrlAndTreatsNonZeroExitAsFailure() {
+        for (bad in listOf("https://a; rm -rf ~", "\$(whoami)", "a b", "x'y", "")) {
+            assertTrue(runCatching { buildDaemonBootstrapCommand(releaseBaseUrl = bad) }.isFailure)
         }
-        buildAgyBootstrapCommand("p", repoUrl = "file:///tmp/origin-1", ref = "feat/app-state_reporter.v2")
+        buildDaemonBootstrapCommand(releaseBaseUrl = "http://127.0.0.1:18080/releases/v0.3.1")
 
         assertFalse(com.example.data.bootstrapExitIsFailure(0))
         assertFalse(com.example.data.bootstrapExitIsFailure(-1)) // dropped connection: handled separately
         assertTrue(com.example.data.bootstrapExitIsFailure(3))
         assertTrue(com.example.data.bootstrapExitIsFailure(4))
         assertTrue(com.example.data.bootstrapExitIsFailure(127))
-    }
-
-    @Test
-    fun parseAgyStreamJsonLineHandlesInitToolsDeltasAndResult() {
-        assertNull(parseAgyStreamJsonLine(">>> plain shell output"))
-
-        val initEvent = parseAgyStreamJsonLine(
-            """{"event":"init","conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","init":{"cwd":"/home/ned"}}""",
-        )
-        assertNotNull(initEvent)
-        assertEquals("9fedea5e-6c97-4678-b333-f40fa796d7ed", initEvent!!.conversationId)
-        assertTrue(initEvent.displayLines.single().contains("9fedea5e"))
-
-        val activeTool = parseAgyStreamJsonLine(
-            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"npm run build","toolSummary":"Build server"}}}}""",
-        )
-        assertNotNull(activeTool)
-        assertEquals("[tool] run_command: Build server", activeTool!!.displayLines.single())
-
-        val doneTool = parseAgyStreamJsonLine(
-            """{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":1.25,"tool_info":{"output":"herdr://connect?host=100.71.219.26&port=7501&token=abc"}}}""",
-        )
-        assertNotNull(doneTool)
-        assertEquals("[tool done] run_command (1.3s)", doneTool!!.displayLines.single())
-        assertNotNull(extractPairingUriFromOutput(doneTool.pairingSourceText!!))
-
-        val delta = parseAgyStreamJsonLine(
-            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"Setup done\n"}}""",
-        )
-        assertNotNull(delta)
-        assertEquals("Setup done\n", delta!!.textDelta)
-
-        val result = parseAgyStreamJsonLine(
-            """{"event":"result","result":{"conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","status":"SUCCESS","response":"herdr://connect?host=100.71.219.26&port=7501&token=tok123\n","duration_seconds":5.3,"num_turns":2}}""",
-        )
-        assertNotNull(result)
-        assertTrue(result!!.isResult)
-        assertEquals("SUCCESS", result.resultStatus)
-        assertTrue(result.displayLines.single().contains("5.3s"))
-        assertEquals("tok123", extractPairingUriFromOutput(result.pairingSourceText!!)!!.second.token)
     }
 
     @Test
