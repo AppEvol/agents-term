@@ -6,6 +6,7 @@ is_resume=0
 thread_id=""
 model="default"
 prompt=""
+dev_instructions=""
 
 # Skip leading `exec`
 if [ "${1:-}" = "exec" ]; then
@@ -23,7 +24,11 @@ while [ $# -gt 0 ]; do
     --json|--skip-git-repo-check|--dangerously-bypass-approvals-and-sandbox)
       shift
       ;;
-    -C|-s|-c)
+    -c)
+      dev_instructions="${2:-}"
+      shift 2
+      ;;
+    -C|-s)
       shift 2
       ;;
     -m)
@@ -54,6 +59,10 @@ fi
 printf '{"type":"thread.started","thread_id":"%s"}\n' "$thread_id"
 
 case "$prompt" in
+  *FAIL_TURN*)
+    echo "simulated codex CLI error" >&2
+    exit 1
+    ;;
   *SLOW_TURN*)
     printf '{"type":"item.started","item":{"id":"cmd_slow","type":"command_execution","command":"sleep 10"}}\n'
     sleep 10
@@ -75,6 +84,23 @@ case "$prompt" in
     ;;
 esac
 
-printf '{"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"%sCodex reply [thread=%s resumed=%s model=%s]."}}\n' \
-  "$summary_prefix" "$thread_id" "$resumed" "$model"
+sp_tag="none"
+case "$dev_instructions" in
+  *CUSTOM_SP_V2*)
+    sp_tag="v2"
+    ;;
+  *CUSTOM_SP_V1*)
+    sp_tag="v1"
+    ;;
+esac
+
+done_suffix=""
+case "$prompt" in
+  *TASK_DONE*)
+    done_suffix=" All done. You can close this tab now."
+    ;;
+esac
+
+printf '{"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"%sCodex reply [thread=%s resumed=%s model=%s sp=%s].%s"}}\n' \
+  "$summary_prefix" "$thread_id" "$resumed" "$model" "$sp_tag" "$done_suffix"
 printf '{"type":"turn.completed","usage":{"input_tokens":14,"output_tokens":22}}\n'

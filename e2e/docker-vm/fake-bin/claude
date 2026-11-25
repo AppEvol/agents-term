@@ -6,6 +6,7 @@ prompt=""
 session_id=""
 model="default"
 skip_perms=0
+sys_prompt=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -25,7 +26,11 @@ while [ $# -gt 0 ]; do
       skip_perms=1
       shift
       ;;
-    --output-format|--permission-mode|--append-system-prompt)
+    --append-system-prompt)
+      sys_prompt="${2:-}"
+      shift 2
+      ;;
+    --output-format|--permission-mode)
       shift 2
       ;;
     *)
@@ -44,6 +49,10 @@ fi
 printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$session_id"
 
 case "$prompt" in
+  *FAIL_TURN*)
+    echo "simulated claude CLI error" >&2
+    exit 1
+    ;;
   *SLOW_TURN*)
     printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}\n' "$session_id"
     printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Claude working slowly... "}}}\n' "$session_id"
@@ -65,7 +74,8 @@ if [ "$skip_perms" -eq 0 ]; then
   esac
 fi
 
-printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}\n' "$session_id"
+printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}}\n' "$session_id"
+printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Analyzing container workspace"}}}\n' "$session_id"
 printf '{"type":"assistant","session_id":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_e2e_1","name":"Bash","input":{"command":"echo claude-ok","description":"Check container"}}]}}\n' "$session_id"
 printf '{"type":"user","session_id":"%s","message":{"role":"user","content":[{"tool_use_id":"toolu_e2e_1","type":"tool_result","content":"claude-ok","is_error":false}]}}\n' "$session_id"
 
@@ -76,7 +86,24 @@ case "$prompt" in
     ;;
 esac
 
-reply="Claude reply [sess=${session_id} resumed=${resumed} model=${model} perms=${skip_perms}]."
+sp_tag="none"
+case "$sys_prompt" in
+  *CUSTOM_SP_V2*)
+    sp_tag="v2"
+    ;;
+  *CUSTOM_SP_V1*)
+    sp_tag="v1"
+    ;;
+esac
+
+done_suffix=""
+case "$prompt" in
+  *TASK_DONE*)
+    done_suffix=" Task complete. You can close this tab now."
+    ;;
+esac
+
+reply="Claude reply [sess=${session_id} resumed=${resumed} model=${model} perms=${skip_perms} sp=${sp_tag}].${done_suffix}"
 printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}}\n' "$session_id"
 printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"%s%s"}}}\n' \
   "$session_id" "$summary_prefix" "$reply"

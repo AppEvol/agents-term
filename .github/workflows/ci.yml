@@ -8,6 +8,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      force_daemon_tests:
+        description: 'Run Rust daemon build and multi-distro Linux VM E2E matrix even if binaries are unchanged'
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -46,9 +52,139 @@ jobs:
       - name: Run static checks (ruff, vulture, ktlint, detekt, shellcheck, actionlint)
         run: scripts/static-checks.sh
 
+  daemon-change-check:
+    name: Daemon Change Check (reuse verified binaries when unchanged)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      binary_changed: ${{ steps.detect.outputs.binary_changed }}
+      run_rust_daemon_build: ${{ steps.detect.outputs.run_rust_daemon_build }}
+      run_daemon_vm_e2e: ${{ steps.detect.outputs.run_daemon_vm_e2e }}
+      run_legacy_daemon_tests: ${{ steps.detect.outputs.run_legacy_daemon_tests }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Check whether daemon binaries or daemon tests changed
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          FORCE_DAEMON_TESTS: ${{ inputs.force_daemon_tests }}
+        run: |
+          set -euo pipefail
+
+          EXPECTED_HASH="$(python3 scripts/daemon-build-hash.py)"
+          echo "Expected daemon build hash: ${EXPECTED_HASH}"
+
+          BINARY_CHANGED="true"
+          PUBLISHED_HASH="none"
+          mkdir -p dist-daemon
+          if gh release download latest \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir dist-daemon \
+            --pattern "agentsterm-daemon-linux-*" >/dev/null 2>&1; then
+            if [ -f dist-daemon/agentsterm-daemon-linux-x86_64 ] \
+              && [ -f dist-daemon/agentsterm-daemon-linux-x86_64.sha256 ] \
+              && [ -f dist-daemon/agentsterm-daemon-linux-aarch64 ] \
+              && [ -f dist-daemon/agentsterm-daemon-linux-aarch64.sha256 ]; then
+              if (cd dist-daemon \
+                && sha256sum -c agentsterm-daemon-linux-x86_64.sha256 >/dev/null \
+                && sha256sum -c agentsterm-daemon-linux-aarch64.sha256 >/dev/null); then
+                chmod 755 dist-daemon/agentsterm-daemon-linux-x86_64 dist-daemon/agentsterm-daemon-linux-aarch64
+                PUBLISHED_HASH="$(./dist-daemon/agentsterm-daemon-linux-x86_64 version --hash-only || true)"
+                echo "Published latest release build hash: ${PUBLISHED_HASH}"
+                if [ "${PUBLISHED_HASH}" = "${EXPECTED_HASH}" ]; then
+                  BINARY_CHANGED="false"
+                fi
+              fi
+            fi
+          fi
+
+          if [ "${BINARY_CHANGED}" = "true" ]; then
+            rm -rf dist-daemon
+          fi
+
+          DAEMON_RS_TESTS_CHANGED="false"
+          DAEMON_E2E_HARNESS_CHANGED="false"
+          LEGACY_DAEMON_CHANGED="false"
+
+          BASE_SHA=""
+          if [ "${EVENT_NAME}" = "pull_request" ] && [ -n "${PR_BASE_SHA}" ]; then
+            BASE_SHA="${PR_BASE_SHA}"
+          elif [ "${EVENT_NAME}" = "push" ] && [ -n "${PUSH_BEFORE_SHA}" ] \
+            && [ "${PUSH_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA="${PUSH_BEFORE_SHA}"
+          fi
+
+          if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            CHANGED_FILES="$(git diff --name-only "${BASE_SHA}" HEAD || true)"
+            if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^daemon-rs/tests/'; then
+              DAEMON_RS_TESTS_CHANGED="true"
+            fi
+            if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^(e2e/docker-vm/|scripts/daemon-build-hash\.py$)'; then
+              DAEMON_E2E_HARNESS_CHANGED="true"
+            fi
+            if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^(daemon/|app_state_cli/)'; then
+              LEGACY_DAEMON_CHANGED="true"
+            fi
+          fi
+
+          RUN_RUST_DAEMON_BUILD="false"
+          RUN_DAEMON_VM_E2E="false"
+          RUN_LEGACY_DAEMON_TESTS="false"
+
+          if [ "${BINARY_CHANGED}" = "true" ] || [ "${DAEMON_RS_TESTS_CHANGED}" = "true" ] || [ "${FORCE_DAEMON_TESTS}" = "true" ]; then
+            RUN_RUST_DAEMON_BUILD="true"
+          fi
+          if [ "${BINARY_CHANGED}" = "true" ] || [ "${DAEMON_E2E_HARNESS_CHANGED}" = "true" ] || [ "${LEGACY_DAEMON_CHANGED}" = "true" ] || [ "${FORCE_DAEMON_TESTS}" = "true" ]; then
+            RUN_DAEMON_VM_E2E="true"
+          fi
+          if [ "${LEGACY_DAEMON_CHANGED}" = "true" ] || [ "${FORCE_DAEMON_TESTS}" = "true" ]; then
+            RUN_LEGACY_DAEMON_TESTS="true"
+          fi
+
+          {
+            echo "binary_changed=${BINARY_CHANGED}"
+            echo "run_rust_daemon_build=${RUN_RUST_DAEMON_BUILD}"
+            echo "run_daemon_vm_e2e=${RUN_DAEMON_VM_E2E}"
+            echo "run_legacy_daemon_tests=${RUN_LEGACY_DAEMON_TESTS}"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "### Daemon Change Detection"
+            echo "- Expected build hash: \`${EXPECTED_HASH}\`"
+            echo "- Latest release hash: \`${PUBLISHED_HASH}\`"
+            echo "- Binary changed: \`${BINARY_CHANGED}\`"
+            echo "- Run Rust daemon build & tests: \`${RUN_RUST_DAEMON_BUILD}\`"
+            echo "- Run multi-distro Linux VM E2E matrix: \`${RUN_DAEMON_VM_E2E}\`"
+            echo "- Run legacy Python daemon tests: \`${RUN_LEGACY_DAEMON_TESTS}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload verified cached daemon binaries (when unchanged)
+        if: steps.detect.outputs.binary_changed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-binaries
+          path: dist-daemon/
+          if-no-files-found: error
+
   rust-daemon-build-and-test:
     name: Rust VM Daemon (format, clippy, tests, static musl binaries)
     runs-on: ubuntu-latest
+    needs: [daemon-change-check]
+    if: needs.daemon-change-check.outputs.run_rust_daemon_build == 'true'
     timeout-minutes: 20
 
     steps:
@@ -84,6 +220,7 @@ jobs:
         run: cargo test -- --nocapture
 
       - name: Build static musl release binaries (x86_64 and aarch64)
+        if: needs.daemon-change-check.outputs.binary_changed == 'true'
         working-directory: daemon-rs
         run: |
           cargo build --release --target x86_64-unknown-linux-musl
@@ -98,10 +235,17 @@ jobs:
             sha256sum agentsterm-daemon-linux-x86_64 > agentsterm-daemon-linux-x86_64.sha256
             sha256sum agentsterm-daemon-linux-aarch64 > agentsterm-daemon-linux-aarch64.sha256
           )
+          EXPECTED_HASH="$(python3 ../scripts/daemon-build-hash.py .)"
+          BUILT_HASH="$(../dist-daemon/agentsterm-daemon-linux-x86_64 version --hash-only)"
+          if [ "${EXPECTED_HASH}" != "${BUILT_HASH}" ]; then
+            echo "ERROR: scripts/daemon-build-hash.py (${EXPECTED_HASH}) != binary hash (${BUILT_HASH})" >&2
+            exit 1
+          fi
           file ../dist-daemon/agentsterm-daemon-linux-x86_64 ../dist-daemon/agentsterm-daemon-linux-aarch64
           ls -lh ../dist-daemon
 
       - name: Upload static Rust daemon binaries
+        if: needs.daemon-change-check.outputs.binary_changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: daemon-binaries
@@ -220,6 +364,8 @@ jobs:
   daemon-and-cli-tests:
     name: Legacy Python Daemon & Installer Script Tests (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    needs: [daemon-change-check]
+    if: needs.daemon-change-check.outputs.run_legacy_daemon_tests == 'true'
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -242,10 +388,36 @@ jobs:
         run: python3 -W error::ResourceWarning -m unittest discover -s app_state_cli -v
 
   docker-vm-e2e:
-    name: Docker VM Cross-Boundary E2E Tests (zero-dep minimal + Python-to-Rust upgrade)
+    name: Rust Daemon Linux VM E2E (${{ matrix.vm.label }})
     runs-on: ubuntu-latest
-    needs: [rust-daemon-build-and-test]
+    needs: [daemon-change-check, rust-daemon-build-and-test]
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.daemon-change-check.result == 'success' &&
+      needs.daemon-change-check.outputs.run_daemon_vm_e2e == 'true' &&
+      (needs.rust-daemon-build-and-test.result == 'success' || needs.rust-daemon-build-and-test.result == 'skipped')
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        vm:
+          - target: vm-ubuntu-2404
+            label: Ubuntu 24.04 LTS (zero-dep, curl, cron)
+          - target: vm-ubuntu-2204
+            label: Ubuntu 22.04 LTS (zero-dep, curl, cron)
+          - target: vm-debian-12
+            label: Debian 12 Bookworm (zero-dep, wget-only)
+          - target: vm-almalinux-9
+            label: AlmaLinux 9 / RHEL 9 (curl, cronie)
+          - target: vm-fedora-41
+            label: Fedora 41 (zero-dep, no cron)
+          - target: vm-amazonlinux-2023
+            label: Amazon Linux 2023 / EC2 (no cron)
+          - target: vm-alpine-321
+            label: Alpine 3.21 (musl, BusyBox ash, wget-only)
+          - target: vm-legacy-python
+            label: Ubuntu 24.04 Legacy Python -> Rust Upgrade
 
     steps:
       - name: Checkout repository
@@ -268,13 +440,21 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Run headless Docker VM E2E suite (minimal zero-dep + Python->Rust upgrade)
+      - name: Run headless Rust daemon E2E suite on ${{ matrix.vm.target }}
+        env:
+          E2E_VM_TARGET: ${{ matrix.vm.target }}
         run: python3 -W error::ResourceWarning -m unittest discover -s e2e/docker-vm -v
 
   e2e-tests:
     name: End-to-End Android Instrumented Tests
     runs-on: ubuntu-latest
-    needs: [build-and-unit-test, rust-daemon-build-and-test]
+    needs: [daemon-change-check, build-and-unit-test, rust-daemon-build-and-test]
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.daemon-change-check.result == 'success' &&
+      needs.build-and-unit-test.result == 'success' &&
+      (needs.rust-daemon-build-and-test.result == 'success' || needs.rust-daemon-build-and-test.result == 'skipped')
     timeout-minutes: 30
 
     steps:
@@ -382,8 +562,19 @@ jobs:
   publish-branch-prerelease:
     name: Publish Branch Pre-Release (APK + Rust Daemon Binaries)
     runs-on: ubuntu-latest
-    needs: [static-checks, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
-    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    needs: [static-checks, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.static-checks.result == 'success' &&
+      needs.daemon-change-check.result == 'success' &&
+      needs.build-and-unit-test.result == 'success' &&
+      needs.e2e-tests.result == 'success' &&
+      (needs.rust-daemon-build-and-test.result == 'success' || needs.rust-daemon-build-and-test.result == 'skipped') &&
+      (needs.daemon-and-cli-tests.result == 'success' || needs.daemon-and-cli-tests.result == 'skipped') &&
+      (needs.docker-vm-e2e.result == 'success' || needs.docker-vm-e2e.result == 'skipped') &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref != 'refs/heads/main'
     permissions:
       contents: write
     timeout-minutes: 10
@@ -440,8 +631,19 @@ jobs:
   publish-apk:
     name: Publish Verified APK & Static Daemon Release
     runs-on: ubuntu-latest
-    needs: [static-checks, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [static-checks, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.static-checks.result == 'success' &&
+      needs.daemon-change-check.result == 'success' &&
+      needs.build-and-unit-test.result == 'success' &&
+      needs.e2e-tests.result == 'success' &&
+      (needs.rust-daemon-build-and-test.result == 'success' || needs.rust-daemon-build-and-test.result == 'skipped') &&
+      (needs.daemon-and-cli-tests.result == 'success' || needs.daemon-and-cli-tests.result == 'skipped') &&
+      (needs.docker-vm-e2e.result == 'success' || needs.docker-vm-e2e.result == 'skipped') &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
     timeout-minutes: 10

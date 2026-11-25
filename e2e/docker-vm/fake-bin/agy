@@ -3,8 +3,11 @@
 set -eu
 
 if [ "${1:-}" = "models" ]; then
-  printf 'gemini-4-pro   Gemini 4 Pro\n'
-  printf 'gemini-4-flash Gemini 4 Flash\n'
+  # Exercise ANSI stripping, tab-separated AND space-separated output, and duplicate suppression.
+  printf '\033[36mFetching available models...\033[0m\n'
+  printf 'gemini-4-pro\tGemini 4 Pro\n'
+  printf 'gemini-4-flash   Gemini 4 Flash\n'
+  printf 'gemini-4-pro\tDuplicate Should Be Ignored\n'
   exit 0
 fi
 
@@ -56,6 +59,11 @@ printf '{"event":"init","conversation_id":"%s","init":{"conversation_id":"%s","c
   "$conv_id" "$conv_id" "$(pwd)"
 
 case "$prompt" in
+  *FAIL_TURN*)
+    printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":1,"step_type":"agent_response","text_delta":"Agy failing..."}}\n' "$conv_id"
+    echo "simulated agy CLI crash" >&2
+    exit 1
+    ;;
   *SLOW_TURN*)
     printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":1,"step_type":"agent_response","text_delta":"Working slowly... "}}\n' "$conv_id"
     sleep 10
@@ -86,7 +94,25 @@ case "$prompt" in
     ;;
 esac
 
-printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":2,"step_type":"agent_response","text_delta":"%sAgy reply [conv=%s resumed=%s model=%s perms=%s]."}}\n' \
-  "$conv_id" "$summary_prefix" "$conv_id" "$resumed" "$model" "$skip_perms"
-printf '{"event":"result","conversation_id":"%s","result":{"conversation_id":"%s","status":"DONE","response":"Agy reply [conv=%s resumed=%s model=%s perms=%s].","duration_seconds":0.2,"usage":{"input_tokens":12,"output_tokens":18}}}\n' \
-  "$conv_id" "$conv_id" "$conv_id" "$resumed" "$model" "$skip_perms"
+sp_tag="none"
+case "$prompt" in
+  *CUSTOM_SP_V2*)
+    sp_tag="v2"
+    ;;
+  *CUSTOM_SP_V1*)
+    sp_tag="v1"
+    ;;
+esac
+
+done_suffix=""
+case "$prompt" in
+  *TASK_DONE*)
+    done_suffix=" All finished. You can close this tab now."
+    ;;
+esac
+
+reply="Agy reply [conv=${conv_id} resumed=${resumed} model=${model} perms=${skip_perms} sp=${sp_tag}].${done_suffix}"
+printf '{"event":"step_update","conversation_id":"%s","step_update":{"step_index":2,"step_type":"agent_response","text_delta":"%s%s"}}\n' \
+  "$conv_id" "$summary_prefix" "$reply"
+printf '{"event":"result","conversation_id":"%s","result":{"conversation_id":"%s","status":"DONE","response":"%s","duration_seconds":0.2,"usage":{"input_tokens":12,"output_tokens":18}}}\n' \
+  "$conv_id" "$conv_id" "$reply"
