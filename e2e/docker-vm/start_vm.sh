@@ -3,7 +3,8 @@
 #
 # Usage:
 #   e2e/docker-vm/start_vm.sh [--name agentsterm-e2e-vm] [--ssh-port 2222] [--daemon-port 7591]
-#       [--pubkey /path/to/id.pub] [--target vm-minimal]
+#       [--pubkey /path/to/id.pub]
+#       [--target vm-minimal|vm-ubuntu-2404|vm-ubuntu-2204|vm-debian-12|vm-almalinux-9|vm-fedora-41|vm-amazonlinux-2023|vm-alpine-321]
 #       [--binary /path/to/agentsterm-daemon]
 set -euo pipefail
 

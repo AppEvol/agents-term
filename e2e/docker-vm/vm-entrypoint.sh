@@ -19,9 +19,21 @@ if [ -d /mnt/release ]; then
   mkdir -p /opt/agentsterm-release
   cp -a /mnt/release/. /opt/agentsterm-release/
   chown -R vmuser:vmuser /opt/agentsterm-release
-  busybox httpd -p "127.0.0.1:${RELEASE_HTTP_PORT}" -h /opt/agentsterm-release
-  # Append to Ubuntu's default /etc/skel/.profile (which checks $BASH_VERSION) instead of
-  # overwriting it, so bootstrap tests exercise real login-profile sourcing under dash/sh.
+  if command -v httpd >/dev/null 2>&1 && httpd --help 2>&1 | grep -qi busybox; then
+    httpd -p "127.0.0.1:${RELEASE_HTTP_PORT}" -h /opt/agentsterm-release
+  elif command -v busybox >/dev/null 2>&1 && busybox httpd --help >/dev/null 2>&1; then
+    busybox httpd -p "127.0.0.1:${RELEASE_HTTP_PORT}" -h /opt/agentsterm-release
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -m http.server "${RELEASE_HTTP_PORT}" --bind 127.0.0.1 --directory /opt/agentsterm-release >/dev/null 2>&1 &
+  else
+    echo "ERROR: no local HTTP server available (need busybox httpd or python3)" >&2
+    exit 1
+  fi
+
+  # Append to the distro's default ~/.profile (e.g. Ubuntu's /etc/skel/.profile which checks
+  # $BASH_VERSION) instead of overwriting it, so bootstrap tests exercise real login-profile
+  # sourcing under dash/ash/bash.
+  touch /home/vmuser/.profile
   cat >> /home/vmuser/.profile <<EOF
 export AGENTSTERM_RELEASE_BASE_URL="http://127.0.0.1:${RELEASE_HTTP_PORT}"
 export PATH="\$HOME/.local/bin:\$PATH"
@@ -46,8 +58,9 @@ EOF
 cat > /home/vmuser/.codex/models_cache.json <<'EOF'
 {
   "models": [
-    {"slug": "gpt-5.3-codex", "display_name": "GPT-5.3 Codex", "priority": 1},
-    {"slug": "o4-mini", "display_name": "o4-mini", "priority": 2}
+    {"slug": "o4-mini", "display_name": "o4-mini", "priority": 2},
+    {"slug": "hidden-internal-model", "display_name": "Hidden", "priority": 0, "visibility": "hide"},
+    {"slug": "gpt-5.3-codex", "display_name": "GPT-5.3 Codex", "priority": 1}
   ]
 }
 EOF
@@ -58,7 +71,13 @@ EOF
 
 chown -R vmuser:vmuser /home/vmuser/.claude /home/vmuser/.codex /home/vmuser/.gemini
 
-cron
+# Start the distro's cron daemon if present (Ubuntu/Debian: cron; RHEL/Alpine: crond;
+# Fedora/Amazon Linux 2023 intentionally have no cron to exercise detached-only fallback).
+if command -v cron >/dev/null 2>&1; then
+  cron
+elif command -v crond >/dev/null 2>&1; then
+  crond
+fi
 
 socat "TCP-LISTEN:${BRIDGE_PORT},bind=0.0.0.0,fork,reuseaddr" "TCP:127.0.0.1:${DAEMON_PORT}" &
 
