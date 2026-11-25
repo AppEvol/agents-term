@@ -61,7 +61,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
@@ -1165,16 +1164,6 @@ private fun ChatComposer(
             .navigationBarsPadding(),
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            if (isWorking) {
-                LinearProgressIndicator(
-                    color = if (isHolding) HerdrRed else HerdrBlue,
-                    trackColor = (if (isHolding) HerdrRed else HerdrBlue).copy(alpha = 0.14f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.dp)
-                        .testTag("working_progress_bar"),
-                )
-            }
             Column(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
