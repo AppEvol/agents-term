@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
@@ -47,8 +48,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -94,6 +97,7 @@ import com.example.ui.theme.AppTheme
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.ThemedAlertDialog
 import com.example.ui.theme.ThemedButton
+import com.example.ui.theme.ThemedOutlinedButton
 import com.example.ui.theme.ThemedSwitch
 import com.example.ui.theme.ThemedTextButton
 import com.example.ui.theme.ThemedTextField
@@ -124,6 +128,8 @@ fun HerdrApp(viewModel: MainViewModel) {
     val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
     val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsStateWithLifecycle()
+    val isRefreshingClosedTabs by viewModel.isRefreshingClosedTabs.collectAsStateWithLifecycle()
+    val revivingTabId by viewModel.revivingTabId.collectAsStateWithLifecycle()
 
     if (showSettings) {
         val debugUploadState by viewModel.debugUploadState.collectAsStateWithLifecycle()
@@ -181,6 +187,7 @@ fun HerdrApp(viewModel: MainViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
 
     var showNewTabSheet by remember { mutableStateOf(false) }
+    var showRecentlyClosedSheet by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showPermissionDialog by remember { mutableStateOf(false) }
@@ -199,6 +206,64 @@ fun HerdrApp(viewModel: MainViewModel) {
             state.serverInfo,
             permissionMode = state.activeTab?.permissionMode ?: "full-access",
         )
+    }
+
+    fun openRecentlyClosedSheet() {
+        showRecentlyClosedSheet = true
+        viewModel.refreshClosedTabs()
+    }
+
+    fun handleDeleteTab(tabId: String) {
+        viewModel.deleteTab(tabId) { archived ->
+            if (archived != null) {
+                scope.launch {
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                    val result = snackbarHostState.showSnackbar(
+                        message = context.getString(R.string.snackbar_tab_closed, archived.title),
+                        actionLabel = context.getString(R.string.action_undo),
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        viewModel.reviveClosedTab(archived.id)
+                    }
+                }
+            }
+        }
+    }
+
+    fun handleCloseFinishedTabs() {
+        viewModel.closeFinishedTabs { archived ->
+            scope.launch {
+                snackbarHostState.currentSnackbarData?.dismiss()
+                if (archived.size == 1) {
+                    val only = archived.first()
+                    val result = snackbarHostState.showSnackbar(
+                        message = context.getString(R.string.snackbar_tab_closed, only.title),
+                        actionLabel = context.getString(R.string.action_undo),
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        viewModel.reviveClosedTab(only.id)
+                    }
+                } else {
+                    val result = snackbarHostState.showSnackbar(
+                        message = context.resources.getQuantityString(
+                            R.plurals.snackbar_tabs_closed_count,
+                            archived.size,
+                            archived.size,
+                        ),
+                        actionLabel = context.getString(R.string.action_recently_closed_tabs),
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        openRecentlyClosedSheet()
+                    }
+                }
+            }
+        }
     }
 
     fun openModelPickerForActiveTab() {
@@ -304,7 +369,8 @@ fun HerdrApp(viewModel: MainViewModel) {
                     }
                 },
                 defaultSystemPrompt = activeTabDefaultSystemPrompt,
-                onDeleteTab = { viewModel.deleteTab(it) },
+                onDeleteTab = { handleDeleteTab(it) },
+                onOpenRecentlyClosed = { openRecentlyClosedSheet() },
                 onOpenSettings = { viewModel.openConnectionSettings() },
                 onOpenAppSettings = { viewModel.openAppSettings() },
                 onReconnect = { viewModel.reconnectNow() },
@@ -365,12 +431,35 @@ fun HerdrApp(viewModel: MainViewModel) {
             debugSharingEnabled = debugSettings.enabled,
             onSelectTab = { handleTabTap(it) },
             onNewTab = { showNewTabSheet = true },
-            onDeleteTab = { viewModel.deleteTab(it) },
-            onCloseFinishedTabs = { viewModel.closeFinishedTabs() },
+            onDeleteTab = { handleDeleteTab(it) },
+            onCloseFinishedTabs = { handleCloseFinishedTabs() },
+            onOpenRecentlyClosed = { openRecentlyClosedSheet() },
             onOpenSettings = { viewModel.openConnectionSettings() },
             onOpenAppSettings = { viewModel.openAppSettings() },
             onReconnect = { viewModel.reconnectNow() },
             content = mainScaffold,
+        )
+    }
+
+    if (showRecentlyClosedSheet) {
+        RecentlyClosedTabsSheet(
+            closedTabs = state.closedTabs,
+            canReviveTab = state.canCreateTab,
+            isRefreshing = isRefreshingClosedTabs,
+            revivingTabId = revivingTabId,
+            onRefresh = { viewModel.refreshClosedTabs() },
+            onRevive = { tabId ->
+                viewModel.reviveClosedTab(tabId) { revived ->
+                    showRecentlyClosedSheet = false
+                    scope.launch {
+                        snackbarHostState.currentSnackbarData?.dismiss()
+                        snackbarHostState.showSnackbar(
+                            context.getString(R.string.snackbar_tab_revived, revived.title),
+                        )
+                    }
+                }
+            },
+            onDismiss = { showRecentlyClosedSheet = false },
         )
     }
 
@@ -717,6 +806,7 @@ internal fun WorkspaceNavigationShell(
     onNewTab: () -> Unit,
     onDeleteTab: (String) -> Unit,
     onCloseFinishedTabs: () -> Unit,
+    onOpenRecentlyClosed: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenAppSettings: () -> Unit,
     onReconnect: () -> Unit,
@@ -737,6 +827,7 @@ internal fun WorkspaceNavigationShell(
                     onNewTab = onNewTab,
                     onDeleteTab = onDeleteTab,
                     onCloseFinishedTabs = onCloseFinishedTabs,
+                    onOpenRecentlyClosed = onOpenRecentlyClosed,
                     onOpenSettings = onOpenSettings,
                     onOpenAppSettings = onOpenAppSettings,
                     onReconnect = onReconnect,
@@ -768,6 +859,10 @@ internal fun WorkspaceNavigationShell(
                     },
                     onDeleteTab = onDeleteTab,
                     onCloseFinishedTabs = onCloseFinishedTabs,
+                    onOpenRecentlyClosed = {
+                        scope.launch { drawerState.close() }
+                        onOpenRecentlyClosed()
+                    },
                     onOpenSettings = {
                         scope.launch { drawerState.close() }
                         onOpenSettings()
@@ -808,6 +903,7 @@ internal fun WorkspaceScaffold(
     onToggleTaskDone: (TabRecord, Boolean) -> Unit,
     defaultSystemPrompt: String,
     onDeleteTab: (String) -> Unit,
+    onOpenRecentlyClosed: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenAppSettings: () -> Unit,
     onReconnect: () -> Unit,
@@ -1040,6 +1136,25 @@ internal fun WorkspaceScaffold(
                                         )
                                     }
                                     DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (state.closedTabs.isNotEmpty()) {
+                                                    stringResource(
+                                                        R.string.action_recently_closed_tabs_count,
+                                                        state.closedTabs.size,
+                                                    )
+                                                } else {
+                                                    stringResource(R.string.action_recently_closed_tabs)
+                                                },
+                                            )
+                                        },
+                                        onClick = {
+                                            onToggleOverflow(false)
+                                            onOpenRecentlyClosed()
+                                        },
+                                        modifier = Modifier.testTag("menu_recently_closed_tabs"),
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text(stringResource(R.string.action_app_settings)) },
                                         onClick = {
                                             onToggleOverflow(false)
@@ -1140,7 +1255,9 @@ internal fun WorkspaceScaffold(
                 connected = state.connectionState == ConnectionState.CONNECTED,
                 hostname = state.serverInfo?.hostname?.ifBlank { state.config.host }
                     ?: state.config.host,
+                closedTabCount = state.closedTabs.size,
                 onCreateTab = onNewTab,
+                onOpenRecentlyClosed = onOpenRecentlyClosed,
                 modifier = Modifier.padding(innerPadding),
             )
         } else {
@@ -1480,6 +1597,8 @@ private fun NoTabsPlaceholder(
     hostname: String,
     onCreateTab: () -> Unit,
     modifier: Modifier = Modifier,
+    closedTabCount: Int = 0,
+    onOpenRecentlyClosed: () -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -1530,6 +1649,21 @@ private fun NoTabsPlaceholder(
             Icon(Icons.Rounded.Add, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.action_new_tab))
+        }
+        if (closedTabCount > 0) {
+            Spacer(Modifier.height(10.dp))
+            ThemedOutlinedButton(
+                onClick = onOpenRecentlyClosed,
+                enabled = connected,
+                shape = themedCorner(14.dp),
+                modifier = Modifier
+                    .height(46.dp)
+                    .testTag("empty_recently_closed_button"),
+            ) {
+                Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.action_recently_closed_tabs_count, closedTabCount))
+            }
         }
     }
 }
