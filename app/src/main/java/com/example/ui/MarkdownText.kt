@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -35,14 +36,21 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.LinkInteractionListener
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -152,6 +160,246 @@ private fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
 
 internal const val INLINE_CODE_TAG = "inline-code"
 
+/** Tag of the [LinkAnnotation.Clickable] on links that point at a VM path rather than the web. */
+internal const val FILE_LINK_TAG = "file-link"
+
+/** Called when a link is tapped: web links get the URL, file links get the VM path. */
+internal fun interface MarkdownLinkHandler {
+    fun onLink(target: String, isWeb: Boolean)
+}
+
+private class InlineContext(
+    val inlineCodeFg: Color,
+    val linkColor: Color,
+    val linkHandler: MarkdownLinkHandler?,
+)
+
+private val webSchemes = listOf("https://", "http://", "mailto:")
+
+private fun isWebUrl(url: String): Boolean = webSchemes.any { url.startsWith(it, ignoreCase = true) }
+
+/** `file:///abs/path#L10-L20` → `/abs/path`; other non-web targets are returned as-is. */
+internal fun vmPathFromLink(url: String): String {
+    var path = url
+    if (path.startsWith("file://", ignoreCase = true)) {
+        path = path.substring("file://".length)
+        path = runCatching { java.net.URLDecoder.decode(path.replace("+", "%2B"), "UTF-8") }.getOrDefault(path)
+    }
+    return path.substringBefore('#')
+}
+
+private fun findLinkLabelEnd(text: String, start: Int): Int {
+    var depth = 0
+    var i = start
+    while (i < text.length) {
+        when (text[i]) {
+            '\\' -> i++
+
+            '[' -> depth++
+
+            ']' -> {
+                depth--
+                if (depth == 0) return i
+            }
+
+            '\n' -> if (i + 1 < text.length && text[i + 1] == '\n') return -1
+        }
+        i++
+    }
+    return -1
+}
+
+private fun findLinkTargetEnd(text: String, openParen: Int): Int {
+    var j = openParen + 1
+    var parens = 1
+    while (j < text.length) {
+        val c = text[j]
+        if (c.isWhitespace()) return -1
+        if (c == '(') parens++
+        if (c == ')') {
+            parens--
+            if (parens == 0) return j
+        }
+        j++
+    }
+    return -1
+}
+
+/**
+ * Parses `[label](target)` starting at [start] (which must be `[`). Returns label, target and the
+ * index just past the closing `)`, or null if this is not a link.
+ */
+private fun matchMarkdownLink(text: String, start: Int): Triple<String, String, Int>? {
+    val labelEnd = findLinkLabelEnd(text, start)
+    if (labelEnd < 0 || labelEnd + 1 >= text.length || text[labelEnd + 1] != '(') return null
+    val targetEnd = findLinkTargetEnd(text, labelEnd + 1)
+    if (targetEnd < 0) return null
+    val target = text.substring(labelEnd + 2, targetEnd).removeSurrounding("<", ">")
+    if (target.isEmpty()) return null
+    return Triple(text.substring(start + 1, labelEnd), target, targetEnd + 1)
+}
+
+private const val TRAILING_URL_PUNCTUATION = ".,;:!?'\"*_~"
+
+private fun trimTrailingUrlPunctuation(text: String, start: Int, rawEnd: Int, minEnd: Int): Int {
+    var end = rawEnd
+    while (end > minEnd) {
+        val last = text[end - 1]
+        if (last in TRAILING_URL_PUNCTUATION) {
+            end--
+        } else if (last == ')' || last == ']') {
+            val open = if (last == ')') '(' else '['
+            val segment = text.substring(start, end)
+            if (segment.count { it == last } > segment.count { it == open }) end-- else break
+        } else {
+            break
+        }
+    }
+    return end
+}
+
+/** Length of a bare `http(s)://` URL starting at [start], or 0 if there is none. */
+private fun matchBareUrl(text: String, start: Int): Int {
+    val scheme = when {
+        text.startsWith("https://", start, ignoreCase = true) -> 8
+        text.startsWith("http://", start, ignoreCase = true) -> 7
+        else -> return 0
+    }
+    if (start > 0 && text[start - 1].isLetterOrDigit()) return 0
+    var end = start
+    while (end < text.length && !text[end].isWhitespace() && text[end] !in "<>\"`") end++
+    // Drop trailing sentence punctuation and a `)` that closes text around the URL.
+    end = trimTrailingUrlPunctuation(text, start, end, start + scheme)
+    return if (end - start > scheme) end - start else 0
+}
+
+private fun AnnotatedString.Builder.appendLink(
+    label: String,
+    target: String,
+    ctx: InlineContext,
+) {
+    val web = isWebUrl(target)
+    val styles = TextLinkStyles(
+        style = SpanStyle(
+            color = ctx.linkColor,
+            textDecoration = if (web) TextDecoration.Underline else null,
+            fontFamily = if (web) null else MonoFontFamily,
+        ),
+        pressedStyle = SpanStyle(background = ctx.linkColor.copy(alpha = 0.16f)),
+    )
+    val handler = ctx.linkHandler
+    val link = if (web) {
+        LinkAnnotation.Url(
+            url = target,
+            styles = styles,
+            linkInteractionListener = handler?.let { h -> LinkInteractionListener { h.onLink(target, true) } },
+        )
+    } else {
+        val path = vmPathFromLink(target)
+        LinkAnnotation.Clickable(
+            tag = FILE_LINK_TAG,
+            styles = styles,
+            linkInteractionListener = handler?.let { h -> LinkInteractionListener { h.onLink(path, false) } },
+        )
+    }
+    withLink(link) { appendInline(label, ctx, inLink = true) }
+}
+
+private fun AnnotatedString.Builder.tryAppendInlineCode(
+    text: String,
+    idx: Int,
+    ctx: InlineContext,
+): Int {
+    if (text[idx] != '`') return -1
+    val end = text.indexOf('`', idx + 1)
+    if (end <= idx) return -1
+    pushStringAnnotation(INLINE_CODE_TAG, "")
+    withStyle(
+        SpanStyle(
+            fontFamily = MonoFontFamily,
+            color = ctx.inlineCodeFg,
+            fontSize = 13.sp,
+        ),
+    ) {
+        // The surrounding spaces are the chip's inner padding.
+        append(" ${text.substring(idx + 1, end)} ")
+    }
+    pop()
+    return end + 1
+}
+
+private fun AnnotatedString.Builder.tryAppendLink(
+    text: String,
+    idx: Int,
+    ctx: InlineContext,
+    inLink: Boolean,
+): Int {
+    if (inLink) return -1
+    val ch = text[idx]
+    // Link [label](target). Links cannot nest, so inside a label `[` is plain text.
+    if (ch == '[') {
+        val link = matchMarkdownLink(text, idx)
+        if (link != null) {
+            appendLink(link.first, link.second, ctx)
+            return link.third
+        }
+    }
+    // Bare web URL
+    if (ch == 'h' || ch == 'H') {
+        val urlLen = matchBareUrl(text, idx)
+        if (urlLen > 0) {
+            val url = text.substring(idx, idx + urlLen)
+            appendLink(url, url, ctx)
+            return idx + urlLen
+        }
+    }
+    return -1
+}
+
+private fun AnnotatedString.Builder.tryAppendEmphasis(
+    text: String,
+    idx: Int,
+    ctx: InlineContext,
+    inLink: Boolean,
+): Int {
+    if (text[idx] != '*') return -1
+    // Bold **...**
+    if (idx + 1 < text.length && text[idx + 1] == '*') {
+        val end = text.indexOf("**", idx + 2)
+        if (end > idx + 2) {
+            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                appendInline(text.substring(idx + 2, end), ctx, inLink)
+            }
+            return end + 2
+        }
+    }
+    // Italic *...*
+    val end = text.indexOf('*', idx + 1)
+    if (end > idx + 1 && !text.substring(idx + 1, end).contains('\n')) {
+        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+            appendInline(text.substring(idx + 1, end), ctx, inLink)
+        }
+        return end + 1
+    }
+    return -1
+}
+
+private fun AnnotatedString.Builder.appendInline(text: String, ctx: InlineContext, inLink: Boolean) {
+    var idx = 0
+    val len = text.length
+    while (idx < len) {
+        val next = tryAppendInlineCode(text, idx, ctx).takeIf { it >= 0 }
+            ?: tryAppendLink(text, idx, ctx, inLink).takeIf { it >= 0 }
+            ?: tryAppendEmphasis(text, idx, ctx, inLink).takeIf { it >= 0 }
+        if (next != null) {
+            idx = next
+        } else {
+            append(text[idx])
+            idx++
+        }
+    }
+}
+
 /**
  * Inline code is marked with an [INLINE_CODE_TAG] annotation (not `SpanStyle.background`), and
  * [InlineMarkdownText] draws its background as a rounded chip per line.
@@ -159,59 +407,18 @@ internal const val INLINE_CODE_TAG = "inline-code"
  * A background span fills the full line height, so code on consecutive lines fused into one solid
  * slab. Plain text with code to its left, above and below then looked like it sat in a dark
  * cut-out box.
+ *
+ * `[label](url)` links and bare `http(s)://` URLs show as tappable links. Web links open in the
+ * browser; other targets (agents' `file:///vm/path#L10` links) show only the label, and tapping
+ * passes the VM path to [linkHandler], since those paths cannot be opened on the phone.
  */
 internal fun parseInlineStyles(
     text: String,
     inlineCodeFg: Color,
+    linkColor: Color = inlineCodeFg,
+    linkHandler: MarkdownLinkHandler? = null,
 ): AnnotatedString = buildAnnotatedString {
-    var idx = 0
-    val len = text.length
-    while (idx < len) {
-        // Inline code `...`
-        if (text[idx] == '`') {
-            val end = text.indexOf('`', idx + 1)
-            if (end > idx) {
-                pushStringAnnotation(INLINE_CODE_TAG, "")
-                withStyle(
-                    SpanStyle(
-                        fontFamily = MonoFontFamily,
-                        color = inlineCodeFg,
-                        fontSize = 13.sp,
-                    ),
-                ) {
-                    // The surrounding spaces are the chip's inner padding.
-                    append(" ${text.substring(idx + 1, end)} ")
-                }
-                pop()
-                idx = end + 1
-                continue
-            }
-        }
-        // Bold **...**
-        if (idx + 1 < len && text[idx] == '*' && text[idx + 1] == '*') {
-            val end = text.indexOf("**", idx + 2)
-            if (end > idx) {
-                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                    append(text.substring(idx + 2, end))
-                }
-                idx = end + 2
-                continue
-            }
-        }
-        // Italic *...*
-        if (text[idx] == '*') {
-            val end = text.indexOf('*', idx + 1)
-            if (end > idx + 1 && !text.substring(idx + 1, end).contains('\n')) {
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                    append(text.substring(idx + 1, end))
-                }
-                idx = end + 1
-                continue
-            }
-        }
-        append(text[idx])
-        idx++
-    }
+    appendInline(text, InlineContext(inlineCodeFg, linkColor, linkHandler), inLink = false)
 }
 
 /**
@@ -277,6 +484,26 @@ private fun InlineMarkdownText(
     )
 }
 
+/** Web links open in the browser; VM file links copy their path, since the phone can't open them. */
+@Composable
+private fun rememberMarkdownLinkHandler(): MarkdownLinkHandler {
+    val uriHandler = LocalUriHandler.current
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    return remember(uriHandler, clipboard, context) {
+        MarkdownLinkHandler { target, isWeb ->
+            if (isWeb) {
+                // No app can handle some URIs; that must not crash the chat.
+                runCatching { uriHandler.openUri(target) }
+            } else {
+                clipboard.setText(AnnotatedString(target))
+                Toast.makeText(context, context.getString(R.string.markdown_path_copied, target), Toast.LENGTH_SHORT)
+                    .show()
+            }
+        }
+    }
+}
+
 @Composable
 fun MarkdownText(
     markdown: String,
@@ -286,6 +513,7 @@ fun MarkdownText(
     val blocks = remember(markdown) { parseMarkdownBlocks(markdown) }
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val codeFg = MaterialTheme.colorScheme.primary
+    val linkHandler = rememberMarkdownLinkHandler()
 
     SelectionContainer {
         Column(
@@ -301,7 +529,7 @@ fun MarkdownText(
                             else -> MaterialTheme.typography.titleSmall
                         }
                         InlineMarkdownText(
-                            text = parseInlineStyles(block.text, codeFg),
+                            text = parseInlineStyles(block.text, codeFg, codeFg, linkHandler),
                             style = style.copy(fontWeight = FontWeight.SemiBold),
                             color = textColor,
                             codeBackground = codeBg,
@@ -310,7 +538,7 @@ fun MarkdownText(
 
                     is MarkdownBlock.Paragraph -> {
                         InlineMarkdownText(
-                            text = parseInlineStyles(block.lines.joinToString("\n"), codeFg),
+                            text = parseInlineStyles(block.lines.joinToString("\n"), codeFg, codeFg, linkHandler),
                             style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 23.sp),
                             color = textColor,
                             codeBackground = codeBg,
@@ -330,7 +558,7 @@ fun MarkdownText(
                                         color = MaterialTheme.colorScheme.primary,
                                     )
                                     InlineMarkdownText(
-                                        text = parseInlineStyles(item, codeFg),
+                                        text = parseInlineStyles(item, codeFg, codeFg, linkHandler),
                                         style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
                                         color = textColor,
                                         codeBackground = codeBg,
@@ -355,7 +583,7 @@ fun MarkdownText(
                                         color = MaterialTheme.colorScheme.primary,
                                     )
                                     InlineMarkdownText(
-                                        text = parseInlineStyles(item, codeFg),
+                                        text = parseInlineStyles(item, codeFg, codeFg, linkHandler),
                                         style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
                                         color = textColor,
                                         codeBackground = codeBg,

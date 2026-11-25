@@ -73,6 +73,7 @@
     <string name="tool_input_label">Input</string>
     <string name="tool_output_label">Output</string>
     <string name="status_interrupted">Interrupted by user</string>
+    <string name="markdown_path_copied">Copied VM path: %1$s</string>
     <string name="tab_unread">Unread</string>
     <string name="tab_activity_working">Working</string>
     <string name="tab_activity_waiting">Waiting for instructions</string>
