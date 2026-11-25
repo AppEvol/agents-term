@@ -45,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
@@ -76,6 +77,9 @@ import androidx.compose.ui.unit.dp
  */
 
 private val LunaButtonShape = RoundedCornerShape(3.dp)
+
+/** How faded a disabled Start or caption button is. */
+private const val DISABLED_ALPHA = 0.5f
 private val LunaFieldShape = RoundedCornerShape(1.dp)
 
 /** True when the current theme draws Windows XP controls. */
@@ -199,12 +203,14 @@ fun ThemedFilterChip(
 fun PrimaryActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
     if (!isLunaControls) {
         Button(
             onClick = onClick,
             modifier = modifier,
+            enabled = enabled,
             shape = themedCorner(14.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = AppTheme.chrome.primaryAction,
@@ -229,7 +235,8 @@ fun PrimaryActionButton(
             .background(LunaStartBands)
             .drawBehind { if (pressed) drawRect(Color.Black.copy(alpha = 0.18f)) }
             .border(1.dp, LunaStartBorder, shape)
-            .clickable(interaction, indication = null, role = Role.Button, onClick = onClick)
+            .alpha(if (enabled) 1f else DISABLED_ALPHA)
+            .clickable(interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -372,10 +379,11 @@ fun ThemedRadioIndicator(selected: Boolean, modifier: Modifier = Modifier) {
 fun TitleBarIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     if (!isLunaControls) {
-        IconButton(onClick = onClick, modifier = modifier, content = content)
+        IconButton(onClick = onClick, modifier = modifier, enabled = enabled, content = content)
         return
     }
     val interaction = remember { MutableInteractionSource() }
@@ -384,7 +392,8 @@ fun TitleBarIconButton(
     Box(
         modifier = modifier
             .size(48.dp)
-            .clickable(interaction, indication = null, role = Role.Button, onClick = onClick),
+            .alpha(if (enabled) 1f else DISABLED_ALPHA)
+            .clickable(interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Box(
