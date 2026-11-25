@@ -1,6 +1,11 @@
 package com.example.data
 
 private val WHITESPACE_RE = Regex("\\s+")
+private val CODE_FENCE_RE = Regex("```[^\\n]*\\n?(.*?)```", setOf(RegexOption.DOT_MATCHES_ALL))
+private val MARKDOWN_LINK_RE = Regex("\\[([^\\]]+)]\\([^)]+\\)")
+private val MARKDOWN_LINE_PREFIX_RE = Regex("^\\s*(?:#{1,6}\\s+|>\\s+|[-*+]\\s+)")
+private val TASK_SUMMARY_WRAPPER_RE = Regex("</?tab_task_summary>", RegexOption.IGNORE_CASE)
+private val MODEL_SLASH_RE = Regex("^/model(?:\\s|$)", RegexOption.IGNORE_CASE)
 private val LEADING_CD_RE = Regex(
     """^\s*cd(?:\s+(?:-[LP]|--))?\s+(?:"[^"]*"|'[^']*'|(?:\\.|[^\s;&|\n])+)\s*(?:&&|;|\r?\n)\s*""",
 )
@@ -198,5 +203,52 @@ fun reconcileUpdatedMessageSegments(existing: ChatMessage?, incoming: ChatMessag
         incoming.copy(segments = existing.segments)
     } else {
         incoming
+    }
+}
+
+fun summarizeTaskPromptForDisplay(raw: String, maxLen: Int = 160): String? {
+    val cleaned = TASK_SUMMARY_WRAPPER_RE.replace(raw, "").trim()
+    if (cleaned.isEmpty()) return null
+    val withoutFences = CODE_FENCE_RE.replace(cleaned, " ").trim()
+    val source = withoutFences.ifEmpty { CODE_FENCE_RE.replace(cleaned) { it.groupValues[1] } }
+    val stripped = MARKDOWN_LINK_RE.replace(source, "$1").replace("`", "")
+    val joined = stripped.lines()
+        .map { MARKDOWN_LINE_PREFIX_RE.replace(it, "").trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString(" ")
+    val single = WHITESPACE_RE.replace(joined, " ").trim()
+    if (single.isEmpty()) return null
+    if (single.length <= maxLen) return single
+    var cut = single.take(maxLen - 1).trimEnd()
+    val spaceIdx = cut.lastIndexOf(' ')
+    if (spaceIdx >= ((maxLen - 1) * 0.65).toInt()) {
+        cut = cut.substring(0, spaceIdx).trimEnd(' ', ',', ';', ':', '-')
+    }
+    return "$cut…"
+}
+
+fun resolveTabTaskSummary(tab: TabRecord, messages: List<ChatMessage>): String? {
+    tab.taskSummary?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    for (msg in messages) {
+        if (msg.role != "user") continue
+        val trimmed = msg.text.trim()
+        if (trimmed.isEmpty() || MODEL_SLASH_RE.containsMatchIn(trimmed)) continue
+        summarizeTaskPromptForDisplay(trimmed)?.let { return it }
+    }
+    return tab.lastMessagePreview?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+fun resolveTabLatestDetail(tab: TabRecord, taskSummary: String?): String? {
+    val normalizedSummary = taskSummary?.trim().orEmpty()
+    return when (tab.status) {
+        "working" -> tab.statusDetail?.trim()?.takeIf { it.isNotEmpty() }
+
+        "blocked" -> tab.statusDetail?.trim()?.takeIf { it.isNotEmpty() } ?: "Waiting for approval"
+
+        "error" -> tab.statusDetail?.trim()?.takeIf { it.isNotEmpty() } ?: "Last turn failed"
+
+        else -> tab.lastMessagePreview?.trim()?.takeIf {
+            it.isNotEmpty() && !it.equals(normalizedSummary, ignoreCase = true)
+        }
     }
 }

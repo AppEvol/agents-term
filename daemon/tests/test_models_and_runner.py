@@ -12,9 +12,21 @@ from agentsterm_daemon.models import (
     read_claude_models_from_disk,
     read_codex_models_from_disk,
 )
-from agentsterm_daemon.runner import AgentRunner, block_separator, is_task_finished_response
+from agentsterm_daemon.runner import (
+    TASK_SUMMARY_OPEN_TAG,
+    AgentRunner,
+    TaskSummaryStreamFilter,
+    block_separator,
+    is_task_finished_response,
+    pad_first_prompt_for_task_summary,
+)
 from agentsterm_daemon.store import StateStore
-from agentsterm_daemon.util import summarize_command, summarize_tool_input
+from agentsterm_daemon.util import (
+    derive_task_summary_from_messages,
+    summarize_command,
+    summarize_task_prompt,
+    summarize_tool_input,
+)
 from helpers import FIXTURES_DIR, TempHomeTestCase, run_async
 
 
@@ -276,10 +288,11 @@ class RunnerTest(TempHomeTestCase):
         self.assertEqual(msg2["text"], "Fallback response text from result event.")
         calls = [json.loads(line) for line in args_log.read_text().splitlines()]
         self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0][-1], "--print=First turn")
+        self.assertEqual(calls[0][-1], f"--print={pad_first_prompt_for_task_summary('First turn')}")
         self.assertIn("--dangerously-skip-permissions", calls[0])
         self.assertIn("--conversation", calls[1])
         self.assertIn("conv-resumed-77", calls[1])
+        self.assertEqual(calls[1][-1], "--print=Second turn")
 
     def test_model_slash_command_is_local_and_passes_model_on_next_turn(self):
         args_log = self.tmp / "args.log"
@@ -394,7 +407,7 @@ class RunnerTest(TempHomeTestCase):
         self.assertEqual((t["status"], t["statusDetail"]), ("blocked", "Waiting for approval"))
         self.assertEqual(t["sessionRef"], {"kind": "claude", "value": "sess-1"})
         argv = json.loads(args_log.read_text().splitlines()[0])
-        self.assertEqual(argv[:2], ["-p", "hello"])
+        self.assertEqual(argv[:2], ["-p", pad_first_prompt_for_task_summary("hello")])
         self.assertIn("acceptEdits", argv)
         self.assertEqual(argv[argv.index("--model") + 1], "opus")
 
@@ -433,7 +446,17 @@ class RunnerTest(TempHomeTestCase):
         _, _ = self.run_turn(runner, store, store.get_tab(tab["id"]), "again")
         first, second = [json.loads(line) for line in args_log.read_text().splitlines()]
         self.assertEqual(
-            first, ["exec", "--json", "--skip-git-repo-check", "-C", str(self.tmp), "-s", "read-only", "go"]
+            first,
+            [
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "-C",
+                str(self.tmp),
+                "-s",
+                "read-only",
+                pad_first_prompt_for_task_summary("go"),
+            ],
         )
         self.assertEqual(second, ["exec", "resume", "--json", "--skip-git-repo-check", "th-9", "again"])
 
@@ -860,12 +883,12 @@ class RunnerTest(TempHomeTestCase):
         self.run_turn(runner, store, agy_empty, "Plain prompt")
         a1, a2, a3, a4, a5 = [json.loads(line) for line in agy_args.read_text().splitlines()]
         self.assertIn("<system_instructions>\nInitial mobile prompt.\n</system_instructions>", a1[-1])
-        self.assertTrue(a1[-1].endswith("First question"))
+        self.assertTrue(a1[-1].endswith(pad_first_prompt_for_task_summary("First question")))
         self.assertEqual(a2[-1], "--print=Second question")
         self.assertIn("<system_instructions>\nUpdated mobile prompt.\n</system_instructions>", a3[-1])
         self.assertTrue(a3[-1].endswith("Third question"))
         self.assertEqual(a4[-1], "--print=Fourth question")
-        self.assertEqual(a5[-1], "--print=Plain prompt")
+        self.assertEqual(a5[-1], f"--print={pad_first_prompt_for_task_summary('Plain prompt')}")
 
         # 4) Shell tabs never store a systemPrompt
         sh = store.create_tab("shell", cwd=str(self.tmp), system_prompt="Should be ignored")
@@ -1097,6 +1120,162 @@ else:
         store.save_now()
         reloaded = StateStore()
         self.assertEqual([m["text"] for m in reloaded.get_tab(tab["id"])["queuedMessages"]], ["Wait for me"])
+
+    def test_task_summary_stream_filter_handles_chunks_angles_and_unclosed_tags(self):
+        # 1) Split char-by-char across open and close tags with leading/trailing whitespace
+        f = TaskSummaryStreamFilter()
+        stream = "\n  <tab_task_summary>Fix Android tab switching lag</tab_task_summary>\n\nI checked the layout."
+        visible_chunks = []
+        extracted = []
+        for ch in stream:
+            vis, summary = f.feed(ch)
+            if vis:
+                visible_chunks.append(vis)
+            if summary:
+                extracted.append(summary)
+        visible_chunks.append(f.flush())
+        self.assertEqual("".join(visible_chunks), "I checked the layout.")
+        self.assertEqual(extracted, ["Fix Android tab switching lag"])
+
+        # 2) Normal `<` text flushes without losing characters
+        f2 = TaskSummaryStreamFilter()
+        out = []
+        for chunk in ("Check a <", " b and <div>ok</div>"):
+            vis, summary = f2.feed(chunk)
+            self.assertIsNone(summary)
+            out.append(vis)
+        out.append(f2.flush())
+        self.assertEqual("".join(out), "Check a < b and <div>ok</div>")
+
+        # 3) Unclosed tag flushes original text on stream end
+        f3 = TaskSummaryStreamFilter()
+        vis, summary = f3.feed("<tab_task_summary>never closed")
+        self.assertEqual(vis, "")
+        self.assertIsNone(summary)
+        self.assertEqual(f3.flush(), "<tab_task_summary>never closed")
+
+        # 4) Fallback result repeating tag after empty body does not leak tags
+        f4 = TaskSummaryStreamFilter()
+        vis1, sum1 = f4.feed("<tab_task_summary>Summarize logs</tab_task_summary>")
+        self.assertEqual((vis1, sum1), ("", "Summarize logs"))
+        vis2, sum2 = f4.feed("<tab_task_summary>Summarize logs</tab_task_summary>\n\nDone.")
+        self.assertEqual((vis2, sum2), ("Done.", None))
+
+        # 5) Prompt normalization strips code blocks, markdown prefixes, and /model commands
+        self.assertEqual(
+            summarize_task_prompt("## Fix bug\n```py\nprint(1)\n```\nCheck [logs](https://example.com) in `server.py`"),
+            "Fix bug Check logs in server.py",
+        )
+        self.assertEqual(
+            derive_task_summary_from_messages(
+                [
+                    {"role": "user", "text": "/model opus"},
+                    {"role": "assistant", "text": "Switched"},
+                    {"role": "user", "text": "Add tab summary banner"},
+                ]
+            ),
+            "Add tab summary banner",
+        )
+
+    def test_first_prompt_padding_captures_agent_summary_and_backfills_legacy_state(self):
+        args_log = self.tmp / "summary_args.log"
+        self.fake_binary(
+            "agy",
+            self.emit_lines_script(
+                [
+                    {"event": "init", "conversation_id": "conv-sum-1"},
+                    {
+                        "event": "step_update",
+                        "step_update": {
+                            "step_index": 1,
+                            "state": "ACTIVE",
+                            "step_type": "agent_response",
+                            "text_delta": "<tab_task_",
+                        },
+                    },
+                    {
+                        "event": "step_update",
+                        "step_update": {
+                            "step_index": 1,
+                            "state": "ACTIVE",
+                            "step_type": "agent_response",
+                            "text_delta": "summary>Add tap-to-view task summary for tabs</tab_task_summary>\n\n",
+                        },
+                    },
+                    {
+                        "event": "step_update",
+                        "step_update": {
+                            "step_index": 1,
+                            "state": "DONE",
+                            "step_type": "agent_response",
+                            "text_delta": "Sure, I will implement that now.",
+                        },
+                    },
+                    {
+                        "event": "result",
+                        "result": {
+                            "conversation_id": "conv-sum-1",
+                            "status": "SUCCESS",
+                            "response": "<tab_task_summary>Add tap-to-view task summary for tabs</tab_task_summary>\n\nSure, I will implement that now.",
+                        },
+                    },
+                ],
+                args_log,
+            ),
+        )
+        store, runner = self.make()
+        tab = store.create_tab("agy", cwd=str(self.tmp))
+        self.assertIsNone(tab["taskSummary"])
+
+        # /model first must not consume first-prompt summary padding or set taskSummary
+        runner.start_turn(tab, "/model gemini-4-neon-high")
+        self.assertIsNone(store.get_tab(tab["id"])["taskSummary"])
+
+        _, msg1 = self.run_turn(
+            runner, store, store.get_tab(tab["id"]), "Can you add a feature where tapping a tab shows a task summary?"
+        )
+        # User message is stored cleanly without padding, and assistant text has no summary XML tag
+        msgs = store.get_messages(tab["id"])
+        self.assertEqual(msgs[2]["text"], "Can you add a feature where tapping a tab shows a task summary?")
+        self.assertEqual(msg1["text"], "Sure, I will implement that now.")
+        self.assertNotIn(TASK_SUMMARY_OPEN_TAG, msg1["text"])
+        self.assertEqual(store.get_tab(tab["id"])["taskSummary"], "Add tap-to-view task summary for tabs")
+        # Streamed deltas must never leak the hidden tag
+        deltas = "".join(e.get("textDelta", "") for e in self.events if e["type"] == "message_delta")
+        self.assertEqual(deltas, "Sure, I will implement that now.")
+        self.assertTrue(
+            any(
+                e["type"] == "tab_updated" and e["tab"].get("taskSummary") == "Add tap-to-view task summary for tabs"
+                for e in self.events
+            )
+        )
+
+        # Follow-up turn must NOT be padded and must preserve the tab's taskSummary
+        self.run_turn(runner, store, store.get_tab(tab["id"]), "Also add tests")
+        calls = [json.loads(line) for line in args_log.read_text().splitlines()]
+        self.assertIn("<task_summary_request>", calls[0][-1])
+        self.assertNotIn("<task_summary_request>", calls[1][-1])
+        self.assertEqual(store.get_tab(tab["id"])["taskSummary"], "Add tap-to-view task summary for tabs")
+
+        # Shell tabs are never padded and get a deterministic fallback summary
+        sh_tab = store.create_tab("shell", cwd=str(self.tmp))
+        self.run_turn(runner, store, sh_tab, "echo hi")
+        self.assertEqual(store.get_tab(sh_tab["id"])["taskSummary"], "echo hi")
+
+        # Legacy persisted state.json without taskSummary backfills automatically on load
+        from agentsterm_daemon.config import state_path
+
+        store.save_now()
+        raw_state = json.loads(state_path().read_text(encoding="utf-8"))
+        for t in raw_state["tabs"]:
+            t.pop("taskSummary", None)
+        state_path().write_text(json.dumps(raw_state), encoding="utf-8")
+        reloaded = StateStore()
+        self.assertEqual(
+            reloaded.get_tab(tab["id"])["taskSummary"],
+            "Can you add a feature where tapping a tab shows a task summary?",
+        )
+        self.assertEqual(reloaded.get_tab(sh_tab["id"])["taskSummary"], "echo hi")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,10 @@
 package com.example.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -21,8 +26,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
@@ -83,11 +90,15 @@ import com.example.data.resolveAgentModelCatalog
 import com.example.data.resolveDefaultSystemPrompt
 import com.example.data.resolveModelIdFromQuery
 import com.example.data.resolvePreferredNewTabCwd
+import com.example.data.resolveTabLatestDetail
+import com.example.data.resolveTabTaskSummary
 import com.example.data.shareDebugBundleFile
 import com.example.ui.theme.HerdrAmber
 import com.example.ui.theme.HerdrEmerald
 import com.example.ui.theme.HerdrRed
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.statusColor
+import com.example.ui.theme.statusLabel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -165,6 +176,8 @@ fun HerdrApp(viewModel: MainViewModel) {
     var showModelPicker by remember { mutableStateOf(false) }
     var showQuickDebugDialog by remember { mutableStateOf(false) }
     var pendingScreenshotBase64 by remember { mutableStateOf<String?>(null) }
+    var taskSummaryTabId by remember { mutableStateOf<String?>(null) }
+    var taskSummaryAllowEmpty by remember { mutableStateOf(false) }
     val activeTabDefaultSystemPrompt = remember(
         state.serverInfo?.defaultSystemPrompt,
         state.serverInfo?.defaultSystemPromptFullAccess,
@@ -205,8 +218,44 @@ fun HerdrApp(viewModel: MainViewModel) {
         }
     }
 
+    fun isSummaryCurrentlyVisibleFor(tabId: String): Boolean {
+        if (taskSummaryTabId != tabId) return false
+        val tab = state.tabs.firstOrNull { it.id == tabId } ?: return false
+        val summary = resolveTabTaskSummary(tab, state.messagesByTab[tabId].orEmpty())
+        return summary != null || taskSummaryAllowEmpty
+    }
+
+    fun handleTabTap(tabId: String) {
+        val currentId = state.activeTab?.id
+        if (tabId == currentId) {
+            if (isSummaryCurrentlyVisibleFor(tabId)) {
+                taskSummaryTabId = null
+                taskSummaryAllowEmpty = false
+            } else {
+                taskSummaryTabId = tabId
+                taskSummaryAllowEmpty = true
+            }
+        } else {
+            viewModel.selectTab(tabId)
+            taskSummaryTabId = tabId
+            taskSummaryAllowEmpty = false
+        }
+    }
+
+    fun toggleActiveTabSummary() {
+        val currentId = state.activeTab?.id ?: return
+        if (isSummaryCurrentlyVisibleFor(currentId)) {
+            taskSummaryTabId = null
+            taskSummaryAllowEmpty = false
+        } else {
+            taskSummaryTabId = currentId
+            taskSummaryAllowEmpty = true
+        }
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isExpanded = maxWidth >= 840.dp
+        val showTaskSummary = state.activeTab != null && taskSummaryTabId == state.activeTab?.id
 
         val mainScaffold: @Composable () -> Unit = {
             WorkspaceScaffold(
@@ -219,7 +268,14 @@ fun HerdrApp(viewModel: MainViewModel) {
                 onOpenDrawer = { scope.launch { drawerState.open() } },
                 onNewTab = { showNewTabSheet = true },
                 onQuickDebugDump = { triggerQuickDebugDialog() },
-                onSelectTab = { viewModel.selectTab(it) },
+                onSelectTab = { handleTabTap(it) },
+                showTaskSummary = showTaskSummary,
+                showTaskSummaryWhenEmpty = taskSummaryAllowEmpty,
+                onToggleTaskSummary = { toggleActiveTabSummary() },
+                onDismissTaskSummary = {
+                    taskSummaryTabId = null
+                    taskSummaryAllowEmpty = false
+                },
                 onRenameTab = { showRenameDialog = true },
                 onChangePermission = { showPermissionDialog = true },
                 onChangeSystemPrompt = { showSystemPromptDialog = true },
@@ -300,7 +356,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                     TabSidebarBody(
                         state = state,
                         debugSharingEnabled = debugSettings.enabled,
-                        onSelectTab = { viewModel.selectTab(it) },
+                        onSelectTab = { handleTabTap(it) },
                         onNewTab = { showNewTabSheet = true },
                         onDeleteTab = { viewModel.deleteTab(it) },
                         onCloseFinishedTabs = { viewModel.closeFinishedTabs() },
@@ -322,7 +378,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         state = state,
                         debugSharingEnabled = debugSettings.enabled,
                         onSelectTab = { id ->
-                            viewModel.selectTab(id)
+                            handleTabTap(id)
                             scope.launch { drawerState.close() }
                         },
                         onNewTab = {
@@ -682,7 +738,7 @@ fun HerdrApp(viewModel: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WorkspaceScaffold(
+internal fun WorkspaceScaffold(
     state: WorkspaceState,
     isExpanded: Boolean,
     debugSharingEnabled: Boolean,
@@ -693,6 +749,10 @@ private fun WorkspaceScaffold(
     onNewTab: () -> Unit,
     onQuickDebugDump: () -> Unit,
     onSelectTab: (String) -> Unit,
+    showTaskSummary: Boolean = false,
+    showTaskSummaryWhenEmpty: Boolean = false,
+    onToggleTaskSummary: () -> Unit = {},
+    onDismissTaskSummary: () -> Unit = {},
     onRenameTab: () -> Unit,
     onChangePermission: () -> Unit,
     onChangeSystemPrompt: () -> Unit,
@@ -712,6 +772,12 @@ private fun WorkspaceScaffold(
     val activeTab = state.activeTab
     val finishedTabIds = state.finishedTabIds
     val activeTabFinished = activeTab != null && activeTab.id in finishedTabIds
+    val activeTaskSummary = remember(activeTab, state.activeMessages) {
+        activeTab?.let { resolveTabTaskSummary(it, state.activeMessages) }
+    }
+    val shouldDisplayTaskSummary = activeTab != null &&
+        showTaskSummary &&
+        (activeTaskSummary != null || showTaskSummaryWhenEmpty)
     val activeModelInfo = remember(activeTab?.agent, activeTab?.model, state.serverInfo?.agents) {
         if (activeTab == null || activeTab.agent == "shell") {
             null
@@ -754,7 +820,17 @@ private fun WorkspaceScaffold(
                         }
                     },
                     title = {
-                        Column {
+                        Column(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(
+                                    enabled = activeTab != null,
+                                    onClickLabel = stringResource(R.string.action_toggle_task_summary),
+                                    onClick = onToggleTaskSummary,
+                                )
+                                .padding(horizontal = 2.dp, vertical = 2.dp)
+                                .testTag("top_bar_tab_title"),
+                        ) {
                             Text(
                                 text = activeTab?.title ?: stringResource(R.string.app_name),
                                 style = MaterialTheme.typography.titleMedium,
@@ -999,6 +1075,22 @@ private fun WorkspaceScaffold(
                         onSelect = onSelectTab,
                     )
                 }
+
+                // Task summary card shown when tapping a tab or toggling the tab header
+                AnimatedVisibility(
+                    visible = shouldDisplayTaskSummary,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut(),
+                ) {
+                    if (activeTab != null) {
+                        TabTaskSummaryCard(
+                            tab = activeTab,
+                            taskSummary = activeTaskSummary,
+                            isTaskFinished = activeTabFinished,
+                            onDismiss = onDismissTaskSummary,
+                        )
+                    }
+                }
             }
         },
     ) { innerPadding ->
@@ -1026,6 +1118,148 @@ private fun WorkspaceScaffold(
                 onRetryFullAccess = onRetryFullAccess,
                 modifier = Modifier.padding(innerPadding),
             )
+        }
+    }
+}
+
+@Composable
+private fun TabTaskSummaryCard(
+    tab: TabRecord,
+    taskSummary: String?,
+    isTaskFinished: Boolean = false,
+    onDismiss: () -> Unit,
+) {
+    var expanded by remember(tab.id, taskSummary) { mutableStateOf(false) }
+    var isOverflowing by remember(tab.id, taskSummary) { mutableStateOf(false) }
+    val latestDetail = remember(tab.status, tab.statusDetail, tab.lastMessagePreview, taskSummary) {
+        resolveTabLatestDetail(tab, taskSummary)
+    }
+    val badgeColor = if (isTaskFinished) HerdrEmerald else statusColor(tab.status)
+    val badgeLabel = if (isTaskFinished) "Done" else statusLabel(tab.status)
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .testTag("tab_task_summary_card"),
+        ) {
+            Column(
+                modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.task_summary_label).uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = MonoFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = badgeColor.copy(alpha = 0.16f),
+                    ) {
+                        Text(
+                            text = badgeLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = badgeColor,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("dismiss_task_summary_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = stringResource(R.string.action_dismiss_task_summary),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+
+                if (taskSummary != null) {
+                    Text(
+                        text = taskSummary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = if (expanded) 8 else 3,
+                        overflow = TextOverflow.Ellipsis,
+                        onTextLayout = { layout ->
+                            if (!expanded) {
+                                isOverflowing = layout.hasVisualOverflow
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(end = 6.dp)
+                            .clickable(enabled = isOverflowing || expanded) { expanded = !expanded }
+                            .testTag("tab_task_summary_text"),
+                    )
+                    if (isOverflowing || expanded) {
+                        Text(
+                            text = stringResource(
+                                if (expanded) R.string.task_summary_show_less else R.string.task_summary_show_more,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clickable { expanded = !expanded }
+                                .testTag("toggle_task_summary_expand"),
+                        )
+                    }
+                } else {
+                    Text(
+                        text = stringResource(R.string.task_summary_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .testTag("tab_task_summary_empty"),
+                    )
+                }
+
+                if (latestDetail != null) {
+                    val latestText = if (tab.status == "idle") {
+                        stringResource(R.string.task_summary_latest_prefix, latestDetail)
+                    } else {
+                        latestDetail
+                    }
+                    Text(
+                        text = latestText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .testTag("tab_task_summary_latest"),
+                    )
+                }
+            }
         }
     }
 }

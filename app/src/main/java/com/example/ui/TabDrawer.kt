@@ -478,13 +478,16 @@ private fun DrawerTabRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (!tab.lastMessagePreview.isNullOrBlank()) {
+                val summaryText = tab.taskSummary?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: tab.lastMessagePreview?.trim()?.takeIf { it.isNotEmpty() }
+                if (summaryText != null) {
                     Text(
-                        text = tab.lastMessagePreview,
+                        text = summaryText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("drawer_tab_summary_${tab.id}"),
                     )
                 }
             }

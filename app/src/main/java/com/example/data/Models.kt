@@ -251,6 +251,7 @@ data class TabRecord(
     val sessionRef: AgentSessionRef? = null,
     val unread: Boolean = false,
     val lastMessagePreview: String? = null,
+    val taskSummary: String? = null,
     val queuedMessages: List<QueuedMessage> = emptyList(),
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,

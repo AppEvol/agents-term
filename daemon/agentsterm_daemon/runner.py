@@ -31,6 +31,7 @@ from .util import (
     json_pretty,
     now_ms,
     rand_hex,
+    summarize_task_prompt,
     summarize_tool_input,
     truncate,
 )
@@ -39,6 +40,15 @@ Broadcast = Callable[[Dict[str, Any]], None]
 
 CWD_MARKER = "__AGENTSTERM_CWD__"
 MAX_TOOL_OUTPUT = 12000
+TASK_SUMMARY_OPEN_TAG = "<tab_task_summary>"
+TASK_SUMMARY_CLOSE_TAG = "</tab_task_summary>"
+TASK_SUMMARY_PROMPT_ADDENDUM = (
+    "Before your response, output a single line wrapped in "
+    "<tab_task_summary>...</tab_task_summary> containing a concise one-sentence summary "
+    "(max 120 characters) of what this tab's task is about. "
+    "Do not mention these tags in your response."
+)
+_TASK_SUMMARY_TAG_RE = re.compile(r"<tab_task_summary>(.*?)</tab_task_summary>\s*", re.S)
 _LINE_SPLIT_RE = re.compile(r"\r?\n")
 _MODEL_CMD_RE = re.compile(r"^/model(?:\s+(.*))?$", re.I)
 _MODEL_RESET_RE = re.compile(r"(default|reset|auto)", re.I)
@@ -69,6 +79,135 @@ def is_task_finished_response(text: Optional[str]) -> bool:
     if _NEGATED_CLOSE_TAB_RE.search(tail):
         return False
     return bool(_CLOSE_TAB_CUE_RE.search(tail))
+
+
+def pad_first_prompt_for_task_summary(prompt: str) -> str:
+    """Append an instruction asking the coding agent to emit a tab task summary tag."""
+    return f"{prompt}\n\n<task_summary_request>\n{TASK_SUMMARY_PROMPT_ADDENDUM}\n</task_summary_request>"
+
+
+class TaskSummaryStreamFilter:
+    """Strips <tab_task_summary>...</tab_task_summary> from streamed text deltas and extracts the summary."""
+
+    MAX_TAG_BODY_LEN = 400
+    MAX_LEADING_WS_HOLD = 8
+
+    def __init__(self) -> None:
+        self._done = False
+        self._in_tag = False
+        self._buf = ""
+        self._emitted_any = False
+        self._strip_post_tag_ws = False
+        self.summary: Optional[str] = None
+
+    @staticmethod
+    def _open_tag_prefix_suffix_len(text: str) -> int:
+        max_k = min(len(text), len(TASK_SUMMARY_OPEN_TAG) - 1)
+        for k in range(max_k, 0, -1):
+            if TASK_SUMMARY_OPEN_TAG.startswith(text[-k:]):
+                return k
+        return 0
+
+    def _consume_post_tag_ws(self, text: str) -> str:
+        if not self._strip_post_tag_ws or not text:
+            return text
+        stripped = text.lstrip(" \t\r\n") if not self._emitted_any else text.lstrip("\r\n")
+        if stripped:
+            self._strip_post_tag_ws = False
+        return stripped
+
+    def feed(self, chunk: str) -> tuple[str, Optional[str]]:
+        if not chunk:
+            return "", None
+        if self._done:
+            out = chunk
+            if not self._emitted_any:
+                # Guard against a fallback result event repeating the stripped summary tag.
+                out = _TASK_SUMMARY_TAG_RE.sub("", out, count=1)
+            out = self._consume_post_tag_ws(out)
+            if out:
+                self._emitted_any = True
+            return out, None
+
+        data = self._buf + chunk
+        self._buf = ""
+        visible_parts: List[str] = []
+        extracted: Optional[str] = None
+
+        while data:
+            if not self._in_tag:
+                idx = data.find(TASK_SUMMARY_OPEN_TAG)
+                if idx >= 0:
+                    before = data[:idx]
+                    if before and (self._emitted_any or before.strip()):
+                        visible_parts.append(before)
+                        self._emitted_any = True
+                    data = data[idx + len(TASK_SUMMARY_OPEN_TAG) :]
+                    self._in_tag = True
+                    continue
+
+                if not self._emitted_any and not data.strip() and len(data) <= self.MAX_LEADING_WS_HOLD:
+                    self._buf = data
+                    break
+
+                suffix_len = self._open_tag_prefix_suffix_len(data)
+                if suffix_len > 0:
+                    emit = data[:-suffix_len]
+                    if emit and not self._emitted_any and not emit.strip() and len(emit) <= self.MAX_LEADING_WS_HOLD:
+                        self._buf = data
+                    else:
+                        if emit:
+                            visible_parts.append(emit)
+                            self._emitted_any = True
+                        self._buf = data[-suffix_len:]
+                else:
+                    visible_parts.append(data)
+                    self._emitted_any = True
+                break
+
+            close_idx = data.find(TASK_SUMMARY_CLOSE_TAG)
+            if close_idx >= 0:
+                raw_summary = data[:close_idx]
+                cleaned = summarize_task_prompt(raw_summary, max_len=160)
+                if cleaned:
+                    self.summary = cleaned
+                    extracted = cleaned
+                self._in_tag = False
+                self._done = True
+                self._strip_post_tag_ws = True
+                rest = self._consume_post_tag_ws(data[close_idx + len(TASK_SUMMARY_CLOSE_TAG) :])
+                if rest:
+                    visible_parts.append(rest)
+                    self._emitted_any = True
+                break
+
+            if len(data) > self.MAX_TAG_BODY_LEN:
+                visible_parts.append(TASK_SUMMARY_OPEN_TAG + data)
+                self._emitted_any = True
+                self._in_tag = False
+                self._done = True
+                break
+
+            self._buf = data
+            break
+
+        return "".join(visible_parts), extracted
+
+    def flush(self) -> str:
+        if self._in_tag:
+            out = TASK_SUMMARY_OPEN_TAG + self._buf
+            self._in_tag = False
+            self._buf = ""
+            self._done = True
+            self._emitted_any = True
+            return out
+        if self._buf:
+            out = self._buf
+            self._buf = ""
+            if out:
+                self._emitted_any = True
+            return out
+        return ""
 
 
 def _reject_constant(name: str) -> Any:
@@ -194,6 +333,7 @@ class AgentRunner:
         self._active: Dict[str, _ActiveTurn] = {}
         self._tasks: set = set()
         self._agy_prompt_dirty: set = set()
+        self._summary_filters: Dict[str, TaskSummaryStreamFilter] = {}
 
     def is_running(self, tab_id: str) -> bool:
         return tab_id in self._active
@@ -206,6 +346,15 @@ class AgentRunner:
     def start_turn(
         self, tab: Dict[str, Any], prompt_text: str, override_permission_mode: Optional[str] = None
     ) -> Dict[str, Any]:
+        has_prior_task = any(
+            m.get("role") == "user"
+            and isinstance(m.get("text"), str)
+            and m["text"].strip()
+            and not _MODEL_CMD_RE.match(m["text"].strip())
+            for m in self.store.get_messages(tab["id"])
+        )
+        is_first_task_prompt = not has_prior_task
+
         now = now_ms()
         user_message = self._new_message(tab["id"], "user", prompt_text, "complete", now)
         assistant_message = self._new_message(tab["id"], "assistant", "", "streaming", now + 1)
@@ -218,15 +367,17 @@ class AgentRunner:
             return self._handle_model_command(tab, user_message, assistant_message, (model_cmd.group(1) or "").strip())
 
         effective_mode = (override_permission_mode or "").strip() or tab.get("permissionMode") or "full-access"
-        working_tab = self.store.update_tab(
-            tab["id"],
-            {
-                "status": "working",
-                "statusDetail": f"Starting {tab.get('agent')}…",
-                "lastMessagePreview": truncate(prompt_text, 120),
-                "unread": False,
-            },
-        )
+        working_patch: Dict[str, Any] = {
+            "status": "working",
+            "statusDetail": f"Starting {tab.get('agent')}…",
+            "lastMessagePreview": truncate(prompt_text, 120),
+            "unread": False,
+        }
+        if not (isinstance(tab.get("taskSummary"), str) and tab["taskSummary"].strip()):
+            fallback_summary = summarize_task_prompt(prompt_text)
+            if fallback_summary:
+                working_patch["taskSummary"] = fallback_summary
+        working_tab = self.store.update_tab(tab["id"], working_patch)
         self.broadcast({"type": "message_created", "tabId": tab["id"], "message": user_message})
         self.broadcast({"type": "message_created", "tabId": tab["id"], "message": assistant_message})
         if working_tab:
@@ -239,14 +390,20 @@ class AgentRunner:
             "userMessage": self._snapshot_message(user_message),
             "assistantMessage": self._snapshot_message(assistant_message),
         }
+        if agent in ("agy", "claude", "codex") and is_first_task_prompt:
+            self._summary_filters[assistant_message["id"]] = TaskSummaryStreamFilter()
+            cli_prompt = pad_first_prompt_for_task_summary(prompt_text)
+        else:
+            cli_prompt = prompt_text
+
         if agent == "shell":
             self._run_shell_turn(tab, assistant_message, prompt_text, run_cwd)
         elif agent == "agy":
-            self._run_agy_turn(tab, assistant_message, prompt_text, run_cwd, effective_mode)
+            self._run_agy_turn(tab, assistant_message, cli_prompt, run_cwd, effective_mode)
         elif agent == "claude":
-            self._run_claude_turn(tab, assistant_message, prompt_text, run_cwd, effective_mode)
+            self._run_claude_turn(tab, assistant_message, cli_prompt, run_cwd, effective_mode)
         elif agent == "codex":
-            self._run_codex_turn(tab, assistant_message, prompt_text, run_cwd, effective_mode)
+            self._run_codex_turn(tab, assistant_message, cli_prompt, run_cwd, effective_mode)
         else:
             self._finish_turn_with_error(tab["id"], assistant_message, f"Unsupported agent type: {agent}")
         return result
@@ -365,6 +522,7 @@ class AgentRunner:
         active = self._active.pop(tab_id, None)
         if not active:
             return
+        self._summary_filters.pop(active.assistant_msg_id, None)
         active.interrupted = True
         active.cancel_kill_timers()
         active.send_signal(signal.SIGKILL)
@@ -459,8 +617,24 @@ class AgentRunner:
         return {**os.environ, "PATH": enriched_path(), "FORCE_COLOR": "0", "NO_COLOR": "1", "TERM": "dumb"}
 
     def _emit_delta(
-        self, tab_id: str, msg: Dict[str, Any], text_delta: Optional[str] = None, thinking_delta: Optional[str] = None
+        self,
+        tab_id: str,
+        msg: Dict[str, Any],
+        text_delta: Optional[str] = None,
+        thinking_delta: Optional[str] = None,
+        *,
+        bypass_summary_filter: bool = False,
     ) -> None:
+        if text_delta and not bypass_summary_filter:
+            summary_filter = self._summary_filters.get(msg["id"])
+            if summary_filter is not None:
+                text_delta, extracted_summary = summary_filter.feed(text_delta)
+                if extracted_summary:
+                    updated_tab = self.store.update_tab(tab_id, {"taskSummary": extracted_summary})
+                    if updated_tab:
+                        self.broadcast({"type": "tab_updated", "tab": updated_tab})
+                if not text_delta and not thinking_delta:
+                    return
         if text_delta:
             msg["text"] += text_delta
             segments = msg.setdefault("segments", [])
@@ -509,6 +683,7 @@ class AgentRunner:
         self._set_status_detail(tab_id, f"Running {name}" + (f": {truncate(summary, 40)}" if summary else ""))
 
     def _finish_turn_with_error(self, tab_id: str, msg: Dict[str, Any], error_text: str) -> None:
+        self._summary_filters.pop(msg["id"], None)
         final_msg = {**msg, "status": "error", "error": error_text, "updatedAt": now_ms()}
         self.store.replace_message(tab_id, final_msg)
         updated_tab = self.store.update_tab(tab_id, {"status": "error", "statusDetail": None, "unread": True})
@@ -533,9 +708,14 @@ class AgentRunner:
         active = self._active.pop(tab_id, None)
         if active:
             active.cancel_kill_timers()
+        summary_filter = self._summary_filters.pop(msg["id"], None)
         tab = self.store.get_tab(tab_id)
         if tab is None:
             return  # Tab was deleted mid-turn; don't resurrect its message list.
+        if summary_filter is not None:
+            leftover = summary_filter.flush()
+            if leftover:
+                self._emit_delta(tab_id, msg, text_delta=leftover, bypass_summary_filter=True)
 
         denied = first_not_none(denied_actions, msg.get("deniedActions"), [])
         if usage:

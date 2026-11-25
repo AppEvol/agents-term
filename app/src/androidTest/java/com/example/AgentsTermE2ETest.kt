@@ -374,6 +374,7 @@ class AgentsTermE2ETest {
             agent = "agy",
             cwd = "/home/ci/projects",
             status = "idle",
+            taskSummary = "Inspect CI build logs",
         )
         val msg1 = ChatMessage(
             id = "m_1",
@@ -405,9 +406,12 @@ class AgentsTermE2ETest {
 
         waitForText("Build Shell")
 
-        // Quick tab strip appears with 2 tabs; switch back to tab_1 and verify its transcript loads
+        // Quick tab strip appears with 2 tabs; switch back to tab_1 and verify its summary & transcript load
         waitForTag("quick_tab_tab_1")
         composeRule.onNodeWithTag("quick_tab_tab_1").performClick()
+        waitForTag("tab_task_summary_card")
+        waitForText("Inspect CI build logs")
+        composeRule.onNodeWithTag("dismiss_task_summary_button").performClick()
         waitForText("Hello from Primary Agent")
         assertTrue(activeDaemon.markedReadTabIds.contains("tab_1"))
 
