@@ -623,7 +623,7 @@ class AgentsTermE2ETest {
         launchMainActivity(deepLink)
         waitForText("Antigravity · app")
 
-        // What the VM agent does, through the same frames the daemon relays for app_state_cli.
+        // What the VM agent does, through the same frames the daemon relays for agents_term_app_cli.
         // Under the Compose test rule the UI only advances while the test thread is inside the rule,
         // so each step ends with waitForIdle and waits go through waitUntil.
         fun agent(command: String, argsJson: String = "{}"): Map<String, Any?> {
@@ -642,7 +642,7 @@ class AgentsTermE2ETest {
             }
         }
 
-        // Like `app_state_cli wait --tag … && app_state_cli tap --tag …`: screens change asynchronously.
+        // Like `agents_term_app_cli wait --tag … && agents_term_app_cli tap --tag …`: screens change asynchronously.
         fun agentTaps(tag: String): Map<String, Any?> {
             agentWaitsFor("'$tag' to tap") { nodes("""{"tag":"$tag"}""").isNotEmpty() }
             return agent("tap", """{"tag":"$tag"}""")

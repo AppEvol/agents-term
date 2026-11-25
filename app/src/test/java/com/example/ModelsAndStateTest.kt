@@ -725,7 +725,7 @@ class ModelsAndStateTest {
     @Test
     fun systemPromptDefaultsResolutionAndSerializationWork() {
         assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("mobile", ignoreCase = true))
-        assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("app_state_cli"))
+        assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("agents_term_app_cli"))
         assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("docs/live-debugging.md"))
         assertFalse(DEFAULT_AGENT_SYSTEM_PROMPT.contains("close this tab", ignoreCase = true))
         assertTrue(DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT.contains("close this tab", ignoreCase = true))

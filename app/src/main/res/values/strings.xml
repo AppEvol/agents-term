@@ -141,10 +141,10 @@
     <string name="settings_debug_logcat_subtitle">Attach recent process logs from Android logcat.</string>
     <string name="settings_debug_autoupload_title">Auto-upload on errors</string>
     <string name="settings_debug_remote_inspection_title">Allow VM agents to inspect the app</string>
-    <string name="settings_debug_remote_inspection_subtitle">Agents on the connected VM can read this app\'s debug log, state, logcat and crash report, and take screenshots and read what is on screen (app_state_cli). Read-only; you get a notice for each screenshot.</string>
+    <string name="settings_debug_remote_inspection_subtitle">Agents on the connected VM can read this app\'s debug log, state, logcat and crash report, and take screenshots and read what is on screen (agents_term_app_cli). Read-only; you get a notice for each screenshot.</string>
     <string name="app_state_screenshot_toast">VM agent captured a screenshot</string>
     <string name="settings_debug_remote_control_title">Allow VM agents to control the app</string>
-    <string name="settings_debug_remote_control_subtitle">Agents on the connected VM can also tap, swipe, type and press Back in this app, as if they were holding the phone (app_state_cli), for example to QA test it. Anything you can do in the app, they can do. Leave off unless you are running such a test.</string>
+    <string name="settings_debug_remote_control_subtitle">Agents on the connected VM can also tap, swipe, type and press Back in this app, as if they were holding the phone (agents_term_app_cli), for example to QA test it. Anything you can do in the app, they can do. Leave off unless you are running such a test.</string>
     <string name="app_state_control_toast">VM agent is controlling the app</string>
     <string name="settings_debug_autoupload_subtitle">Automatically send a dump to the VM when HTTP or WebSocket errors occur (max once per minute).</string>
     <string name="settings_debug_vm_path_label">VM debug storage folder</string>

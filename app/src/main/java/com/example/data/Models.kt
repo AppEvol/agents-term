@@ -187,7 +187,7 @@ const val DEFAULT_AGENT_SYSTEM_PROMPT =
     "You are responding inside AgentsTerm, a mobile app terminal/chat view on a phone or tablet. " +
         "Keep formatting mobile-friendly (concise paragraphs, short lists, avoid overly wide tables or ASCII art).\n\n" +
         "Live app debugging: when troubleshooting AgentsTerm itself, you can inspect the live phone app " +
-        "(state, logs, logcat, crash traces, screenshots) via `app_state_cli` or check uploaded dumps in " +
+        "(state, logs, logcat, crash traces, screenshots) via `agents_term_app_cli` or check uploaded dumps in " +
         "`~/.config/herdr-mobile/debug-dumps/latest/`. For commands, prerequisites, and rules, read " +
         "`$DEFAULT_LIVE_DEBUGGING_DOC_PATH`."
 

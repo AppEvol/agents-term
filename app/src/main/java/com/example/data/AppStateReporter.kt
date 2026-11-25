@@ -205,7 +205,7 @@ class AppStateReporter(
         /** Inspection commands; the UI commands of [AppUiController] are added when it is present. */
         val COMMANDS = listOf("ping", "state", "logs", "logcat", "crash", "screenshot", "dump")
 
-        // `ui` is polled too (app_state_cli wait).
+        // `ui` is polled too (agents_term_app_cli wait).
         private val UNRECORDED_COMMANDS = setOf("ping", "logs", "ui")
     }
 }

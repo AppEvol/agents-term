@@ -453,7 +453,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 null
             }
             val resp = performDebugDumpUpload(
-                note = note?.trim()?.takeIf { it.isNotEmpty() } ?: "Requested by a VM agent (app_state_cli dump)",
+                note = note?.trim()?.takeIf { it.isNotEmpty() } ?: "Requested by a VM agent (agents_term_app_cli dump)",
                 screenshotBase64 = shot,
             ).getOrElse { err ->
                 throw AppStateCommandException("Dump upload failed: ${err.message ?: err::class.java.simpleName}")
