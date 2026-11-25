@@ -848,10 +848,11 @@ class AgentsTermE2ETest {
         scenario?.moveToState(Lifecycle.State.STARTED)
         scenario?.moveToState(Lifecycle.State.RESUMED)
 
-        // Wait for reconnection to succeed and the disconnect banner to clear
+        // Wait for reconnection to succeed and the whole banner to clear. The retry button alone
+        // is not enough: it is hidden while still connecting, when the composer cannot send yet.
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             activeDaemon.webSocketUpgradeCount.get() > initialUpgrades &&
-                composeRule.onAllNodesWithTag("banner_reconnect_button")
+                composeRule.onAllNodesWithTag("connection_banner")
                     .fetchSemanticsNodes()
                     .isEmpty()
         }
