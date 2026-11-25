@@ -60,8 +60,10 @@ fun MarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
+    isStreaming: Boolean = false,
 ) {
-    val blocks = remember(markdown) { MarkdownParser.parse(markdown) }
+    val parserState = remember { StreamingMarkdownState() }
+    val blocks = remember(markdown, isStreaming) { parserState.update(markdown, isStreaming) }
     val style = rememberMarkdownStyle(textColor)
     MarkdownSelectionContainer {
         MarkdownBlocks(blocks = blocks, style = style, modifier = modifier)
@@ -154,15 +156,9 @@ internal fun MarkdownBlocks(
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(spacing)) {
         blocks.forEachIndexed { index, block ->
             when (block) {
-                is MdBlock.Paragraph -> MarkdownInlineText(block.content, style.body, style)
+                is MdBlock.Paragraph -> MarkdownParagraph(block = block, style = style)
 
-                is MdBlock.Heading -> MarkdownInlineText(
-                    content = block.content,
-                    textStyle = style.heading(block.level),
-                    style = style,
-                    // A heading belongs to what follows it, so it sits further from what is above.
-                    modifier = if (index == 0) Modifier else Modifier.padding(top = 6.dp),
-                )
+                is MdBlock.Heading -> MarkdownHeading(block = block, isFirst = index == 0, style = style)
 
                 is MdBlock.CodeBlock -> CodeBlockCard(language = block.language, code = block.code)
 
@@ -179,6 +175,24 @@ internal fun MarkdownBlocks(
             }
         }
     }
+}
+
+/** Wrapper taking `@Immutable` [MdBlock.Paragraph] so unchanged paragraphs skip recomposition. */
+@Composable
+private fun MarkdownParagraph(block: MdBlock.Paragraph, style: MarkdownStyle) {
+    MarkdownInlineText(block.content, style.body, style)
+}
+
+/** Wrapper taking `@Immutable` [MdBlock.Heading] so unchanged headings skip recomposition. */
+@Composable
+private fun MarkdownHeading(block: MdBlock.Heading, isFirst: Boolean, style: MarkdownStyle) {
+    MarkdownInlineText(
+        content = block.content,
+        textStyle = style.heading(block.level),
+        style = style,
+        // A heading belongs to what follows it, so it sits further from what is above.
+        modifier = if (isFirst) Modifier else Modifier.padding(top = 6.dp),
+    )
 }
 
 @Composable

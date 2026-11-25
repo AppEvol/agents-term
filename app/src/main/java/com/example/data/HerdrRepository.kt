@@ -30,6 +30,7 @@ data class WorkspaceState(
     val loadingTabIds: Set<String> = emptySet(),
     val reopenedTabIds: Set<String> = emptySet(),
     val bannerMessage: String? = null,
+    val precomputedFinishedTabIds: Set<String>? = null,
 ) {
     val canCreateTab: Boolean
         get() = tabs.size < MAX_OPEN_TABS
@@ -57,14 +58,15 @@ data class WorkspaceState(
         else -> TabActivity.WAITING
     }
 
-    fun isTabFinished(tab: TabRecord): Boolean = isTabTaskFinished(
-        tab = tab,
-        messages = messagesByTab[tab.id].orEmpty(),
-        manuallyReopened = tab.id in reopenedTabIds,
-    )
+    fun isTabFinished(tab: TabRecord): Boolean = precomputedFinishedTabIds?.let { tab.id in it }
+        ?: isTabTaskFinished(
+            tab = tab,
+            messages = messagesByTab[tab.id].orEmpty(),
+            manuallyReopened = tab.id in reopenedTabIds,
+        )
 
     val finishedTabIds: Set<String>
-        get() = tabs.filter { isTabFinished(it) }.map { it.id }.toSet()
+        get() = precomputedFinishedTabIds ?: tabs.filter { isTabFinished(it) }.map { it.id }.toSet()
 }
 
 /**
@@ -295,6 +297,7 @@ class HerdrRepository(
     private val onOperationalError: ((String) -> Unit)? = null,
     private val reconnectBaseDelayMs: Long = DEFAULT_RECONNECT_BASE_DELAY_MS,
     private val reconnectMaxDelayMs: Long = DEFAULT_RECONNECT_MAX_DELAY_MS,
+    private val deltaFlushIntervalMs: Long = DEFAULT_DELTA_FLUSH_INTERVAL_MS,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
@@ -312,6 +315,7 @@ class HerdrRepository(
 
     private val socketLock = Any()
     private val createTabMutex = Mutex()
+    private val pendingDeltas = PendingDeltaBuffer(scope, deltaFlushIntervalMs, clockMs)
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
     private var shouldStayConnected = false
@@ -322,6 +326,38 @@ class HerdrRepository(
     /** Answers app state inspection requests from the VM; null disables the feature entirely. */
     @Volatile
     var appStateHandler: AppStateRequestHandler? = null
+
+    /** Returns a point-in-time snapshot that includes any buffered deltas not yet flushed to UI. */
+    fun snapshotStateWithPendingDeltas(): WorkspaceState = synchronized(socketLock) {
+        pendingDeltas.applyTo(_state.value, consume = false)
+    }
+
+    private fun flushActiveTabDeltas(expectedGeneration: Long) {
+        synchronized(socketLock) {
+            pendingDeltas.onScheduledFlushEntered()
+            if (expectedGeneration != socketGeneration || !shouldStayConnected) return
+            val activeTabId = _state.value.activeTab?.id ?: return
+            var flushed = false
+            _state.update { current ->
+                val next = pendingDeltas.applyTo(current, tabId = activeTabId, consume = true)
+                if (next !== current) flushed = true
+                next
+            }
+            if (flushed) pendingDeltas.markActiveFlushed()
+        }
+    }
+
+    private fun handleMessageDelta(envelope: WsServerEnvelope, generation: Long) {
+        synchronized(socketLock) {
+            if (generation != socketGeneration || !shouldStayConnected) return
+            pendingDeltas.recordDelta(
+                envelope = envelope,
+                activeTabId = _state.value.activeTab?.id,
+                flushNow = { id -> _state.update { cur -> pendingDeltas.applyTo(cur, tabId = id, consume = true) } },
+                onScheduledFlush = { flushActiveTabDeltas(generation) },
+            )
+        }
+    }
 
     fun initializeAutoConnect() {
         val cfg = settings.loadConnection()
@@ -377,6 +413,7 @@ class HerdrRepository(
             socketGeneration++
             reconnectJob?.cancel()
             reconnectJob = null
+            pendingDeltas.clear()
             socketToClose = webSocket
             webSocket = null
             _state.update {
@@ -420,6 +457,7 @@ class HerdrRepository(
             if (expectedGeneration != null && expectedGeneration != socketGeneration) return
             reconnectJob?.cancel()
             reconnectJob = null
+            pendingDeltas.clear()
             generation = ++socketGeneration
             lastConnectAttemptMs = clockMs()
             previousSocket = webSocket
@@ -458,6 +496,10 @@ class HerdrRepository(
                     handleAppStateRequest(envelope, generation)
                     return@openWebSocket
                 }
+                if (envelope.type == "message_delta") {
+                    handleMessageDelta(envelope, generation)
+                    return@openWebSocket
+                }
                 var selectedAfter: String? = null
                 var unreadVisibleTabId: String? = null
                 val applied = synchronized(socketLock) {
@@ -465,7 +507,8 @@ class HerdrRepository(
                         false
                     } else {
                         _state.update { current ->
-                            val next = reduceWorkspaceEvent(current, envelope, preferredTabId = lastSavedTabId)
+                            val prepped = pendingDeltas.prepareStateForEvent(current, envelope)
+                            val next = reduceWorkspaceEvent(prepped, envelope, preferredTabId = lastSavedTabId)
                             selectedAfter = next.selectedTabId
                             val visibleId = next.activeTab?.takeIf { it.unread }?.id
                             unreadVisibleTabId = visibleId
@@ -586,7 +629,14 @@ class HerdrRepository(
     fun selectTab(tabId: String) {
         debugRecorder?.record("ui", "select_tab", "Selected tab $tabId")
         settings.saveLastTabId(tabId)
-        _state.update { it.copy(selectedTabId = tabId) }
+        synchronized(socketLock) {
+            pendingDeltas.cancelScheduledFlush()
+            _state.update { current ->
+                val flushed = pendingDeltas.applyTo(current, tabId = tabId, consume = true)
+                flushed.copy(selectedTabId = tabId)
+            }
+            pendingDeltas.markActiveFlushed()
+        }
         refreshTabMessages(tabId)
         markTabRead(_state.value.config, tabId)
     }
@@ -610,12 +660,15 @@ class HerdrRepository(
                         "refresh_tab_messages_ok",
                         "Loaded ${res.messages.size} messages for tab $tabId (status=${res.tab.status})",
                     )
-                    _state.update { cur ->
-                        cur.copy(
-                            tabs = cur.tabs.map { if (it.id == res.tab.id) res.tab else it },
-                            messagesByTab = cur.messagesByTab + (tabId to res.messages),
-                            loadingTabIds = cur.loadingTabIds - tabId,
-                        )
+                    synchronized(socketLock) {
+                        pendingDeltas.clear(tabId = tabId)
+                        _state.update { cur ->
+                            cur.copy(
+                                tabs = cur.tabs.map { if (it.id == res.tab.id) res.tab else it },
+                                messagesByTab = cur.messagesByTab + (tabId to res.messages),
+                                loadingTabIds = cur.loadingTabIds - tabId,
+                            )
+                        }
                     }
                 }
                 .onFailure { err ->
@@ -746,15 +799,19 @@ class HerdrRepository(
         debugRecorder?.record("ui", "delete_tab", "Deleting tab $tabId")
         return runCatching {
             api.deleteTab(cfg, tabId)
-            _state.update { cur ->
-                val remaining = cur.tabs.filterNot { it.id == tabId }
-                val nextSelected = if (cur.selectedTabId == tabId) remaining.lastOrNull()?.id else cur.selectedTabId
-                settings.saveLastTabId(nextSelected)
-                cur.copy(
-                    tabs = remaining,
-                    selectedTabId = nextSelected,
-                    messagesByTab = cur.messagesByTab - tabId,
-                )
+            synchronized(socketLock) {
+                pendingDeltas.clear(tabId = tabId)
+                _state.update { cur ->
+                    val remaining = cur.tabs.filterNot { it.id == tabId }
+                    val nextSelected = if (cur.selectedTabId == tabId) remaining.lastOrNull()?.id else cur.selectedTabId
+                    settings.saveLastTabId(nextSelected)
+                    val flushed = nextSelected?.let { pendingDeltas.applyTo(cur, tabId = it, consume = true) } ?: cur
+                    flushed.copy(
+                        tabs = remaining,
+                        selectedTabId = nextSelected,
+                        messagesByTab = flushed.messagesByTab - tabId,
+                    )
+                }
             }
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to delete tab")
@@ -889,6 +946,7 @@ class HerdrRepository(
     companion object {
         private const val DEFAULT_RECONNECT_BASE_DELAY_MS = 1_500L
         private const val DEFAULT_RECONNECT_MAX_DELAY_MS = 15_000L
+        private const val DEFAULT_DELTA_FLUSH_INTERVAL_MS = 60L
         private const val FOREGROUND_CONNECT_GRACE_MS = 2_000L
         const val APP_STATE_REQUEST_TYPE = "app_state_request"
     }

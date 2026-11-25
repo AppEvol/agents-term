@@ -75,6 +75,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.ChatMessage
 import com.example.data.ConnectionState
 import com.example.data.ModelSlashCommand
 import com.example.data.TabRecord
@@ -106,12 +107,13 @@ import com.example.ui.theme.statusLabel
 import com.example.ui.theme.themedCorner
 import com.example.ui.theme.titleBarColors
 import com.example.ui.theme.titleBarTitleStyle
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HerdrApp(viewModel: MainViewModel) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
+    val state by viewModel.chromeState.collectAsStateWithLifecycle()
     val showConnect by viewModel.showConnectScreen.collectAsStateWithLifecycle()
     val showSettings by viewModel.showSettingsScreen.collectAsStateWithLifecycle()
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
@@ -231,7 +233,7 @@ fun HerdrApp(viewModel: MainViewModel) {
     fun isSummaryCurrentlyVisibleFor(tabId: String): Boolean {
         if (taskSummaryTabId != tabId) return false
         val tab = state.tabs.firstOrNull { it.id == tabId } ?: return false
-        val summary = resolveTabTaskSummary(tab, state.messagesByTab[tabId].orEmpty())
+        val summary = resolveTabTaskSummary(tab, viewModel.state.value.messagesByTab[tabId].orEmpty())
         return summary != null || taskSummaryAllowEmpty
     }
 
@@ -270,6 +272,7 @@ fun HerdrApp(viewModel: MainViewModel) {
         val mainScaffold: @Composable () -> Unit = {
             WorkspaceScaffold(
                 state = state,
+                activeMessagesFlow = viewModel.activeMessages,
                 isExpanded = isExpanded,
                 debugSharingEnabled = debugSettings.enabled,
                 snackbarHostState = snackbarHostState,
@@ -813,16 +816,11 @@ internal fun WorkspaceScaffold(
     onForceInterrupt: (String?) -> Unit,
     onRemoveQueuedMessage: (String) -> Unit,
     onRetryFullAccess: () -> Unit,
+    activeMessagesFlow: StateFlow<List<ChatMessage>>? = null,
 ) {
     val activeTab = state.activeTab
     val finishedTabIds = state.finishedTabIds
     val activeTabFinished = activeTab != null && activeTab.id in finishedTabIds
-    val activeTaskSummary = remember(activeTab, state.activeMessages) {
-        activeTab?.let { resolveTabTaskSummary(it, state.activeMessages) }
-    }
-    val shouldDisplayTaskSummary = activeTab != null &&
-        showTaskSummary &&
-        (activeTaskSummary != null || showTaskSummaryWhenEmpty)
     val activeModelInfo = remember(activeTab?.agent, activeTab?.model, state.serverInfo?.agents) {
         if (activeTab == null || activeTab.agent == "shell") {
             null
@@ -1125,20 +1123,15 @@ internal fun WorkspaceScaffold(
                 }
 
                 // Task summary card shown when tapping a tab or toggling the tab header
-                AnimatedVisibility(
-                    visible = shouldDisplayTaskSummary,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut(),
-                ) {
-                    if (activeTab != null) {
-                        TabTaskSummaryCard(
-                            tab = activeTab,
-                            taskSummary = activeTaskSummary,
-                            isTaskFinished = activeTabFinished,
-                            onDismiss = onDismissTaskSummary,
-                        )
-                    }
-                }
+                ActiveTabSummaryBanner(
+                    activeTab = activeTab,
+                    showTaskSummary = showTaskSummary,
+                    showTaskSummaryWhenEmpty = showTaskSummaryWhenEmpty,
+                    activeTabFinished = activeTabFinished,
+                    activeMessagesFlow = activeMessagesFlow,
+                    fallbackMessages = state.activeMessages,
+                    onDismiss = onDismissTaskSummary,
+                )
             }
         },
     ) { innerPadding ->
@@ -1151,9 +1144,10 @@ internal fun WorkspaceScaffold(
                 modifier = Modifier.padding(innerPadding),
             )
         } else {
-            ChatWorkspace(
+            ActiveTabChatContent(
                 tab = activeTab,
-                messages = state.activeMessages,
+                activeMessagesFlow = activeMessagesFlow,
+                fallbackMessages = state.activeMessages,
                 isLoading = activeTab.id in state.loadingTabIds,
                 isConnected = state.connectionState == ConnectionState.CONNECTED,
                 modelLabel = activeModelInfo,
@@ -1168,6 +1162,84 @@ internal fun WorkspaceScaffold(
             )
         }
     }
+}
+
+@Composable
+private fun ActiveTabSummaryBanner(
+    activeTab: TabRecord?,
+    showTaskSummary: Boolean,
+    showTaskSummaryWhenEmpty: Boolean,
+    activeTabFinished: Boolean,
+    activeMessagesFlow: StateFlow<List<ChatMessage>>?,
+    fallbackMessages: List<ChatMessage>,
+    onDismiss: () -> Unit,
+) {
+    // Only subscribe to active messages when the banner is requested and the tab has no server summary.
+    val needsMessageFallback = showTaskSummary && activeTab != null && activeTab.taskSummary.isNullOrBlank()
+    val messages = if (needsMessageFallback && activeMessagesFlow != null) {
+        activeMessagesFlow.collectAsStateWithLifecycle().value
+    } else {
+        fallbackMessages
+    }
+    val activeTaskSummary = remember(activeTab, messages) {
+        activeTab?.let { resolveTabTaskSummary(it, messages) }
+    }
+    val shouldDisplayTaskSummary = activeTab != null &&
+        showTaskSummary &&
+        (activeTaskSummary != null || showTaskSummaryWhenEmpty)
+    AnimatedVisibility(
+        visible = shouldDisplayTaskSummary,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut(),
+    ) {
+        if (activeTab != null) {
+            TabTaskSummaryCard(
+                tab = activeTab,
+                taskSummary = activeTaskSummary,
+                isTaskFinished = activeTabFinished,
+                onDismiss = onDismiss,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ActiveTabChatContent(
+    tab: TabRecord,
+    activeMessagesFlow: StateFlow<List<ChatMessage>>?,
+    fallbackMessages: List<ChatMessage>,
+    isLoading: Boolean,
+    isConnected: Boolean,
+    modelLabel: String?,
+    hasCustomModel: Boolean,
+    onOpenModelPicker: (() -> Unit)?,
+    onSendMessage: (String) -> Unit,
+    onInterrupt: () -> Unit,
+    onForceInterrupt: (String?) -> Unit,
+    onRemoveQueuedMessage: (String) -> Unit,
+    onRetryFullAccess: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val messages = if (activeMessagesFlow != null) {
+        activeMessagesFlow.collectAsStateWithLifecycle().value
+    } else {
+        fallbackMessages
+    }
+    ChatWorkspace(
+        tab = tab,
+        messages = messages,
+        isLoading = isLoading,
+        isConnected = isConnected,
+        modelLabel = modelLabel,
+        hasCustomModel = hasCustomModel,
+        onOpenModelPicker = onOpenModelPicker,
+        onSendMessage = onSendMessage,
+        onInterrupt = onInterrupt,
+        onForceInterrupt = onForceInterrupt,
+        onRemoveQueuedMessage = onRemoveQueuedMessage,
+        onRetryFullAccess = onRetryFullAccess,
+        modifier = modifier,
+    )
 }
 
 @Composable

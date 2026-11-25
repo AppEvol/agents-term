@@ -268,6 +268,7 @@ open class HerdrApiClient(
         )
 
         val closedNotified = AtomicBoolean(false)
+        val deltaLogAggregator = WsDeltaLogAggregator(debugRecorder)
         fun notifyClosedOnce(reason: String?) {
             if (closedNotified.compareAndSet(false, true)) {
                 onClosed(reason)
@@ -289,22 +290,29 @@ open class HerdrApiClient(
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     runCatching { decodeHerdrJson<WsServerEnvelope>(text) }
                         .onSuccess { env ->
-                            val summary = buildString {
-                                append("type=${env.type}")
-                                if (!env.tabId.isNullOrBlank()) append(" tab=${env.tabId}")
-                                if (!env.messageId.isNullOrBlank()) append(" msg=${env.messageId}")
-                                if (env.tab != null) append(" tabStatus=${env.tab.status}")
-                                if (env.message != null) append(" msgStatus=${env.message.status}")
-                                if (env.textDelta != null) append(" textDeltaLen=${env.textDelta.length}")
-                                if (env.thinkingDelta != null) append(" thinkingDeltaLen=${env.thinkingDelta.length}")
-                                if (env.toolCall != null) append(" tool=${env.toolCall.name}:${env.toolCall.status}")
+                            if (env.type == "message_delta") {
+                                deltaLogAggregator.recordDelta(env)
+                            } else {
+                                if (env.type == "message_updated") {
+                                    deltaLogAggregator.flush()
+                                }
+                                if (debugRecorder != null) {
+                                    val summary = buildString {
+                                        append("type=${env.type}")
+                                        if (!env.tabId.isNullOrBlank()) append(" tab=${env.tabId}")
+                                        if (!env.messageId.isNullOrBlank()) append(" msg=${env.messageId}")
+                                        if (env.tab != null) append(" tabStatus=${env.tab.status}")
+                                        if (env.message != null) append(" msgStatus=${env.message.status}")
+                                        if (env.toolCall != null) append(" tool=${env.toolCall.name}:${env.toolCall.status}")
+                                    }
+                                    debugRecorder.record(
+                                        category = "ws",
+                                        event = "ws_event",
+                                        detail = summary,
+                                        payload = text,
+                                    )
+                                }
                             }
-                            debugRecorder?.record(
-                                category = "ws",
-                                event = "ws_event",
-                                detail = summary,
-                                payload = if (env.type == "message_delta") null else text,
-                            )
                             onEvent(env)
                         }
                         .onFailure { err ->
@@ -318,6 +326,7 @@ open class HerdrApiClient(
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    deltaLogAggregator.flush()
                     debugRecorder?.record(
                         category = "ws",
                         event = "ws_closing",
@@ -328,6 +337,7 @@ open class HerdrApiClient(
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    deltaLogAggregator.flush()
                     debugRecorder?.record(
                         category = "ws",
                         event = "ws_closed",
@@ -337,6 +347,7 @@ open class HerdrApiClient(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    deltaLogAggregator.flush()
                     val codeMsg = response?.let { "HTTP ${it.code}: ${it.message}" }
                     val reason = codeMsg ?: t.message ?: "Connection lost"
                     debugRecorder?.record(
@@ -348,5 +359,84 @@ open class HerdrApiClient(
                 }
             },
         )
+    }
+}
+
+/**
+ * Aggregates high-frequency `message_delta` WebSocket frames into periodic summary events so
+ * streaming does not allocate per-delta telemetry objects or wipe the 600-event ring buffer.
+ */
+internal class WsDeltaLogAggregator(
+    private val debugRecorder: DebugRecorder?,
+    private val flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS,
+    private val clockMs: () -> Long = { System.currentTimeMillis() },
+) {
+    private val lock = Any()
+    private var frames = 0
+    private var textChars = 0
+    private var thinkingChars = 0
+    private val tabIds = LinkedHashSet<String>()
+    private var windowStartMs = 0L
+
+    fun recordDelta(env: WsServerEnvelope) {
+        if (debugRecorder == null) return
+        val summary: String?
+        val ts: Long
+        synchronized(lock) {
+            val now = clockMs()
+            if (frames == 0) {
+                windowStartMs = now
+            }
+            frames++
+            textChars += env.textDelta?.length ?: 0
+            thinkingChars += env.thinkingDelta?.length ?: 0
+            env.tabId?.takeIf { it.isNotBlank() }?.let { tabIds.add(it) }
+            if (now - windowStartMs >= flushIntervalMs) {
+                summary = drainSummaryLocked(now)
+                ts = now
+            } else {
+                summary = null
+                ts = 0L
+            }
+        }
+        if (summary != null) {
+            debugRecorder.record(category = "ws", event = "ws_delta_batch", detail = summary, ts = ts)
+        }
+    }
+
+    fun flush() {
+        if (debugRecorder == null) return
+        val summary: String?
+        val ts: Long
+        synchronized(lock) {
+            if (frames == 0) return
+            val now = clockMs()
+            summary = drainSummaryLocked(now)
+            ts = now
+        }
+        if (summary != null) {
+            debugRecorder.record(category = "ws", event = "ws_delta_batch", detail = summary, ts = ts)
+        }
+    }
+
+    private fun drainSummaryLocked(nowMs: Long): String {
+        val elapsedMs = (nowMs - windowStartMs).coerceAtLeast(0L)
+        val detail = buildString {
+            append("frames=").append(frames)
+            append(" textChars=").append(textChars)
+            if (thinkingChars > 0) append(" thinkingChars=").append(thinkingChars)
+            append(" tabs=").append(tabIds.size)
+            append(" windowMs=").append(elapsedMs)
+        }
+        frames = 0
+        textChars = 0
+        thinkingChars = 0
+        tabIds.clear()
+        windowStartMs = nowMs
+        return detail
+    }
+
+    companion object {
+        private const val DEFAULT_FLUSH_INTERVAL_MS = 5_000L
     }
 }
