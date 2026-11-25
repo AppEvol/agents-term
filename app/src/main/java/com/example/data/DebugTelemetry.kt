@@ -37,10 +37,23 @@ private val privateKeyBlockRegex = Regex(
     """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----""",
 )
 
+private val UTC_TIME_ZONE: TimeZone = TimeZone.getTimeZone("UTC")
+private val isoUtcFormat: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+        timeZone = UTC_TIME_ZONE
+    }
+}
+
 /**
  * Strips bearer tokens, query tokens, label tokens, and PEM private keys before storing or uploading telemetry.
  */
 fun sanitizeDebugText(raw: String): String {
+    if (!raw.contains("token", ignoreCase = true) &&
+        !raw.contains("bearer", ignoreCase = true) &&
+        !raw.contains("PRIVATE KEY")
+    ) {
+        return raw
+    }
     var result = privateKeyBlockRegex.replace(raw, "[REDACTED_PRIVATE_KEY]")
     result = bearerTokenRegex.replace(result, "Bearer [REDACTED]")
     result = queryTokenRegex.replace(result, "$1[REDACTED]")
@@ -50,9 +63,7 @@ fun sanitizeDebugText(raw: String): String {
 }
 
 fun formatIsoUtc(epochMs: Long): String {
-    val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
-    }
+    val fmt = requireNotNull(isoUtcFormat.get())
     return fmt.format(Date(epochMs))
 }
 

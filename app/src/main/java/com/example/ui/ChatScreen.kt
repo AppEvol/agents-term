@@ -575,13 +575,17 @@ private fun AssistantMessageItem(
             buildAssistantDisplayBlocks(message)
         }
         if (displayBlocks.isNotEmpty()) {
-            for (block in displayBlocks) {
+            displayBlocks.forEachIndexed { blockIndex, block ->
                 when (block) {
                     is AssistantDisplayBlock.TextBlock -> {
-                        MarkdownText(
-                            markdown = block.text,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        val isLiveTextBlock = message.status == "streaming" && blockIndex == displayBlocks.lastIndex
+                        key("text_$blockIndex") {
+                            MarkdownText(
+                                markdown = block.text,
+                                isStreaming = isLiveTextBlock,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
 
                     is AssistantDisplayBlock.ToolRunBlock -> {
