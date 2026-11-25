@@ -1,6 +1,7 @@
 package com.example
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
@@ -10,7 +11,6 @@ import androidx.compose.ui.test.performFirstLinkClick
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.runtime.CompositionLocalProvider
 import com.example.ui.FILE_LINK_TAG
 import com.example.ui.INLINE_CODE_TAG
 import com.example.ui.MarkdownText
@@ -55,7 +55,7 @@ class MarkdownLinksTest {
     @Test
     fun fileLinkShowsOnlyItsLabelInsideParentheses() {
         val s = parse(
-            "([AgentsTermE2ETest.kt](file:///home/me/projects/app/AgentsTermE2ETest.kt#L10-L20)) all passed."
+            "([AgentsTermE2ETest.kt](file:///home/me/projects/app/AgentsTermE2ETest.kt#L10-L20)) all passed.",
         )
         assertEquals("(AgentsTermE2ETest.kt) all passed.", s.text)
         assertEquals(listOf(Link("AgentsTermE2ETest.kt", FILE_LINK_TAG)), links(s))

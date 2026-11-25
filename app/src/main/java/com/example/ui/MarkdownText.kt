@@ -188,49 +188,75 @@ internal fun vmPathFromLink(url: String): String {
     return path.substringBefore('#')
 }
 
+private fun findLinkLabelEnd(text: String, start: Int): Int {
+    var depth = 0
+    var i = start
+    while (i < text.length) {
+        when (text[i]) {
+            '\\' -> i++
+
+            '[' -> depth++
+
+            ']' -> {
+                depth--
+                if (depth == 0) return i
+            }
+
+            '\n' -> if (i + 1 < text.length && text[i + 1] == '\n') return -1
+        }
+        i++
+    }
+    return -1
+}
+
+private fun findLinkTargetEnd(text: String, openParen: Int): Int {
+    var j = openParen + 1
+    var parens = 1
+    while (j < text.length) {
+        val c = text[j]
+        if (c.isWhitespace()) return -1
+        if (c == '(') parens++
+        if (c == ')') {
+            parens--
+            if (parens == 0) return j
+        }
+        j++
+    }
+    return -1
+}
+
 /**
  * Parses `[label](target)` starting at [start] (which must be `[`). Returns label, target and the
  * index just past the closing `)`, or null if this is not a link.
  */
 private fun matchMarkdownLink(text: String, start: Int): Triple<String, String, Int>? {
-    var depth = 0
-    var i = start
-    var labelEnd = -1
-    while (i < text.length) {
-        when (text[i]) {
-            '\\' -> i++
-            '[' -> depth++
-            ']' -> {
-                depth--
-                if (depth == 0) {
-                    labelEnd = i
-                    break
-                }
-            }
-            '\n' -> if (i + 1 < text.length && text[i + 1] == '\n') return null
-        }
-        i++
-    }
+    val labelEnd = findLinkLabelEnd(text, start)
     if (labelEnd < 0 || labelEnd + 1 >= text.length || text[labelEnd + 1] != '(') return null
-    var j = labelEnd + 2
-    var parens = 1
-    while (j < text.length) {
-        val c = text[j]
-        if (c.isWhitespace()) return null
-        if (c == '(') parens++
-        if (c == ')') {
-            parens--
-            if (parens == 0) break
-        }
-        j++
-    }
-    if (j >= text.length) return null
-    val target = text.substring(labelEnd + 2, j).removeSurrounding("<", ">")
+    val targetEnd = findLinkTargetEnd(text, labelEnd + 1)
+    if (targetEnd < 0) return null
+    val target = text.substring(labelEnd + 2, targetEnd).removeSurrounding("<", ">")
     if (target.isEmpty()) return null
-    return Triple(text.substring(start + 1, labelEnd), target, j + 1)
+    return Triple(text.substring(start + 1, labelEnd), target, targetEnd + 1)
 }
 
-private val trailingUrlPunctuation = ".,;:!?'\"*_~"
+private const val TRAILING_URL_PUNCTUATION = ".,;:!?'\"*_~"
+
+private fun trimTrailingUrlPunctuation(text: String, start: Int, rawEnd: Int, minEnd: Int): Int {
+    var end = rawEnd
+    while (end > minEnd) {
+        val last = text[end - 1]
+        if (last in TRAILING_URL_PUNCTUATION) {
+            end--
+        } else if (last == ')' || last == ']') {
+            val open = if (last == ')') '(' else '['
+            val segment = text.substring(start, end)
+            if (segment.count { it == last } > segment.count { it == open }) end-- else break
+        } else {
+            break
+        }
+    }
+    return end
+}
 
 /** Length of a bare `http(s)://` URL starting at [start], or 0 if there is none. */
 private fun matchBareUrl(text: String, start: Int): Int {
@@ -243,18 +269,7 @@ private fun matchBareUrl(text: String, start: Int): Int {
     var end = start
     while (end < text.length && !text[end].isWhitespace() && text[end] !in "<>\"`") end++
     // Drop trailing sentence punctuation and a `)` that closes text around the URL.
-    while (end > start + scheme) {
-        val last = text[end - 1]
-        if (last in trailingUrlPunctuation) {
-            end--
-        } else if (last == ')' || last == ']') {
-            val open = if (last == ')') '(' else '['
-            val segment = text.substring(start, end)
-            if (segment.count { it == last } > segment.count { it == open }) end-- else break
-        } else {
-            break
-        }
-    }
+    end = trimTrailingUrlPunctuation(text, start, end, start + scheme)
     return if (end - start > scheme) end - start else 0
 }
 
@@ -290,74 +305,98 @@ private fun AnnotatedString.Builder.appendLink(
     withLink(link) { appendInline(label, ctx, inLink = true) }
 }
 
+private fun AnnotatedString.Builder.tryAppendInlineCode(
+    text: String,
+    idx: Int,
+    ctx: InlineContext,
+): Int {
+    if (text[idx] != '`') return -1
+    val end = text.indexOf('`', idx + 1)
+    if (end <= idx) return -1
+    pushStringAnnotation(INLINE_CODE_TAG, "")
+    withStyle(
+        SpanStyle(
+            fontFamily = MonoFontFamily,
+            color = ctx.inlineCodeFg,
+            fontSize = 13.sp,
+        ),
+    ) {
+        // The surrounding spaces are the chip's inner padding.
+        append(" ${text.substring(idx + 1, end)} ")
+    }
+    pop()
+    return end + 1
+}
+
+private fun AnnotatedString.Builder.tryAppendLink(
+    text: String,
+    idx: Int,
+    ctx: InlineContext,
+    inLink: Boolean,
+): Int {
+    if (inLink) return -1
+    val ch = text[idx]
+    // Link [label](target). Links cannot nest, so inside a label `[` is plain text.
+    if (ch == '[') {
+        val link = matchMarkdownLink(text, idx)
+        if (link != null) {
+            appendLink(link.first, link.second, ctx)
+            return link.third
+        }
+    }
+    // Bare web URL
+    if (ch == 'h' || ch == 'H') {
+        val urlLen = matchBareUrl(text, idx)
+        if (urlLen > 0) {
+            val url = text.substring(idx, idx + urlLen)
+            appendLink(url, url, ctx)
+            return idx + urlLen
+        }
+    }
+    return -1
+}
+
+private fun AnnotatedString.Builder.tryAppendEmphasis(
+    text: String,
+    idx: Int,
+    ctx: InlineContext,
+    inLink: Boolean,
+): Int {
+    if (text[idx] != '*') return -1
+    // Bold **...**
+    if (idx + 1 < text.length && text[idx + 1] == '*') {
+        val end = text.indexOf("**", idx + 2)
+        if (end > idx + 2) {
+            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                appendInline(text.substring(idx + 2, end), ctx, inLink)
+            }
+            return end + 2
+        }
+    }
+    // Italic *...*
+    val end = text.indexOf('*', idx + 1)
+    if (end > idx + 1 && !text.substring(idx + 1, end).contains('\n')) {
+        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+            appendInline(text.substring(idx + 1, end), ctx, inLink)
+        }
+        return end + 1
+    }
+    return -1
+}
+
 private fun AnnotatedString.Builder.appendInline(text: String, ctx: InlineContext, inLink: Boolean) {
     var idx = 0
     val len = text.length
     while (idx < len) {
-        val ch = text[idx]
-        // Inline code `...`
-        if (ch == '`') {
-            val end = text.indexOf('`', idx + 1)
-            if (end > idx) {
-                pushStringAnnotation(INLINE_CODE_TAG, "")
-                withStyle(
-                    SpanStyle(
-                        fontFamily = MonoFontFamily,
-                        color = ctx.inlineCodeFg,
-                        fontSize = 13.sp,
-                    )
-                ) {
-                    // The surrounding spaces are the chip's inner padding.
-                    append(" ${text.substring(idx + 1, end)} ")
-                }
-                pop()
-                idx = end + 1
-                continue
-            }
+        val next = tryAppendInlineCode(text, idx, ctx).takeIf { it >= 0 }
+            ?: tryAppendLink(text, idx, ctx, inLink).takeIf { it >= 0 }
+            ?: tryAppendEmphasis(text, idx, ctx, inLink).takeIf { it >= 0 }
+        if (next != null) {
+            idx = next
+        } else {
+            append(text[idx])
+            idx++
         }
-        // Link [label](target). Links cannot nest, so inside a label `[` is plain text.
-        if (ch == '[' && !inLink) {
-            val link = matchMarkdownLink(text, idx)
-            if (link != null) {
-                appendLink(link.first, link.second, ctx)
-                idx = link.third
-                continue
-            }
-        }
-        // Bare web URL
-        if ((ch == 'h' || ch == 'H') && !inLink) {
-            val urlLen = matchBareUrl(text, idx)
-            if (urlLen > 0) {
-                val url = text.substring(idx, idx + urlLen)
-                appendLink(url, url, ctx)
-                idx += urlLen
-                continue
-            }
-        }
-        // Bold **...**
-        if (idx + 1 < len && ch == '*' && text[idx + 1] == '*') {
-            val end = text.indexOf("**", idx + 2)
-            if (end > idx + 2) {
-                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                    appendInline(text.substring(idx + 2, end), ctx, inLink)
-                }
-                idx = end + 2
-                continue
-            }
-        }
-        // Italic *...*
-        if (ch == '*') {
-            val end = text.indexOf('*', idx + 1)
-            if (end > idx + 1 && !text.substring(idx + 1, end).contains('\n')) {
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                    appendInline(text.substring(idx + 1, end), ctx, inLink)
-                }
-                idx = end + 1
-                continue
-            }
-        }
-        append(ch)
-        idx++
     }
 }
 
