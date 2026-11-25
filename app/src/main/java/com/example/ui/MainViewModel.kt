@@ -14,6 +14,7 @@ import com.example.data.AppThemeId
 import com.example.data.AppUiController
 import com.example.data.BootstrapPhase
 import com.example.data.BootstrapUiState
+import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
 import com.example.data.ConnectionState
 import com.example.data.CrashLogStore
@@ -50,8 +51,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -75,6 +80,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val sshClient = SshBootstrapClient(settings, debugRecorder)
 
     val state: StateFlow<WorkspaceState> = repo.state
+
+    /**
+     * Workspace chrome state (tabs, connection, banners, finished flags) without `messagesByTab`,
+     * so streaming text deltas do not recompose the top bar, quick tab strip, or drawer.
+     */
+    val chromeState: StateFlow<WorkspaceState> = repo.state
+        .map { ws ->
+            ws.copy(
+                messagesByTab = emptyMap(),
+                precomputedFinishedTabIds = ws.finishedTabIds,
+            )
+        }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = repo.state.value.let { ws ->
+                ws.copy(
+                    messagesByTab = emptyMap(),
+                    precomputedFinishedTabIds = ws.finishedTabIds,
+                )
+            },
+        )
+
+    /** Messages for the currently selected tab only; background-tab updates do not emit here. */
+    val activeMessages: StateFlow<List<ChatMessage>> = repo.state
+        .map { it.activeMessages }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = repo.state.value.activeMessages,
+        )
 
     private val _showConnectScreen = MutableStateFlow(!settings.loadConnection().isValid)
     val showConnectScreen: StateFlow<Boolean> = _showConnectScreen.asStateFlow()
@@ -254,7 +292,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ): DebugDumpUploadRequest {
         val app = getApplication<Application>()
         val cfg = _debugSettings.value
-        val wsState = state.value
+        val wsState = repo.snapshotStateWithPendingDeltas()
         val logcat = if (cfg.includeLogcat) collectAppLogcat(maxLines = 400) else null
         val lastCrash = CrashLogStore.readLastCrash(app)
         val connectionSummary = if (wsState.config.isValid) {
@@ -382,7 +420,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        override fun workspaceJson(): String = buildSanitizedWorkspaceJson(state.value)
+        override fun workspaceJson(): String = buildSanitizedWorkspaceJson(repo.snapshotStateWithPendingDeltas())
 
         override suspend fun logcat(lines: Int): String {
             if (!_debugSettings.value.includeLogcat) {
