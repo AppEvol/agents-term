@@ -1,7 +1,11 @@
 package com.example
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -196,6 +200,11 @@ class ChatQueueUiTest {
         }
 
         composeRule.onNodeWithTag("working_progress_bar").assertDoesNotExist()
+        composeRule.onNodeWithTag("composer_status_detail")
+            .assertIsDisplayed()
+            .assertTextEquals("Antigravity is thinking…")
+        composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .assertCountEquals(0)
         composeRule.onNodeWithTag("streaming_working_badge").assertIsDisplayed()
         composeRule.onNodeWithTag("streaming_activity_indicator").assertIsDisplayed()
     }

@@ -956,10 +956,10 @@ private fun ToolCallRow(
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.size(15.dp)) {
                 when (toolCall.status) {
-                    "running" -> CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 1.8.dp,
-                        color = HerdrBlue,
+                    "running" -> Icon(
+                        imageVector = Icons.Rounded.Build,
+                        contentDescription = null,
+                        tint = HerdrBlue,
                     )
 
                     "done" -> Icon(
@@ -1405,25 +1405,17 @@ private fun ChatComposer(
                                     .testTag("hold_to_interrupt_hint"),
                             )
                         } else if (!statusDetail.isNullOrBlank()) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(12.dp),
-                                    strokeWidth = 1.8.dp,
-                                    color = HerdrBlue,
-                                )
-                                Text(
-                                    text = statusDetail,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = MonoFontFamily,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
+                            Text(
+                                text = statusDetail,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = MonoFontFamily,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("composer_status_detail"),
+                            )
                         }
                     }
                 }
