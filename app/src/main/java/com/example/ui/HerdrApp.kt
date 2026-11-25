@@ -887,7 +887,7 @@ private fun WorkspaceScaffold(
                         } else {
                             HerdrAmber.copy(alpha = 0.2f)
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().testTag("connection_banner"),
                     ) {
                         Row(
                             modifier = Modifier
