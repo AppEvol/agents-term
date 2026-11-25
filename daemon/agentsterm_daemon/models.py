@@ -14,7 +14,7 @@ from .config import enriched_path, home_dir, resolve_binary
 from .util import is_number
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-AGY_MODEL_LINE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._:/-]*)\s{2,}(.+)$")
+AGY_MODEL_LINE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._:/-]*)(?:\t+|\s{2,})(.+)$")
 FETCHING_RE = re.compile(r"fetching available models", re.I)
 CODEX_MODEL_RE = re.compile(r'^\s*model\s*=\s*"([^"]+)"', re.M)
 

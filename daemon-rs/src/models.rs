@@ -38,7 +38,7 @@ fn ansi_re() -> &'static Regex {
 
 fn agy_model_line_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^([A-Za-z0-9][A-Za-z0-9._:/-]*)\s{2,}(.+)$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^([A-Za-z0-9][A-Za-z0-9._:/-]*)(?:\t+|\s{2,})(.+)$").unwrap())
 }
 
 fn fetching_re() -> &'static Regex {
@@ -454,4 +454,32 @@ pub fn warm_agent_models_cache() {
     kick_agy_discovery();
     let _ = get_cached_agent_models("claude");
     let _ = get_cached_agent_models("codex");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_agy_models_output;
+    use serde_json::json;
+
+    #[test]
+    fn parses_space_and_tab_separated_agy_models_output() {
+        let sample = [
+            "Fetching available models...",
+            "\r\x1b[36m⠋ Fetching available models...\x1b[0m\r\x1b[2Kgemini-4-neon-high\tGemini 4 Neon (High)",
+            "gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)",
+            "claude-opus-5-5-high           Claude Opus 5.5 (High)",
+            "gemini-4-neon-high\tDuplicate Should Be Ignored",
+            "Not a model line",
+            "",
+        ]
+        .join("\n");
+        assert_eq!(
+            parse_agy_models_output(&sample),
+            vec![
+                json!({ "id": "gemini-4-neon-high", "name": "Gemini 4 Neon (High)" }),
+                json!({ "id": "gemini-4-neon-xhigh", "name": "Gemini 4 Neon (XHigh)" }),
+                json!({ "id": "claude-opus-5-5-high", "name": "Claude Opus 5.5 (High)" }),
+            ]
+        );
+    }
 }

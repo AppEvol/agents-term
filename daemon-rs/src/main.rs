@@ -54,12 +54,18 @@ fn main() -> ExitCode {
         .and_then(|n| n.to_str())
         .unwrap_or("");
     if invoked_name == "app_state_cli" || invoked_name == "app-state-cli" {
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
         return ExitCode::from(app_cli::run_app_cli(&args[1..]) as u8);
     }
 
     let argv = &args[1..];
     if let Some(first) = argv.first() {
         if first == "app" {
+            unsafe {
+                libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+            }
             return ExitCode::from(app_cli::run_app_cli(&argv[1..]) as u8);
         }
     }
