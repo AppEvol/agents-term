@@ -1,11 +1,15 @@
 package com.example.ui.markdown
 
 /**
- * Incrementally parses streaming chat Markdown so earlier completed top-level blocks are parsed
- * once and reused by reference while only the live tail is re-parsed on each delta.
+ * Incrementally parses streaming chat Markdown using parser-provided [org.commonmark.node.SourceSpan]
+ * boundaries so earlier completed top-level blocks are parsed once and reused by reference while
+ * only the live tail is re-parsed on each delta.
  *
- * When [isStreaming] transitions to `false` (or for non-streaming renders), falls back to a single
- * authoritative [MarkdownParser.parse] pass so output always matches the full CommonMark+GFM spec.
+ * Also fast-paths open top-level fenced code blocks in O(delta) time without re-parsing Markdown
+ * until a candidate closing fence line arrives.
+ *
+ * When [isStreaming] transitions to `false` (or for non-streaming renders), runs a single
+ * authoritative [MarkdownParser.parse] pass unless the exact same text was already parsed in full.
  */
 internal class StreamingMarkdownState {
     private var lastMarkdown: String = ""
@@ -14,6 +18,7 @@ internal class StreamingMarkdownState {
     private var frozenBlocks: List<MdBlock> = emptyList()
     private var cachedBlocks: List<MdBlock> = emptyList()
     private var hasLinkRefDef: Boolean = false
+    private var activeOpenFence: ActiveOpenFence? = null
 
     /** Number of characters currently locked into [frozenBlocks]; exposed for tests. */
     internal val frozenLength: Int
@@ -23,8 +28,36 @@ internal class StreamingMarkdownState {
     internal val frozenBlockCount: Int
         get() = frozenBlocks.size
 
+    /** Number of streaming updates satisfied by the O(1) open-fence fast path; exposed for tests. */
+    internal var openFenceFastPathHits: Int = 0
+        private set
+
+    internal val currentBlocks: List<MdBlock>
+        get() = cachedBlocks
+
+    internal fun isUpToDate(markdown: String, isStreaming: Boolean): Boolean = markdown == lastMarkdown && isStreaming == wasStreaming
+
+    /**
+     * Estimates how many characters will be parsed by [update], so callers can decide whether to
+     * run synchronously (small initial renders / small tails / O(1) open-fence appends) or dispatch
+     * off the UI thread.
+     */
+    internal fun estimatedWorkChars(markdown: String, isStreaming: Boolean): Int {
+        if (markdown.isEmpty() || isUpToDate(markdown, isStreaming)) return 0
+        if (!isStreaming) {
+            return if (markdown == lastMarkdown && frozenOffset == 0) 0 else markdown.length
+        }
+        val canAppend = wasStreaming && markdown.startsWith(lastMarkdown) && markdown.length >= frozenOffset
+        if (!canAppend || hasLinkRefDef) return markdown.length
+        val fence = activeOpenFence
+        if (fence != null) {
+            return (markdown.length - fence.lineStartOffset).coerceAtLeast(0)
+        }
+        return (markdown.length - frozenOffset).coerceAtLeast(0)
+    }
+
     fun update(markdown: String, isStreaming: Boolean): List<MdBlock> {
-        if (markdown == lastMarkdown && isStreaming == wasStreaming) {
+        if (isUpToDate(markdown, isStreaming)) {
             return cachedBlocks
         }
         if (markdown.isEmpty()) {
@@ -42,13 +75,14 @@ internal class StreamingMarkdownState {
 
     private fun updateStatic(markdown: String): List<MdBlock> {
         // Static message or turn just finished: run one authoritative full parse unless the
-        // exact same text was already parsed in full (frozenOffset == 0).
-        if (markdown != lastMarkdown || frozenOffset > 0) {
+        // exact same text was already parsed in full (frozenOffset == 0 and no fast-path state).
+        if (markdown != lastMarkdown || frozenOffset > 0 || activeOpenFence != null) {
             cachedBlocks = MarkdownParser.parse(markdown)
         }
         frozenOffset = 0
         frozenBlocks = emptyList()
         hasLinkRefDef = false
+        activeOpenFence = null
         lastMarkdown = markdown
         wasStreaming = false
         return cachedBlocks
@@ -61,22 +95,56 @@ internal class StreamingMarkdownState {
         if (hasLinkRefDef) {
             return parseFullStreaming(markdown)
         }
-        val scanResult = findSafeSplitOffset(markdown, frozenOffset)
-        if (scanResult == LINK_REF_DEF_DETECTED) {
-            // A link reference definition can retroactively resolve `[ref]` links in earlier blocks.
-            reset()
-            hasLinkRefDef = true
-            return parseFullStreaming(markdown)
-        }
-        if (scanResult > frozenOffset) {
-            val newlyFinalized = MarkdownParser.parse(markdown.substring(frozenOffset, scanResult))
-            if (newlyFinalized.isNotEmpty()) {
-                frozenBlocks = if (frozenBlocks.isEmpty()) newlyFinalized else frozenBlocks + newlyFinalized
+        val fence = activeOpenFence
+        if (fence != null) {
+            val fastBlock = fence.tryAppend(markdown)
+            if (fastBlock != null) {
+                openFenceFastPathHits++
+                cachedBlocks = combineBlocks(frozenBlocks, listOf(fastBlock))
+                lastMarkdown = markdown
+                wasStreaming = true
+                return cachedBlocks
             }
-            frozenOffset = scanResult
+            // Candidate closing fence or edge case arrived: fall back to authoritative tail parse.
+            activeOpenFence = null
         }
+
         val tail = if (frozenOffset == 0) markdown else markdown.substring(frozenOffset)
-        val tailBlocks = if (tail.isEmpty()) emptyList() else MarkdownParser.parse(tail)
+        val parsed = MarkdownParser.parseDocument(tail)
+        if (parsed.hasLinkReferenceDefinition) {
+            // A link reference definition can retroactively resolve `[ref]` links in earlier blocks.
+            if (frozenOffset > 0) {
+                reset()
+                hasLinkRefDef = true
+                return parseFullStreaming(markdown)
+            }
+            hasLinkRefDef = true
+            activeOpenFence = null
+            cachedBlocks = parsed.blocks.map { it.block }
+            lastMarkdown = markdown
+            wasStreaming = true
+            return cachedBlocks
+        }
+
+        val freezeCount = findSafeFreezeCount(tail, parsed.blocks)
+        if (freezeCount > 0) {
+            val newlyFrozen = parsed.blocks.subList(0, freezeCount).map { it.block }
+            frozenBlocks = if (frozenBlocks.isEmpty()) newlyFrozen else frozenBlocks + newlyFrozen
+            frozenOffset += parsed.blocks[freezeCount].startOffset
+        }
+
+        val tailBlocks = if (freezeCount == 0) {
+            parsed.blocks.map { it.block }
+        } else {
+            parsed.blocks.subList(freezeCount, parsed.blocks.size).map { it.block }
+        }
+        activeOpenFence = maybeCreateOpenFence(
+            markdown = markdown,
+            tailStartOffset = frozenOffset,
+            tailBlockCount = tailBlocks.size,
+            parsedTailBaseOffset = frozenOffset - if (freezeCount > 0) parsed.blocks[freezeCount].startOffset else 0,
+            openFenceInfo = parsed.trailingOpenFence,
+        )
         cachedBlocks = combineBlocks(frozenBlocks, tailBlocks)
         lastMarkdown = markdown
         wasStreaming = true
@@ -84,6 +152,7 @@ internal class StreamingMarkdownState {
     }
 
     private fun parseFullStreaming(markdown: String): List<MdBlock> {
+        activeOpenFence = null
         cachedBlocks = MarkdownParser.parse(markdown)
         lastMarkdown = markdown
         wasStreaming = true
@@ -95,14 +164,97 @@ internal class StreamingMarkdownState {
         frozenBlocks = emptyList()
         cachedBlocks = emptyList()
         hasLinkRefDef = false
+        activeOpenFence = null
+    }
+
+    /**
+     * Tracks an open top-level fenced code block and appends incoming lines in O(delta) time
+     * until a candidate closing fence arrives.
+     */
+    private class ActiveOpenFence(
+        private val fenceChar: Char,
+        private val openingLength: Int,
+        private val indent: Int,
+        private val language: String,
+        bodyStartOffset: Int,
+    ) {
+        private val codeBuilder = StringBuilder()
+        var lineStartOffset: Int = bodyStartOffset
+            private set
+        private var currentLineCodeStart: Int = 0
+
+        /**
+         * Scans newly arrived lines from [lineStartOffset] to `markdown.length`.
+         * Returns the updated [MdBlock.CodeBlock], or `null` if a candidate closing fence or
+         * uncommon case requires falling back to commonmark-java.
+         */
+        fun tryAppend(markdown: String): MdBlock.CodeBlock? {
+            if (markdown.isNotEmpty() && markdown[markdown.length - 1] == '\r') {
+                return null
+            }
+            codeBuilder.setLength(currentLineCodeStart)
+            var pos = lineStartOffset
+            val len = markdown.length
+            while (pos < len) {
+                val nlIdx = markdown.indexOf('\n', pos)
+                val lineEnd = if (nlIdx == -1) len else nlIdx
+                val hasNewline = nlIdx != -1
+                val contentEnd = if (lineEnd > pos && markdown[lineEnd - 1] == '\r') lineEnd - 1 else lineEnd
+                if (!appendCodeLine(markdown, pos, contentEnd, hasNewline)) {
+                    return null
+                }
+                if (hasNewline) {
+                    pos = nlIdx + 1
+                    lineStartOffset = pos
+                    currentLineCodeStart = codeBuilder.length
+                } else {
+                    pos = len
+                }
+            }
+            return MdBlock.CodeBlock(
+                language = language,
+                code = codeBuilder.toString().trimEnd('\n'),
+            )
+        }
+
+        private fun appendCodeLine(
+            markdown: String,
+            lineStart: Int,
+            contentEnd: Int,
+            hasNewline: Boolean,
+        ): Boolean {
+            if (containsSpecialChar(markdown, lineStart, contentEnd)) {
+                return false
+            }
+            if (isCandidateClosingFence(markdown, lineStart, contentEnd, fenceChar, openingLength)) {
+                return false
+            }
+            var strippedStart = lineStart
+            if (indent > 0) {
+                var stripped = 0
+                while (stripped < indent && strippedStart < contentEnd) {
+                    val ch = markdown[strippedStart]
+                    if (ch == ' ') {
+                        stripped++
+                        strippedStart++
+                    } else if (ch == '\t') {
+                        // CommonMark expands tabs to tab-stop 4 when stripping fence indent; let parser handle it.
+                        return false
+                    } else {
+                        break
+                    }
+                }
+            }
+            codeBuilder.append(markdown, strippedStart, contentEnd)
+            if (hasNewline) {
+                codeBuilder.append('\n')
+            }
+            return true
+        }
     }
 
     companion object {
-        private const val LINK_REF_DEF_DETECTED = -1
-        private const val MIN_FENCE_LEN = 3
-        private const val MAX_TOP_LEVEL_INDENT = 3
-        private const val TAB_WIDTH = 4
-        private const val MAX_ORDERED_DIGITS = 9
+        private const val MAX_CLOSING_FENCE_INDENT = 3
 
         private fun combineBlocks(prefix: List<MdBlock>, tail: List<MdBlock>): List<MdBlock> = when {
             prefix.isEmpty() -> tail
@@ -111,216 +263,83 @@ internal class StreamingMarkdownState {
         }
 
         /**
-         * Scans [markdown] from [startOffset] (always 0 or right after `\n`) and returns the
-         * furthest char offset where splitting `parse(prefix) + parse(tail)` produces the exact
-         * same blocks as `parse(markdown)`, or [LINK_REF_DEF_DETECTED] if a link reference
-         * definition appears outside fenced code.
+         * Returns how many leading blocks of [blocks] are permanently finalized and safe to freeze.
+         *
+         * Requiring a `\n` at or after the next block's start offset guarantees that the next
+         * block's first line is complete and can never mutate into a list marker (`2.` / `• `),
+         * a backtick-invalidated fence info string, or a non-interrupting thematic break that
+         * retroactively merges back into the preceding block.
          */
-        internal fun findSafeSplitOffset(markdown: String, startOffset: Int): Int = PrefixScanner(markdown, startOffset).scan()
-
-        private class PrefixScanner(
-            private val markdown: String,
-            private val startOffset: Int,
-        ) {
-            private var inFence = false
-            private var fenceChar = '\u0000'
-            private var fenceLen = 0
-            private var inList = false
-            private var prevWasBlank = false
-            private var sawNonBlank = false
-            private var lastSafeSplit = startOffset
-
-            fun scan(): Int {
-                var pos = startOffset
-                val len = markdown.length
-                while (pos < len) {
-                    val nlIdx = markdown.indexOf('\n', pos)
-                    val lineEnd = if (nlIdx == -1) len else nlIdx
-                    val nextLineStart = if (nlIdx == -1) len else nlIdx + 1
-                    val contentEnd = if (lineEnd > pos && markdown[lineEnd - 1] == '\r') lineEnd - 1 else lineEnd
-                    if (!processLine(pos, contentEnd, nlIdx != -1, nextLineStart)) {
-                        return LINK_REF_DEF_DETECTED
-                    }
-                    pos = nextLineStart
-                }
-                return lastSafeSplit
+        private fun findSafeFreezeCount(tail: String, blocks: List<TopLevelBlock>): Int {
+            if (blocks.size < 2) return 0
+            val lastIdx = blocks.lastIndex
+            val lastStart = blocks[lastIdx].startOffset
+            if (lastStart > 0 && tail.indexOf('\n', lastStart) != -1) {
+                return lastIdx
             }
-
-            /** Returns `false` if a link reference definition is detected. */
-            private fun processLine(
-                lineStart: Int,
-                contentEnd: Int,
-                hasNewline: Boolean,
-                nextLineStart: Int,
-            ): Boolean {
-                val (contentStart, leadingSpaces) = measureIndent(lineStart, contentEnd)
-                if (contentStart == contentEnd) {
-                    if (!inFence) prevWasBlank = true
-                    return true
-                }
-                if (inFence) {
-                    processFencedLine(contentStart, contentEnd, leadingSpaces, hasNewline, nextLineStart)
-                    return true
-                }
-                if (leadingSpaces <= MAX_TOP_LEVEL_INDENT && isLinkReferenceDefinition(markdown, contentStart, contentEnd)) {
-                    return false
-                }
-                processNormalLine(lineStart, contentStart, contentEnd, leadingSpaces, hasNewline)
-                return true
-            }
-
-            private fun measureIndent(lineStart: Int, contentEnd: Int): Pair<Int, Int> {
-                var pos = lineStart
-                var spaces = 0
-                while (pos < contentEnd) {
-                    when (markdown[pos]) {
-                        ' ' -> spaces++
-                        '\t' -> spaces += TAB_WIDTH
-                        else -> break
-                    }
-                    pos++
-                }
-                return pos to spaces
-            }
-
-            private fun processFencedLine(
-                contentStart: Int,
-                contentEnd: Int,
-                leadingSpaces: Int,
-                hasNewline: Boolean,
-                nextLineStart: Int,
-            ) {
-                val allowedIndent = inList || leadingSpaces <= MAX_TOP_LEVEL_INDENT
-                if (!allowedIndent || !isClosingFence(markdown, contentStart, contentEnd, fenceChar, fenceLen)) {
-                    return
-                }
-                inFence = false
-                if (!inList && hasNewline && nextLineStart < markdown.length) {
-                    lastSafeSplit = nextLineStart
-                }
-                prevWasBlank = false
-                sawNonBlank = true
-            }
-
-            private fun processNormalLine(
-                lineStart: Int,
-                contentStart: Int,
-                contentEnd: Int,
-                leadingSpaces: Int,
-                hasNewline: Boolean,
-            ) {
-                val startsListItem = isListItemStart(markdown, contentStart, contentEnd)
-                // Only freeze a preceding block once the deciding line is complete (`\n` arrived):
-                // a partial line like `"2"` may still become `"2. item"` on the next delta.
-                if (prevWasBlank && sawNonBlank && hasNewline) {
-                    advanceSplitAfterBlank(lineStart, leadingSpaces, startsListItem)
-                }
-                val openingFence = if (inList || leadingSpaces <= MAX_TOP_LEVEL_INDENT) {
-                    parseOpeningFence(markdown, contentStart, contentEnd)
-                } else {
-                    0
-                }
-                if (openingFence != 0) {
-                    inFence = true
-                    fenceChar = markdown[contentStart]
-                    fenceLen = openingFence
-                } else if (!inList && leadingSpaces <= MAX_TOP_LEVEL_INDENT && startsListItem) {
-                    inList = true
-                }
-                prevWasBlank = false
-                sawNonBlank = true
-            }
-
-            private fun advanceSplitAfterBlank(lineStart: Int, leadingSpaces: Int, startsListItem: Boolean) {
-                if (!inList) {
-                    lastSafeSplit = lineStart
-                } else if (leadingSpaces == 0 && !startsListItem) {
-                    inList = false
-                    lastSafeSplit = lineStart
+            if (blocks.size >= 3) {
+                val prevStart = blocks[lastIdx - 1].startOffset
+                if (prevStart > 0 && tail.indexOf('\n', prevStart) != -1) {
+                    return lastIdx - 1
                 }
             }
+            return 0
         }
 
-        /** Returns fence length (>= 3) if `[start, end)` opens a fenced code block, else 0. */
-        private fun parseOpeningFence(text: String, start: Int, end: Int): Int {
-            val ch = text[start]
-            if (ch != '`' && ch != '~') return 0
-            var i = start
-            while (i < end && text[i] == ch) i++
-            val count = i - start
-            if (count < MIN_FENCE_LEN) return 0
-            if (ch == '`' && hasCharInRange(text, i, end, '`')) return 0
-            return count
+        private fun maybeCreateOpenFence(
+            markdown: String,
+            tailStartOffset: Int,
+            tailBlockCount: Int,
+            parsedTailBaseOffset: Int,
+            openFenceInfo: OpenFenceInfo?,
+        ): ActiveOpenFence? {
+            if (openFenceInfo == null || tailBlockCount != 1) return null
+            val relBodyStart = openFenceInfo.bodyStartOffset ?: return null
+            val absBlockStart = parsedTailBaseOffset + openFenceInfo.blockStartOffset
+            if (absBlockStart < tailStartOffset) return null
+            val absBodyStart = parsedTailBaseOffset + relBodyStart
+            val fence = ActiveOpenFence(
+                fenceChar = openFenceInfo.fenceChar,
+                openingLength = openFenceInfo.openingLength,
+                indent = openFenceInfo.indent,
+                language = openFenceInfo.language,
+                bodyStartOffset = absBodyStart,
+            )
+            return if (fence.tryAppend(markdown) != null) fence else null
         }
 
-        private fun hasCharInRange(text: String, start: Int, end: Int, target: Char): Boolean {
+        private fun containsSpecialChar(text: String, start: Int, end: Int): Boolean {
             for (i in start until end) {
-                if (text[i] == target) return true
+                val ch = text[i]
+                if (ch == '\u0000' || ch == '\r') return true
             }
             return false
         }
 
-        private fun isClosingFence(
+        private fun isCandidateClosingFence(
             text: String,
             start: Int,
             end: Int,
             fenceChar: Char,
-            fenceLen: Int,
+            openingLength: Int,
         ): Boolean {
-            if (text[start] != fenceChar) return false
             var i = start
+            var spaces = 0
+            while (i < end && text[i] == ' ') {
+                spaces++
+                i++
+            }
+            if (spaces > MAX_CLOSING_FENCE_INDENT || i >= end || text[i] != fenceChar) {
+                return false
+            }
+            val fenceStart = i
             while (i < end && text[i] == fenceChar) i++
-            if (i - start < fenceLen) return false
+            if (i - fenceStart < openingLength) return false
             while (i < end) {
                 if (text[i] != ' ' && text[i] != '\t') return false
                 i++
             }
             return true
-        }
-
-        private fun isListItemStart(text: String, start: Int, end: Int): Boolean {
-            if (isUnorderedListStart(text, start, end)) return true
-            return isOrderedListStart(text, start, end)
-        }
-
-        private fun isUnorderedListStart(text: String, start: Int, end: Int): Boolean {
-            if (text[start] !in UNORDERED_MARKERS) return false
-            return isDelimiterEnd(text, start + 1, end)
-        }
-
-        private fun isOrderedListStart(text: String, start: Int, end: Int): Boolean {
-            if (text[start] !in '0'..'9') return false
-            var i = start
-            while (i < end && text[i] in '0'..'9' && i - start < MAX_ORDERED_DIGITS) i++
-            if (i >= end) return false
-            val delim = text[i]
-            if (delim != '.' && delim != ')') return false
-            return isDelimiterEnd(text, i + 1, end)
-        }
-
-        private fun isDelimiterEnd(text: String, index: Int, end: Int): Boolean = index == end || text[index] == ' ' || text[index] == '\t'
-
-        private val UNORDERED_MARKERS = setOf('-', '*', '+', '•')
-
-        private fun isLinkReferenceDefinition(text: String, start: Int, end: Int): Boolean {
-            if (text[start] != '[') return false
-            var i = start + 1
-            var hasNonSpace = false
-            while (i < end) {
-                val c = text[i]
-                if (c == '\\' && i + 1 < end) {
-                    hasNonSpace = true
-                    i += 2
-                    continue
-                }
-                if (c == '[') return false
-                if (c == ']') {
-                    return hasNonSpace && i + 1 < end && text[i + 1] == ':'
-                }
-                if (c != ' ' && c != '\t') hasNonSpace = true
-                i++
-            }
-            return false
         }
     }
 }
