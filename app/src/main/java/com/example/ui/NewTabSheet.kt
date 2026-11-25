@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -62,6 +61,7 @@ import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.FsListResponse
 import com.example.data.resolveAgentModelCatalog
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.themedCorner
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -176,7 +176,7 @@ fun NewTabSheet(
                     for (agent in effectiveAgents) {
                         val isSelected = selectedAgent == agent.type
                         Surface(
-                            shape = RoundedCornerShape(14.dp),
+                            shape = themedCorner(14.dp),
                             color = if (isSelected) {
                                 MaterialTheme.colorScheme.primaryContainer
                             } else {
@@ -255,7 +255,7 @@ fun NewTabSheet(
                         modifier = Modifier
                             .weight(1f)
                             .testTag("new_tab_cwd_input"),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = themedCorner(12.dp),
                         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily),
                     )
                     if (fsListing?.parent != null) {
@@ -389,7 +389,7 @@ fun NewTabSheet(
                 val isEmptyEffective = !includeSystemPrompt || trimmedPrompt.isEmpty()
                 val isDefaultPrompt = includeSystemPrompt && trimmedPrompt == activeDefaultSystemPrompt.trim()
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
+                    shape = themedCorner(14.dp),
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.fillMaxWidth(),
@@ -481,7 +481,7 @@ fun NewTabSheet(
                                     },
                                     minLines = 3,
                                     maxLines = 7,
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = themedCorner(12.dp),
                                     textStyle = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -502,7 +502,7 @@ fun NewTabSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("new_tab_name_input"),
-                shape = RoundedCornerShape(12.dp),
+                shape = themedCorner(12.dp),
             )
 
             Button(
@@ -527,7 +527,7 @@ fun NewTabSheet(
                     .fillMaxWidth()
                     .height(52.dp)
                     .testTag("create_tab_button"),
-                shape = RoundedCornerShape(14.dp),
+                shape = themedCorner(14.dp),
             ) {
                 Text(
                     text = stringResource(R.string.new_tab_create_button),

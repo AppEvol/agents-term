@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -58,7 +57,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -95,12 +93,13 @@ import com.example.data.resolvePreferredNewTabCwd
 import com.example.data.resolveTabLatestDetail
 import com.example.data.resolveTabTaskSummary
 import com.example.data.shareDebugBundleFile
-import com.example.ui.theme.HerdrAmber
-import com.example.ui.theme.HerdrEmerald
-import com.example.ui.theme.HerdrRed
+import com.example.ui.theme.AppTheme
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.TitleBarBackground
 import com.example.ui.theme.statusColor
 import com.example.ui.theme.statusLabel
+import com.example.ui.theme.themedCorner
+import com.example.ui.theme.titleBarColors
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -115,6 +114,7 @@ fun HerdrApp(viewModel: MainViewModel) {
     val sshProfile by viewModel.sshProfile.collectAsStateWithLifecycle()
     val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle()
     val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
+    val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsStateWithLifecycle()
 
     if (showSettings) {
@@ -125,6 +125,8 @@ fun HerdrApp(viewModel: MainViewModel) {
             workspaceState = state,
             sshProfile = sshProfile,
             debugSettings = debugSettings,
+            appTheme = appTheme,
+            onSelectTheme = { viewModel.setAppTheme(it) },
             uploadState = debugUploadState,
             eventCount = debugEventCount,
             hasLastCrash = hasLastCrash,
@@ -464,7 +466,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                     for ((value, label) in modes) {
                         val selected = current.permissionMode == value
                         Surface(
-                            shape = RoundedCornerShape(10.dp),
+                            shape = themedCorner(10.dp),
                             color = if (selected) {
                                 MaterialTheme.colorScheme.primaryContainer
                             } else {
@@ -472,7 +474,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(themedCorner(10.dp))
                                 .clickable {
                                     viewModel.updatePermissionMode(current.id, value)
                                     showPermissionDialog = false
@@ -550,7 +552,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                             },
                             minLines = 4,
                             maxLines = 8,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = themedCorner(12.dp),
                             textStyle = MaterialTheme.typography.bodySmall,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -622,7 +624,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         text = "Included: $summaryParts",
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = MonoFontFamily,
-                        color = HerdrEmerald,
+                        color = AppTheme.colors.success,
                     )
                     OutlinedTextField(
                         value = noteInput,
@@ -830,226 +832,228 @@ internal fun WorkspaceScaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             Column {
-                TopAppBar(
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                    ),
-                    navigationIcon = {
-                        if (!isExpanded) {
-                            IconButton(
-                                onClick = onOpenDrawer,
-                                modifier = Modifier.testTag("open_drawer_button"),
-                            ) {
-                                BadgedBox(
-                                    badge = {
-                                        if (state.attentionCount > 0) {
-                                            Badge { Text(state.attentionCount.toString()) }
+                val titleBar = AppTheme.chrome.titleBar
+                TitleBarBackground {
+                    TopAppBar(
+                        colors = titleBarColors(),
+                        navigationIcon = {
+                            if (!isExpanded) {
+                                IconButton(
+                                    onClick = onOpenDrawer,
+                                    modifier = Modifier.testTag("open_drawer_button"),
+                                ) {
+                                    BadgedBox(
+                                        badge = {
+                                            if (state.attentionCount > 0) {
+                                                Badge { Text(state.attentionCount.toString()) }
+                                            }
+                                        },
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Menu,
+                                            contentDescription = stringResource(R.string.action_tabs),
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        title = {
+                            Column {
+                                Text(
+                                    text = activeTab?.title ?: stringResource(R.string.app_name),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(themedCorner(6.dp))
+                                        .clickable(
+                                            enabled = activeTab != null,
+                                            onClickLabel = stringResource(R.string.action_toggle_task_summary),
+                                            onClick = onToggleTaskSummary,
+                                        )
+                                        .testTag("top_bar_tab_title"),
+                                )
+                                if (activeTab != null) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        if (activeTabFinished) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.CheckCircle,
+                                                contentDescription = null,
+                                                tint = titleBar.semantic.success,
+                                                modifier = Modifier
+                                                    .size(13.dp)
+                                                    .testTag("topbar_done_icon"),
+                                            )
+                                        } else {
+                                            TabStatusDot(
+                                                status = activeTab.status,
+                                                dotSize = 7.dp,
+                                                colors = titleBar.semantic,
+                                                modifier = Modifier.testTag("top_bar_status_dot"),
+                                            )
                                         }
-                                    },
+                                        Text(
+                                            text = "${activeTab.agentLabel} · ${activeTab.folderName}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = MonoFontFamily,
+                                            color = titleBar.mutedContent,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier
+                                                .weight(1f, fill = false)
+                                                .clickable(onClick = onToggleTaskSummary),
+                                        )
+                                        if (activeTabFinished) {
+                                            Surface(
+                                                shape = themedCorner(6.dp),
+                                                color = titleBar.semantic.success.copy(alpha = 0.18f),
+                                                modifier = Modifier.testTag("topbar_done_badge"),
+                                            ) {
+                                                Text(
+                                                    text = statusLabel("done"),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = titleBar.semantic.success,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        actions = {
+                            if (debugSharingEnabled) {
+                                IconButton(
+                                    onClick = onQuickDebugDump,
+                                    modifier = Modifier.testTag("top_debug_dump_button"),
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.Menu,
-                                        contentDescription = stringResource(R.string.action_tabs),
+                                        imageVector = Icons.Rounded.BugReport,
+                                        contentDescription = stringResource(R.string.action_quick_debug_dump),
+                                        tint = titleBar.semantic.success,
                                     )
                                 }
                             }
-                        }
-                    },
-                    title = {
-                        Column {
-                            Text(
-                                text = activeTab?.title ?: stringResource(R.string.app_name),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable(
-                                        enabled = activeTab != null,
-                                        onClickLabel = stringResource(R.string.action_toggle_task_summary),
-                                        onClick = onToggleTaskSummary,
-                                    )
-                                    .testTag("top_bar_tab_title"),
-                            )
-                            if (activeTab != null) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            IconButton(
+                                onClick = onNewTab,
+                                modifier = Modifier.testTag("top_new_tab_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Add,
+                                    contentDescription = stringResource(R.string.action_new_tab),
+                                )
+                            }
+                            Box {
+                                IconButton(
+                                    onClick = { onToggleOverflow(true) },
+                                    modifier = Modifier.testTag("overflow_menu_button"),
                                 ) {
-                                    if (activeTabFinished) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.CheckCircle,
-                                            contentDescription = null,
-                                            tint = HerdrEmerald,
-                                            modifier = Modifier
-                                                .size(13.dp)
-                                                .testTag("topbar_done_icon"),
-                                        )
-                                    } else {
-                                        TabStatusDot(
-                                            status = activeTab.status,
-                                            dotSize = 7.dp,
-                                            modifier = Modifier.testTag("top_bar_status_dot"),
-                                        )
-                                    }
-                                    Text(
-                                        text = "${activeTab.agentLabel} · ${activeTab.folderName}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontFamily = MonoFontFamily,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier
-                                            .weight(1f, fill = false)
-                                            .clickable(onClick = onToggleTaskSummary),
+                                    Icon(
+                                        imageVector = Icons.Rounded.MoreVert,
+                                        contentDescription = stringResource(R.string.action_more),
                                     )
-                                    if (activeTabFinished) {
-                                        Surface(
-                                            shape = RoundedCornerShape(6.dp),
-                                            color = HerdrEmerald.copy(alpha = 0.18f),
-                                            modifier = Modifier.testTag("topbar_done_badge"),
-                                        ) {
-                                            Text(
-                                                text = statusLabel("done"),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = HerdrEmerald,
-                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                                            )
-                                        }
-                                    }
                                 }
-                            }
-                        }
-                    },
-                    actions = {
-                        if (debugSharingEnabled) {
-                            IconButton(
-                                onClick = onQuickDebugDump,
-                                modifier = Modifier.testTag("top_debug_dump_button"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.BugReport,
-                                    contentDescription = stringResource(R.string.action_quick_debug_dump),
-                                    tint = HerdrEmerald,
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = onNewTab,
-                            modifier = Modifier.testTag("top_new_tab_button"),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Add,
-                                contentDescription = stringResource(R.string.action_new_tab),
-                            )
-                        }
-                        Box {
-                            IconButton(
-                                onClick = { onToggleOverflow(true) },
-                                modifier = Modifier.testTag("overflow_menu_button"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.MoreVert,
-                                    contentDescription = stringResource(R.string.action_more),
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = showOverflowMenu,
-                                onDismissRequest = { onToggleOverflow(false) },
-                            ) {
-                                if (activeTab != null) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.action_rename_tab)) },
-                                        onClick = {
-                                            onToggleOverflow(false)
-                                            onRenameTab()
-                                        },
-                                    )
-                                    if (activeTab.agent != "shell") {
+                                DropdownMenu(
+                                    expanded = showOverflowMenu,
+                                    onDismissRequest = { onToggleOverflow(false) },
+                                ) {
+                                    if (activeTab != null) {
                                         DropdownMenuItem(
-                                            text = { Text("Model (${activeModelInfo ?: "Default"})") },
+                                            text = { Text(stringResource(R.string.action_rename_tab)) },
                                             onClick = {
                                                 onToggleOverflow(false)
-                                                onChangeModel()
-                                            },
-                                            modifier = Modifier.testTag("menu_change_model"),
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Permission mode (${activeTab.permissionMode})") },
-                                            onClick = {
-                                                onToggleOverflow(false)
-                                                onChangePermission()
+                                                onRenameTab()
                                             },
                                         )
-                                        val systemPromptStatus = when {
-                                            activeTab.systemPrompt.isNullOrBlank() -> "Empty"
-                                            activeTab.systemPrompt.trim() == defaultSystemPrompt.trim() -> "Default"
-                                            else -> "Custom"
-                                        }
-                                        DropdownMenuItem(
-                                            text = { Text("System prompt ($systemPromptStatus)") },
-                                            onClick = {
-                                                onToggleOverflow(false)
-                                                onChangeSystemPrompt()
-                                            },
-                                            modifier = Modifier.testTag("menu_system_prompt"),
-                                        )
-                                        if (activeTab.status != "working") {
+                                        if (activeTab.agent != "shell") {
                                             DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        stringResource(
-                                                            if (activeTabFinished) {
-                                                                R.string.action_mark_tab_active
-                                                            } else {
-                                                                R.string.action_mark_task_done
-                                                            },
-                                                        ),
-                                                    )
-                                                },
+                                                text = { Text("Model (${activeModelInfo ?: "Default"})") },
                                                 onClick = {
                                                     onToggleOverflow(false)
-                                                    onToggleTaskDone(activeTab, !activeTabFinished)
+                                                    onChangeModel()
                                                 },
-                                                modifier = Modifier.testTag("menu_toggle_task_done"),
+                                                modifier = Modifier.testTag("menu_change_model"),
                                             )
+                                            DropdownMenuItem(
+                                                text = { Text("Permission mode (${activeTab.permissionMode})") },
+                                                onClick = {
+                                                    onToggleOverflow(false)
+                                                    onChangePermission()
+                                                },
+                                            )
+                                            val systemPromptStatus = when {
+                                                activeTab.systemPrompt.isNullOrBlank() -> "Empty"
+                                                activeTab.systemPrompt.trim() == defaultSystemPrompt.trim() -> "Default"
+                                                else -> "Custom"
+                                            }
+                                            DropdownMenuItem(
+                                                text = { Text("System prompt ($systemPromptStatus)") },
+                                                onClick = {
+                                                    onToggleOverflow(false)
+                                                    onChangeSystemPrompt()
+                                                },
+                                                modifier = Modifier.testTag("menu_system_prompt"),
+                                            )
+                                            if (activeTab.status != "working") {
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            stringResource(
+                                                                if (activeTabFinished) {
+                                                                    R.string.action_mark_tab_active
+                                                                } else {
+                                                                    R.string.action_mark_task_done
+                                                                },
+                                                            ),
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        onToggleOverflow(false)
+                                                        onToggleTaskDone(activeTab, !activeTabFinished)
+                                                    },
+                                                    modifier = Modifier.testTag("menu_toggle_task_done"),
+                                                )
+                                            }
                                         }
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    text = stringResource(R.string.action_close_tab),
+                                                    color = AppTheme.colors.danger,
+                                                )
+                                            },
+                                            onClick = {
+                                                onToggleOverflow(false)
+                                                onDeleteTab(activeTab.id)
+                                            },
+                                        )
                                     }
                                     DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                text = stringResource(R.string.action_close_tab),
-                                                color = HerdrRed,
-                                            )
-                                        },
+                                        text = { Text(stringResource(R.string.action_app_settings)) },
                                         onClick = {
                                             onToggleOverflow(false)
-                                            onDeleteTab(activeTab.id)
+                                            onOpenAppSettings()
+                                        },
+                                        modifier = Modifier.testTag("menu_app_settings"),
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.action_vm_settings)) },
+                                        onClick = {
+                                            onToggleOverflow(false)
+                                            onOpenSettings()
                                         },
                                     )
                                 }
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.action_app_settings)) },
-                                    onClick = {
-                                        onToggleOverflow(false)
-                                        onOpenAppSettings()
-                                    },
-                                    modifier = Modifier.testTag("menu_app_settings"),
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.action_vm_settings)) },
-                                    onClick = {
-                                        onToggleOverflow(false)
-                                        onOpenSettings()
-                                    },
-                                )
                             }
-                        }
-                    },
-                )
+                        },
+                    )
+                }
 
                 // Connection warning strip when offline or reconnecting
                 if (state.connectionState != ConnectionState.CONNECTED) {
@@ -1057,7 +1061,7 @@ internal fun WorkspaceScaffold(
                         color = if (state.connectionState == ConnectionState.CONNECTING) {
                             MaterialTheme.colorScheme.primaryContainer
                         } else {
-                            HerdrAmber.copy(alpha = 0.2f)
+                            AppTheme.colors.warning.copy(alpha = 0.2f)
                         },
                         modifier = Modifier.fillMaxWidth().testTag("connection_banner"),
                     ) {
@@ -1171,7 +1175,7 @@ private fun TabTaskSummaryCard(
     val latestDetail = remember(tab.status, tab.statusDetail, tab.lastMessagePreview, taskSummary) {
         resolveTabLatestDetail(tab, taskSummary)
     }
-    val badgeColor = if (isTaskFinished) HerdrEmerald else statusColor(tab.status)
+    val badgeColor = if (isTaskFinished) AppTheme.colors.success else statusColor(tab.status, AppTheme.colors)
     val badgeLabel = statusLabel(if (isTaskFinished) "done" else tab.status)
 
     Surface(
@@ -1179,7 +1183,7 @@ private fun TabTaskSummaryCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Surface(
-            shape = RoundedCornerShape(14.dp),
+            shape = themedCorner(14.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier
@@ -1211,7 +1215,7 @@ private fun TabTaskSummaryCard(
                     )
                     Spacer(Modifier.width(8.dp))
                     Surface(
-                        shape = RoundedCornerShape(6.dp),
+                        shape = themedCorner(6.dp),
                         color = badgeColor.copy(alpha = 0.16f),
                     ) {
                         Text(
@@ -1323,19 +1327,19 @@ private fun QuickTabStrip(
                 val selected = tab.id == activeTabId
                 val finished = tab.id in finishedTabIds
                 Surface(
-                    shape = RoundedCornerShape(20.dp),
+                    shape = themedCorner(20.dp),
                     color = when {
                         selected -> MaterialTheme.colorScheme.primaryContainer
-                        finished -> HerdrEmerald.copy(alpha = 0.10f)
+                        finished -> AppTheme.colors.success.copy(alpha = 0.10f)
                         else -> MaterialTheme.colorScheme.surfaceContainer
                     },
                     border = when {
                         selected -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
-                        finished -> BorderStroke(1.dp, HerdrEmerald.copy(alpha = 0.45f))
+                        finished -> BorderStroke(1.dp, AppTheme.colors.success.copy(alpha = 0.45f))
                         else -> BorderStroke(1.dp, Color.Transparent)
                     },
                     modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(themedCorner(20.dp))
                         .clickable { onSelect(tab.id) }
                         .testTag("quick_tab_${tab.id}"),
                 ) {
@@ -1348,7 +1352,7 @@ private fun QuickTabStrip(
                             Icon(
                                 imageVector = Icons.Rounded.CheckCircle,
                                 contentDescription = statusLabel("done"),
-                                tint = HerdrEmerald,
+                                tint = AppTheme.colors.success,
                                 modifier = Modifier
                                     .size(14.dp)
                                     .testTag("quick_tab_done_icon_${tab.id}"),
@@ -1392,7 +1396,7 @@ private fun NoTabsPlaceholder(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Surface(
-            shape = RoundedCornerShape(18.dp),
+            shape = themedCorner(18.dp),
             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
             modifier = Modifier.size(64.dp),
         ) {
@@ -1425,7 +1429,7 @@ private fun NoTabsPlaceholder(
         Button(
             onClick = onCreateTab,
             enabled = connected,
-            shape = RoundedCornerShape(14.dp),
+            shape = themedCorner(14.dp),
             modifier = Modifier
                 .height(50.dp)
                 .testTag("empty_new_tab_button"),

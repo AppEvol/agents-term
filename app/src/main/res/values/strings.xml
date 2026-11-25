@@ -120,6 +120,15 @@
     <string name="ssh_inline_autofilled">Autofilled host &amp; username from pasted target</string>
     <string name="action_app_settings">Settings &amp; Debug</string>
     <string name="settings_title">Settings</string>
+    <string name="settings_appearance_section_title">Appearance</string>
+    <string name="theme_xp_luna_name">Luna</string>
+    <string name="theme_xp_luna_description">The Windows XP look: blue title bars, beige windows and squared-off buttons.</string>
+    <string name="theme_midnight_name">Midnight</string>
+    <string name="theme_midnight_description">Dark slate with soft blue accents.</string>
+    <string name="theme_daylight_name">Daylight</string>
+    <string name="theme_daylight_description">Clean white with cobalt accents.</string>
+    <string name="theme_system_name">Match system</string>
+    <string name="theme_system_description">Daylight or Midnight, following your phone\'s dark mode.</string>
     <string name="settings_vm_section_title">VM Connection</string>
     <string name="settings_vm_open_button">Edit VM Connection</string>
     <string name="settings_vm_copy_setup_link">Copy Setup Autofill Link</string>

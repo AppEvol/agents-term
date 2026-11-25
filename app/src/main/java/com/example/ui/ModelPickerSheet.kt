@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -47,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.AgentModelOption
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.themedCorner
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -150,7 +150,7 @@ fun ModelPickerSheet(
                         )
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = themedCorner(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("model_picker_search_input"),
@@ -223,7 +223,7 @@ fun ModelPickerSheet(
                     onValueChange = { customModelInput = it },
                     placeholder = { Text(stringResource(R.string.model_picker_custom_placeholder)) },
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = themedCorner(12.dp),
                     textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFontFamily),
                     modifier = Modifier
                         .weight(1f)
@@ -237,7 +237,7 @@ fun ModelPickerSheet(
                         }
                     },
                     enabled = customModelInput.trim().isNotEmpty(),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = themedCorner(12.dp),
                     modifier = Modifier
                         .height(52.dp)
                         .testTag("custom_model_apply_button"),
@@ -259,7 +259,7 @@ private fun ModelOptionCard(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = themedCorner(14.dp),
         color = if (selected) {
             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
         } else {
@@ -272,7 +272,7 @@ private fun ModelOptionCard(
         },
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(themedCorner(14.dp))
             .clickable(onClick = onClick),
     ) {
         Row(

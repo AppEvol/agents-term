@@ -34,7 +34,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -117,12 +116,9 @@ import com.example.data.buildAssistantDisplayBlocks
 import com.example.data.formatToolCallSummary
 import com.example.data.formatToolRunSummary
 import com.example.ui.markdown.MarkdownText
-import com.example.ui.theme.HerdrAmber
-import com.example.ui.theme.HerdrBlue
-import com.example.ui.theme.HerdrEmerald
-import com.example.ui.theme.HerdrPurple
-import com.example.ui.theme.HerdrRed
+import com.example.ui.theme.AppTheme
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.themedCorner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -484,7 +480,7 @@ private fun UserMessageBubble(message: ChatMessage) {
         horizontalArrangement = Arrangement.End,
     ) {
         Surface(
-            shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
+            shape = themedCorner(20.dp, 20.dp, 6.dp, 20.dp),
             color = MaterialTheme.colorScheme.primaryContainer,
             modifier = Modifier.widthIn(max = 320.dp),
         ) {
@@ -542,8 +538,8 @@ private fun AssistantMessageItem(
             )
             if (message.status == "streaming") {
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = HerdrBlue.copy(alpha = 0.14f),
+                    shape = themedCorner(10.dp),
+                    color = AppTheme.colors.info.copy(alpha = 0.14f),
                     modifier = Modifier.testTag("streaming_working_badge"),
                 ) {
                     Row(
@@ -552,14 +548,14 @@ private fun AssistantMessageItem(
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
                         WorkingPulseDots(
-                            color = HerdrBlue,
+                            color = AppTheme.colors.info,
                             dotSize = 4.dp,
                         )
                         Text(
                             text = stringResource(R.string.status_working_badge),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
-                            color = HerdrBlue,
+                            color = AppTheme.colors.info,
                         )
                     }
                 }
@@ -613,7 +609,7 @@ private fun AssistantMessageItem(
                     .testTag("streaming_activity_indicator"),
             ) {
                 WorkingPulseDots(
-                    color = HerdrBlue,
+                    color = AppTheme.colors.info,
                     dotSize = 5.dp,
                 )
                 Text(
@@ -649,7 +645,7 @@ private fun AssistantMessageItem(
         // Error banner inside message
         if (!message.error.isNullOrBlank()) {
             Surface(
-                shape = RoundedCornerShape(12.dp),
+                shape = themedCorner(12.dp),
                 color = MaterialTheme.colorScheme.errorContainer,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -675,7 +671,7 @@ private fun AssistantMessageItem(
             Text(
                 text = stringResource(R.string.status_interrupted),
                 style = MaterialTheme.typography.labelSmall,
-                color = HerdrAmber,
+                color = AppTheme.colors.warning,
             )
         }
 
@@ -708,7 +704,7 @@ private fun AssistantMessageItem(
                             imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
                             contentDescription = stringResource(R.string.action_copy_message),
                             modifier = Modifier.size(16.dp),
-                            tint = if (copied) HerdrEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (copied) AppTheme.colors.success else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -724,9 +720,9 @@ private fun ThinkingAccordionCard(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = themedCorner(14.dp),
         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.42f),
-        border = BorderStroke(1.dp, HerdrPurple.copy(alpha = 0.35f)),
+        border = BorderStroke(1.dp, AppTheme.colors.accent.copy(alpha = 0.35f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column {
@@ -741,7 +737,7 @@ private fun ThinkingAccordionCard(
                 Icon(
                     imageVector = Icons.Rounded.Psychology,
                     contentDescription = null,
-                    tint = HerdrPurple,
+                    tint = AppTheme.colors.accent,
                     modifier = Modifier.size(18.dp),
                 )
                 Text(
@@ -751,7 +747,7 @@ private fun ThinkingAccordionCard(
                         stringResource(R.string.thinking_label)
                     },
                     style = MaterialTheme.typography.labelLarge,
-                    color = HerdrPurple,
+                    color = AppTheme.colors.accent,
                     modifier = Modifier.weight(1f),
                 )
                 Icon(
@@ -810,14 +806,14 @@ private fun ToolCallRunCard(
         else -> MaterialTheme.colorScheme.surfaceContainerLow
     }
     val borderColor = when {
-        hasRunning -> HerdrBlue.copy(alpha = 0.45f)
-        hasError -> HerdrRed.copy(alpha = 0.4f)
-        hasDenied -> HerdrAmber.copy(alpha = 0.45f)
+        hasRunning -> AppTheme.colors.info.copy(alpha = 0.45f)
+        hasError -> AppTheme.colors.danger.copy(alpha = 0.4f)
+        hasDenied -> AppTheme.colors.warning.copy(alpha = 0.45f)
         else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
     }
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = themedCorner(12.dp),
         color = containerColor,
         border = BorderStroke(1.dp, borderColor),
         modifier = if (isGroup) modifier.testTag("tool_run_group") else modifier,
@@ -879,25 +875,25 @@ private fun ToolCallRunHeader(
                 hasRunning -> CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
                     strokeWidth = 1.8.dp,
-                    color = HerdrBlue,
+                    color = AppTheme.colors.info,
                 )
 
                 hasError -> Icon(
                     imageVector = Icons.Rounded.ErrorOutline,
                     contentDescription = null,
-                    tint = HerdrRed,
+                    tint = AppTheme.colors.danger,
                 )
 
                 hasDenied -> Icon(
                     imageVector = Icons.Rounded.Shield,
                     contentDescription = null,
-                    tint = HerdrAmber,
+                    tint = AppTheme.colors.warning,
                 )
 
                 else -> Icon(
                     imageVector = Icons.Rounded.CheckCircle,
                     contentDescription = null,
-                    tint = HerdrEmerald.copy(alpha = 0.78f),
+                    tint = AppTheme.colors.success.copy(alpha = 0.78f),
                 )
             }
         }
@@ -960,25 +956,25 @@ private fun ToolCallRow(
                     "running" -> Icon(
                         imageVector = Icons.Rounded.Build,
                         contentDescription = null,
-                        tint = HerdrBlue,
+                        tint = AppTheme.colors.info,
                     )
 
                     "done" -> Icon(
                         imageVector = Icons.Rounded.CheckCircle,
                         contentDescription = null,
-                        tint = HerdrEmerald.copy(alpha = if (emphasized) 1f else 0.72f),
+                        tint = AppTheme.colors.success.copy(alpha = if (emphasized) 1f else 0.72f),
                     )
 
                     "denied" -> Icon(
                         imageVector = Icons.Rounded.Shield,
                         contentDescription = null,
-                        tint = HerdrAmber,
+                        tint = AppTheme.colors.warning,
                     )
 
                     "error" -> Icon(
                         imageVector = Icons.Rounded.ErrorOutline,
                         contentDescription = null,
-                        tint = HerdrRed,
+                        tint = AppTheme.colors.danger,
                     )
 
                     else -> Icon(
@@ -1085,9 +1081,9 @@ private fun BlockedPermissionCard(
     onRetryFullAccess: () -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = HerdrAmber.copy(alpha = 0.14f),
-        border = BorderStroke(1.dp, HerdrAmber.copy(alpha = 0.55f)),
+        shape = themedCorner(14.dp),
+        color = AppTheme.colors.warning.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, AppTheme.colors.warning.copy(alpha = 0.55f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
@@ -1101,14 +1097,14 @@ private fun BlockedPermissionCard(
                 Icon(
                     imageVector = Icons.Rounded.Shield,
                     contentDescription = null,
-                    tint = HerdrAmber,
+                    tint = AppTheme.colors.warning,
                     modifier = Modifier.size(20.dp),
                 )
                 Text(
                     text = stringResource(R.string.permission_required_title),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = HerdrAmber,
+                    color = AppTheme.colors.warning,
                 )
             }
             val names = deniedActions.joinToString(", ") { it.displayName }
@@ -1119,10 +1115,10 @@ private fun BlockedPermissionCard(
             )
             Button(
                 onClick = onRetryFullAccess,
-                shape = RoundedCornerShape(10.dp),
+                shape = themedCorner(10.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = HerdrAmber,
-                    contentColor = Color.Black,
+                    containerColor = AppTheme.colors.warning,
+                    contentColor = AppTheme.colors.onWarning,
                 ),
                 modifier = Modifier
                     .height(48.dp)
@@ -1144,9 +1140,9 @@ private fun QueuedMessagesTray(
     onRemove: (String) -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = themedCorner(14.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, HerdrBlue.copy(alpha = 0.35f)),
+        border = BorderStroke(1.dp, AppTheme.colors.info.copy(alpha = 0.35f)),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("queued_messages_tray"),
@@ -1163,14 +1159,14 @@ private fun QueuedMessagesTray(
                 Icon(
                     imageVector = Icons.Rounded.Schedule,
                     contentDescription = null,
-                    tint = HerdrBlue,
+                    tint = AppTheme.colors.info,
                     modifier = Modifier.size(14.dp),
                 )
                 Text(
                     text = stringResource(R.string.queue_header_count, queuedMessages.size),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = HerdrBlue,
+                    color = AppTheme.colors.info,
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
@@ -1317,7 +1313,7 @@ private fun ChatComposer(
                     ) {
                         if (onOpenModelPicker != null && !modelLabel.isNullOrBlank()) {
                             Surface(
-                                shape = RoundedCornerShape(16.dp),
+                                shape = themedCorner(16.dp),
                                 color = if (hasCustomModel) {
                                     MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
                                 } else {
@@ -1332,7 +1328,7 @@ private fun ChatComposer(
                                     },
                                 ),
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(16.dp))
+                                    .clip(themedCorner(16.dp))
                                     .clickable(onClick = onOpenModelPicker)
                                     .testTag("model_picker_chip"),
                             ) {
@@ -1384,7 +1380,7 @@ private fun ChatComposer(
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
-                                color = HerdrRed,
+                                color = AppTheme.colors.danger,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
@@ -1398,7 +1394,7 @@ private fun ChatComposer(
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Medium,
-                                color = HerdrAmber,
+                                color = AppTheme.colors.warning,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
@@ -1422,13 +1418,13 @@ private fun ChatComposer(
                 }
 
                 val composerBorderColor = if (isWorking && isHolding) {
-                    HerdrRed.copy(alpha = 0.85f)
+                    AppTheme.colors.danger.copy(alpha = 0.85f)
                 } else {
                     MaterialTheme.colorScheme.outlineVariant
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(26.dp),
+                    shape = themedCorner(26.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     border = BorderStroke(if (isWorking && isHolding) 1.25.dp else 1.dp, composerBorderColor),
                     modifier = Modifier.fillMaxWidth(),
@@ -1477,10 +1473,10 @@ private fun ChatComposer(
                         val showStopIcon = isWorking && !hasDraft && !hasQueued
                         val buttonBg = when {
                             !isConnected -> MaterialTheme.colorScheme.surfaceContainerHighest
-                            isWorking && isHolding -> HerdrRed.copy(alpha = 0.22f + 0.78f * holdProgress.value)
+                            isWorking && isHolding -> AppTheme.colors.danger.copy(alpha = 0.22f + 0.78f * holdProgress.value)
                             isWorking && hasDraft -> MaterialTheme.colorScheme.primary
                             isWorking && hasQueued -> MaterialTheme.colorScheme.primaryContainer
-                            isWorking -> HerdrRed.copy(alpha = 0.14f)
+                            isWorking -> AppTheme.colors.danger.copy(alpha = 0.14f)
                             canSendIdle -> MaterialTheme.colorScheme.primary
                             else -> MaterialTheme.colorScheme.surfaceContainerHighest
                         }
@@ -1491,16 +1487,16 @@ private fun ChatComposer(
                                 BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
 
                             isWorking && !isHolding && !hasDraft && !hasQueued ->
-                                BorderStroke(1.dp, HerdrRed.copy(alpha = 0.45f))
+                                BorderStroke(1.dp, AppTheme.colors.danger.copy(alpha = 0.45f))
 
                             else -> null
                         }
                         val iconTint = when {
                             !isConnected -> MaterialTheme.colorScheme.onSurfaceVariant
-                            isWorking && isHolding -> if (holdProgress.value > 0.35f) Color.White else HerdrRed
+                            isWorking && isHolding -> if (holdProgress.value > 0.35f) Color.White else AppTheme.colors.danger
                             isWorking && hasDraft -> MaterialTheme.colorScheme.onPrimary
                             isWorking && hasQueued -> MaterialTheme.colorScheme.onPrimaryContainer
-                            isWorking -> HerdrRed
+                            isWorking -> AppTheme.colors.danger
                             canSendIdle -> MaterialTheme.colorScheme.onPrimary
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         }
@@ -1637,8 +1633,8 @@ private fun ChatComposer(
                             if (isWorking && holdProgress.value > 0f) {
                                 CircularProgressIndicator(
                                     progress = { holdProgress.value },
-                                    color = HerdrRed,
-                                    trackColor = HerdrRed.copy(alpha = 0.22f),
+                                    color = AppTheme.colors.danger,
+                                    trackColor = AppTheme.colors.danger.copy(alpha = 0.22f),
                                     strokeWidth = 3.dp,
                                     modifier = Modifier.fillMaxSize(),
                                 )
