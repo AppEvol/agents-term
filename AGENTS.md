@@ -16,6 +16,11 @@
 - For non-trivial work, push your work branch to the remote and keep working on it until the work is done, then merge the work branch into `main` and push `main`.
 - After the remote branch is merged into `main` (or pushed directly to `origin/main`) and the work is finished, clean up your local worktree and delete the merged local branch (e.g., `git worktree remove <worktree-path>` and `git branch -d <branch>`) so stale worktrees do not pile up.
 
+## Testing & CI
+
+- Every test written in this repository must run in CI (`.github/workflows/ci.yml`) and hard-block PR merges into `main` (wire any new CI test job into the `ci-gate` / `All Required CI Checks` job).
+- If a test is not valuable or reliable enough to run in CI and block PR merges, do not add or keep it in the repository.
+
 ## Static Checks
 
 - Run `scripts/static-checks.sh` before pushing; CI runs the same script and blocks the release on it. It needs a JDK on `PATH` plus `uv` or `python3 -m venv`, and downloads its pinned tools into `~/.cache/agentsterm-static-checks` on first use.
