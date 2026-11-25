@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -39,6 +40,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
+import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -345,63 +347,20 @@ fun HerdrApp(viewModel: MainViewModel) {
             )
         }
 
-        if (isExpanded) {
-            Row(modifier = Modifier.fillMaxSize()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    modifier = Modifier
-                        .width(304.dp)
-                        .fillMaxHeight(),
-                ) {
-                    TabSidebarBody(
-                        state = state,
-                        debugSharingEnabled = debugSettings.enabled,
-                        onSelectTab = { handleTabTap(it) },
-                        onNewTab = { showNewTabSheet = true },
-                        onDeleteTab = { viewModel.deleteTab(it) },
-                        onCloseFinishedTabs = { viewModel.closeFinishedTabs() },
-                        onOpenSettings = { viewModel.openConnectionSettings() },
-                        onOpenAppSettings = { viewModel.openAppSettings() },
-                        onReconnect = { viewModel.reconnectNow() },
-                    )
-                }
-                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Box(modifier = Modifier.weight(1f)) {
-                    mainScaffold()
-                }
-            }
-        } else {
-            ModalNavigationDrawer(
-                drawerState = drawerState,
-                drawerContent = {
-                    TabDrawerContent(
-                        state = state,
-                        debugSharingEnabled = debugSettings.enabled,
-                        onSelectTab = { id ->
-                            handleTabTap(id)
-                            scope.launch { drawerState.close() }
-                        },
-                        onNewTab = {
-                            scope.launch { drawerState.close() }
-                            showNewTabSheet = true
-                        },
-                        onDeleteTab = { viewModel.deleteTab(it) },
-                        onCloseFinishedTabs = { viewModel.closeFinishedTabs() },
-                        onOpenSettings = {
-                            scope.launch { drawerState.close() }
-                            viewModel.openConnectionSettings()
-                        },
-                        onOpenAppSettings = {
-                            scope.launch { drawerState.close() }
-                            viewModel.openAppSettings()
-                        },
-                        onReconnect = { viewModel.reconnectNow() },
-                    )
-                },
-            ) {
-                mainScaffold()
-            }
-        }
+        WorkspaceNavigationShell(
+            isExpanded = isExpanded,
+            drawerState = drawerState,
+            state = state,
+            debugSharingEnabled = debugSettings.enabled,
+            onSelectTab = { handleTabTap(it) },
+            onNewTab = { showNewTabSheet = true },
+            onDeleteTab = { viewModel.deleteTab(it) },
+            onCloseFinishedTabs = { viewModel.closeFinishedTabs() },
+            onOpenSettings = { viewModel.openConnectionSettings() },
+            onOpenAppSettings = { viewModel.openAppSettings() },
+            onReconnect = { viewModel.reconnectNow() },
+            content = mainScaffold,
+        )
     }
 
     if (showNewTabSheet) {
@@ -732,6 +691,83 @@ fun HerdrApp(viewModel: MainViewModel) {
                     }
                 }
             },
+        )
+    }
+}
+
+@Composable
+internal fun WorkspaceNavigationShell(
+    isExpanded: Boolean,
+    drawerState: DrawerState,
+    state: WorkspaceState,
+    debugSharingEnabled: Boolean,
+    onSelectTab: (String) -> Unit,
+    onNewTab: () -> Unit,
+    onDeleteTab: (String) -> Unit,
+    onCloseFinishedTabs: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+    onReconnect: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    if (isExpanded) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier
+                    .width(304.dp)
+                    .fillMaxHeight(),
+            ) {
+                TabSidebarBody(
+                    state = state,
+                    debugSharingEnabled = debugSharingEnabled,
+                    onSelectTab = onSelectTab,
+                    onNewTab = onNewTab,
+                    onDeleteTab = onDeleteTab,
+                    onCloseFinishedTabs = onCloseFinishedTabs,
+                    onOpenSettings = onOpenSettings,
+                    onOpenAppSettings = onOpenAppSettings,
+                    onReconnect = onReconnect,
+                )
+            }
+            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Box(modifier = Modifier.weight(1f)) {
+                content()
+            }
+        }
+    } else {
+        val scope = rememberCoroutineScope()
+        BackHandler(enabled = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open) {
+            scope.launch { drawerState.close() }
+        }
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                TabDrawerContent(
+                    state = state,
+                    debugSharingEnabled = debugSharingEnabled,
+                    onSelectTab = { id ->
+                        onSelectTab(id)
+                        scope.launch { drawerState.close() }
+                    },
+                    onNewTab = {
+                        scope.launch { drawerState.close() }
+                        onNewTab()
+                    },
+                    onDeleteTab = onDeleteTab,
+                    onCloseFinishedTabs = onCloseFinishedTabs,
+                    onOpenSettings = {
+                        scope.launch { drawerState.close() }
+                        onOpenSettings()
+                    },
+                    onOpenAppSettings = {
+                        scope.launch { drawerState.close() }
+                        onOpenAppSettings()
+                    },
+                    onReconnect = onReconnect,
+                )
+            },
+            content = content,
         )
     }
 }

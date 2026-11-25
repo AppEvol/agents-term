@@ -3,8 +3,11 @@ package com.example
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -75,6 +78,9 @@ class ChatToolCallsUiTest {
 
         // Summary header collapses the 6 calls into one row
         composeRule.onNodeWithText("6 tool calls · 5 done · 1 running").assertIsDisplayed()
+        // Only the group header keeps a spinner; neither the active tool row nor composer status spins
+        composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .assertCountEquals(1)
         // Only the active running call is shown while collapsed
         composeRule.onNodeWithText("Run Android unit tests").assertIsDisplayed()
         assertTrue(composeRule.onAllNodesWithText("Check git status").fetchSemanticsNodes().isEmpty())
