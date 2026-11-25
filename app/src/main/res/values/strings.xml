@@ -2,6 +2,8 @@
     <string name="app_name">AgentsTerm</string>
     <string name="connect_title">Connect to your VM</string>
     <string name="connect_subtitle">Control persistent coding agents over Tailscale</string>
+    <string name="tailscale_status_active">Tailscale is active on this phone (%1$s)</string>
+    <string name="tailscale_status_not_detected">Tailscale not detected on this phone. Turn it on to reach your VM.</string>
     <string name="connect_quick_setup">Quick setup</string>
     <string name="connect_quick_setup_steps">1. Enable Tailscale on your Android device.\n2. Run the daemon on your VM and copy its herdr://connect URI.</string>
     <string name="connect_paste_uri">Paste Pairing URI from Clipboard</string>

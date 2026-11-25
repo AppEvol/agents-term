@@ -46,6 +46,7 @@ import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -65,6 +66,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -76,6 +78,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalAutofillManager
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -98,8 +101,10 @@ import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
 import com.example.data.SshSetupAutofill
+import com.example.data.TailscaleStatus
 import com.example.data.defaultAgyBootstrapPrompt
 import com.example.data.parseSshSetupInput
+import com.example.data.tailscaleStatusFlow
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkOnSurface
 import com.example.ui.theme.HerdrAmber
@@ -109,6 +114,46 @@ import com.example.ui.theme.HerdrRed
 import com.example.ui.theme.MonoFontFamily
 import kotlinx.coroutines.delay
 import java.util.Locale
+
+/** Live Tailscale status of this phone; null until the first reading arrives. */
+@Composable
+private fun rememberTailscaleStatus(): TailscaleStatus? {
+    val context = LocalContext.current.applicationContext
+    return produceState<TailscaleStatus?>(initialValue = null, context) {
+        tailscaleStatusFlow(context).collect { value = it }
+    }.value
+}
+
+/** One-line hint telling the user whether this phone can reach a tailnet at all. */
+@Composable
+private fun TailscaleStatusHint(status: TailscaleStatus) {
+    val active = status as? TailscaleStatus.Active
+    val tint = if (active != null) HerdrEmerald else HerdrAmber
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp)
+            .testTag("tailscale_status_hint"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = if (active != null) Icons.Rounded.CheckCircle else Icons.Rounded.Warning,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(15.dp),
+        )
+        Text(
+            text = if (active != null) {
+                stringResource(R.string.tailscale_status_active, active.address)
+            } else {
+                stringResource(R.string.tailscale_status_not_detected)
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = tint,
+        )
+    }
+}
 
 private enum class ConnectMode {
     SSH_BOOTSTRAP,
@@ -134,6 +179,7 @@ fun ConnectScreen(
     onConsumedPendingPairing: () -> Unit,
     onConsumedPendingSshAutofill: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
+    tailscaleStatus: TailscaleStatus? = rememberTailscaleStatus(),
 ) {
     if (canCancel) {
         BackHandler(onBack = onCancel)
@@ -364,6 +410,8 @@ fun ConnectScreen(
                         }
                     }
                 }
+
+                tailscaleStatus?.let { TailscaleStatusHint(it) }
 
                 // Mode switcher: SSH + agy Auto-Setup vs Direct / Pairing URI
                 Surface(
