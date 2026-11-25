@@ -217,8 +217,8 @@ jobs:
           path: app/build/outputs/roborazzi/
           if-no-files-found: ignore
 
-  daemon-and-cli-tests:
-    name: Legacy Python Daemon & Installer Script Tests (Python ${{ matrix.python }})
+  installer-and-cli-tests:
+    name: Daemon Installer & App State CLI Tests (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -235,14 +235,14 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Run daemon tests (unit, process end-to-end, POSIX install.sh)
-        run: python3 -W error::ResourceWarning -m unittest discover -s daemon/tests -v
+      - name: Test the POSIX installer for the Rust daemon
+        run: python3 -W error::ResourceWarning -m unittest discover -s daemon-rs/tests -v
 
       - name: Run app_state_cli tests
         run: python3 -W error::ResourceWarning -m unittest discover -s app_state_cli -v
 
   docker-vm-e2e:
-    name: Docker VM Cross-Boundary E2E Tests (zero-dep minimal + Python-to-Rust upgrade)
+    name: Rust Daemon Docker VM E2E Tests
     runs-on: ubuntu-latest
     needs: [rust-daemon-build-and-test]
     timeout-minutes: 15
@@ -268,7 +268,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Run headless Docker VM E2E suite (minimal zero-dep + Python->Rust upgrade)
+      - name: Test the Rust daemon on a minimal VM
         run: python3 -W error::ResourceWarning -m unittest discover -s e2e/docker-vm -v
 
   e2e-tests:
@@ -382,7 +382,7 @@ jobs:
   publish-branch-prerelease:
     name: Publish Branch Pre-Release (APK + Rust Daemon Binaries)
     runs-on: ubuntu-latest
-    needs: [static-checks, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
+    needs: [static-checks, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-and-cli-tests, docker-vm-e2e]
     if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
     permissions:
       contents: write
@@ -420,7 +420,7 @@ jobs:
           cp dist/app-debug.apk "$VERSIONED_APK"
 
           # shellcheck disable=SC2016  # backticks are literal Markdown
-          NOTES=$(printf 'Preview pre-release built and verified on branch `%s` (`%s`) for live testing against the static Rust VM daemon before merging to `main`.\n\n- **Version:** `%s` (`versionCode=%s`)\n- **Daemon download base URL baked into preview APK:** `https://github.com/%s/releases/download/%s`\n- **CI run:** https://github.com/%s/actions/runs/%s\n\n### Live Testing Steps\n1. Install `AgentsTerm-debug.apk` from this pre-release on your phone.\n2. Open **Settings > Edit VM Connection > SSH Auto-Setup** and run **SSH & Bootstrap VM** against your VM (it will download and verify the static Rust daemon from this pre-release and migrate in place, preserving your token and tabs).\n3. Or manually install on your VM:\n   ```sh\n   AGENTSTERM_RELEASE_BASE_URL=https://github.com/%s/releases/download/%s sh daemon/install.sh\n   ```\n' \
+          NOTES=$(printf 'Preview pre-release built and verified on branch `%s` (`%s`) for live testing against the static Rust VM daemon before merging to `main`.\n\n- **Version:** `%s` (`versionCode=%s`)\n- **Daemon download base URL baked into preview APK:** `https://github.com/%s/releases/download/%s`\n- **CI run:** https://github.com/%s/actions/runs/%s\n\n### Live Testing Steps\n1. Install `AgentsTerm-debug.apk` from this pre-release on your phone.\n2. Open **Settings > Edit VM Connection > SSH Auto-Setup** and run **SSH & Bootstrap VM** against your VM (it will download and verify the static Rust daemon from this pre-release and migrate in place, preserving your token and tabs).\n3. Or manually install on your VM:\n   ```sh\n   AGENTSTERM_RELEASE_BASE_URL=https://github.com/%s/releases/download/%s sh daemon-rs/install.sh\n   ```\n' \
             "$GITHUB_REF_NAME" "$SHORT_SHA" "$VERSION" "$GITHUB_RUN_NUMBER" "$GITHUB_REPOSITORY" "$TAG" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$TAG")
 
           gh release create "$TAG" \
@@ -440,7 +440,7 @@ jobs:
   publish-apk:
     name: Publish Verified APK & Static Daemon Release
     runs-on: ubuntu-latest
-    needs: [static-checks, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, daemon-and-cli-tests, docker-vm-e2e]
+    needs: [static-checks, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-and-cli-tests, docker-vm-e2e]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write

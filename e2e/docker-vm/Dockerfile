@@ -47,11 +47,3 @@ RUN chmod 755 \
 EXPOSE 22 17591
 
 ENTRYPOINT ["/usr/local/bin/vm-entrypoint.sh"]
-
-# Legacy VM target with Python 3 + git for testing live Python -> Rust daemon upgrades.
-FROM vm-minimal AS vm-legacy-python
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    python3 \
-    && rm -rf /var/lib/apt/lists/*

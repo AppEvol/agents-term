@@ -8,7 +8,7 @@
 # Zero runtime dependencies: no python3, no git, no bash required.
 #
 # Usage:
-#   sh daemon/install.sh [--port 7501] [--host IP] [--force-restart]
+#   sh daemon-rs/install.sh [--port 7501] [--host IP] [--force-restart]
 #
 # Environment overrides:
 #   AGENTSTERM_RELEASE_BASE_URL  base URL hosting agentsterm-daemon-linux-<arch>{,.sha256}
