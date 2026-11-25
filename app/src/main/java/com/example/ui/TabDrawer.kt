@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.ConnectionState
+import com.example.data.TabActivity
 import com.example.data.TabRecord
 import com.example.data.WorkspaceState
 import com.example.ui.theme.HerdrBlue
@@ -296,7 +297,7 @@ fun TabSidebarBody(
                     DrawerTabRow(
                         tab = tab,
                         selected = tab.id == state.activeTab?.id,
-                        isFinished = tab.id in finishedTabIds,
+                        activity = state.activityOf(tab),
                         onClick = { onSelectTab(tab.id) },
                         onDelete = { onDeleteTab(tab.id) },
                     )
@@ -352,10 +353,11 @@ fun TabSidebarBody(
 private fun DrawerTabRow(
     tab: TabRecord,
     selected: Boolean,
-    isFinished: Boolean,
+    activity: TabActivity,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val isFinished = activity == TabActivity.FINISHED
     val bg = when {
         selected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
         isFinished -> HerdrEmerald.copy(alpha = 0.08f)
@@ -409,6 +411,9 @@ private fun DrawerTabRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
+                    if (tab.unread && !selected) {
+                        UnreadDot(modifier = Modifier.testTag("drawer_tab_unread_${tab.id}"))
+                    }
                     if (isFinished) {
                         Surface(
                             shape = RoundedCornerShape(6.dp),
@@ -434,18 +439,6 @@ private fun DrawerTabRow(
                                 )
                             }
                         }
-                    } else if (tab.status == "blocked" || tab.status == "working" || tab.status == "error") {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = statusColor(tab.status).copy(alpha = 0.18f),
-                        ) {
-                            Text(
-                                text = statusLabel(tab.status),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = statusColor(tab.status),
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
-                            )
-                        }
                     }
                 }
                 Spacer(Modifier.height(2.dp))
@@ -457,6 +450,21 @@ private fun DrawerTabRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (!isFinished) {
+                    // Finished tabs say so in the hint below; every other tab is one of these two.
+                    val working = activity == TabActivity.WORKING
+                    Text(
+                        text = stringResource(
+                            if (working) R.string.tab_activity_working else R.string.tab_activity_waiting,
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (working) FontWeight.SemiBold else FontWeight.Normal,
+                        color = statusColor(tab.status),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("drawer_tab_activity_${tab.id}"),
+                    )
+                }
                 if (isFinished) {
                     Text(
                         text = stringResource(R.string.drawer_task_finished_hint),

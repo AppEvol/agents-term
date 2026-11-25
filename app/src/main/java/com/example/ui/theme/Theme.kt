@@ -82,7 +82,7 @@ fun statusColor(status: String): Color = when (status) {
 fun statusLabel(status: String): String = when (status) {
     "working" -> "Working"
     "blocked" -> "Blocked"
-    "done" -> "Done"
+    "done" -> "Finished"
     "error" -> "Error"
     else -> "Idle"
 }

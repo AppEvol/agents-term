@@ -237,6 +237,18 @@ data class QueuedMessage(
     val createdAt: Long = 0L,
 )
 
+/** What a tab is doing from the user's point of view. Every tab is in exactly one of these. */
+enum class TabActivity {
+    /** The agent is running a turn. */
+    WORKING,
+
+    /** The agent's turn ended and it is waiting for the next message. */
+    WAITING,
+
+    /** The task is done and the tab can be closed. */
+    FINISHED,
+}
+
 @JsonClass(generateAdapter = true)
 data class TabRecord(
     val id: String,
