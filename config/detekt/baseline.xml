@@ -7,7 +7,6 @@
     <ID>ComplexCondition:ChatScreen.kt$(onOpenModelPicker != null &amp;&amp; !modelLabel.isNullOrBlank()) || !statusDetail.isNullOrBlank() || isHolding || showHoldHint</ID>
     <ID>ComplexCondition:ChatScreen.kt$message.status == "complete" &amp;&amp; message.error.isNullOrBlank() &amp;&amp; message.deniedActions.isEmpty() &amp;&amp; message.thinking.isNullOrBlank()</ID>
     <ID>ComplexCondition:ChatScreen.kt$pos.x &lt; -slop || pos.y &lt; -slop || pos.x &gt; size.width + slop || pos.y &gt; size.height + slop</ID>
-    <ID>ComplexCondition:MarkdownText.kt$t.isEmpty() || t.startsWith("```") || t.startsWith("- ") || t.startsWith("* ") || t.startsWith("• ") || headingRegex.matches(t) || numberedItemRegex.matches(t)</ID>
     <ID>CyclomaticComplexMethod:AndroidUiDriver.kt$AndroidUiDriver$override suspend fun stroke(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, holdMs: Long): UiWindow</ID>
     <ID>CyclomaticComplexMethod:AppUiControl.kt$UiNode$fun toMap(): Map&lt;String, Any?&gt;</ID>
     <ID>CyclomaticComplexMethod:DebugSystemCollector.kt$suspend fun captureWindowScreenshotBase64(activity: Activity?): String?</ID>
@@ -15,7 +14,6 @@
     <ID>CyclomaticComplexMethod:HerdrRepository.kt$HerdrRepository$private fun openSocketNow( config: ConnectionConfig, expectedGeneration: Long? = null, )</ID>
     <ID>CyclomaticComplexMethod:HerdrRepository.kt$fun reduceWorkspaceEvent( state: WorkspaceState, event: WsServerEnvelope, preferredTabId: String? = null, ): WorkspaceState</ID>
     <ID>CyclomaticComplexMethod:HerdrRepository.kt$suspend fun resolveInitialDirectoryListing( preferredPath: String?, homeCwd: String?, listDirectories: suspend (String?) -&gt; Result&lt;FsListResponse&gt;, ): Result&lt;ResolvedDirectoryListing&gt;</ID>
-    <ID>CyclomaticComplexMethod:MarkdownText.kt$private fun parseMarkdownBlocks(raw: String): List&lt;MarkdownBlock&gt;</ID>
     <ID>CyclomaticComplexMethod:MessagePresentation.kt$fun buildAssistantDisplayBlocks(message: ChatMessage): List&lt;AssistantDisplayBlock&gt;</ID>
     <ID>CyclomaticComplexMethod:SshBootstrapClient.kt$SshBootstrapClient$suspend fun bootstrapWithAgy( config: SshBootstrapConfig, onPhase: (BootstrapPhase) -&gt; Unit, onHostFingerprint: (String) -&gt; Unit, onLog: (String) -&gt; Unit, ): SshBootstrapResult</ID>
     <ID>CyclomaticComplexMethod:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
@@ -40,7 +38,6 @@
     <ID>LongMethod:HerdrRepository.kt$HerdrRepository$private fun openSocketNow( config: ConnectionConfig, expectedGeneration: Long? = null, )</ID>
     <ID>LongMethod:HerdrRepository.kt$fun reduceWorkspaceEvent( state: WorkspaceState, event: WsServerEnvelope, preferredTabId: String? = null, ): WorkspaceState</ID>
     <ID>LongMethod:MainViewModel.kt$MainViewModel$fun startSshBootstrap(config: SshBootstrapConfig)</ID>
-    <ID>LongMethod:MarkdownText.kt$private fun parseMarkdownBlocks(raw: String): List&lt;MarkdownBlock&gt;</ID>
     <ID>LongMethod:ModelsAndStateTest.kt$ModelsAndStateTest$@Test fun modelSlashCommandsCatalogResolutionAndUpdateSerializationWork()</ID>
     <ID>LongMethod:ModelsAndStateTest.kt$ModelsAndStateTest$@Test fun reduceWorkspaceEventStreamsDeltasAndToolUpdates()</ID>
     <ID>LongMethod:ModelsAndStateTest.kt$ModelsAndStateTest$@Test fun systemPromptDefaultsResolutionAndSerializationWork()</ID>
@@ -50,7 +47,6 @@
     <ID>LongMethod:SshBootstrapModels.kt$fun parseSshSetupInput(raw: String): SshSetupAutofill?</ID>
     <ID>LongParameterList:AndroidUiDriver.kt$AndroidUiDriver$(root: View, downTime: Long, eventTime: Long, action: Int, screenX: Float, screenY: Float)</ID>
     <ID>LongParameterList:AppUiControl.kt$AppUiDriver$(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, holdMs: Long)</ID>
-    <ID>LoopWithTooManyJumpStatements:MarkdownText.kt$while</ID>
     <ID>MatchingDeclarationName:DebugSystemCollector.kt$CrashLogStore</ID>
     <ID>MaxLineLength:AppStateReporterTest.kt$AppStateReporterTest$private suspend fun call(command: String, args: Map&lt;String, Any?&gt; = emptyMap()): Map&lt;String, Any?&gt;</ID>
     <ID>MaxLineLength:AppStateReporterTest.kt$AppStateReporterTest.FakeSources$override suspend fun uploadDump(note: String?, includeScreenshot: Boolean): Map&lt;String, Any?&gt;</ID>
@@ -72,7 +68,6 @@
     <ID>MaxLineLength:FakeSshVmServer.kt$SimulatedAgyBootstrapCommand$"""{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":0.4,"tool_info":{"output":"Daemon healthy on 127.0.0.1:$daemonPort\n$pairingUri\n"}}}"""</ID>
     <ID>MaxLineLength:MainViewModel.kt$MainViewModel$appendBootstrapLog("Waiting for daemon on ${result.connectionConfig.host}:${result.connectionConfig.port} (attempt $attempt/3)…")</ID>
     <ID>MaxLineLength:MainViewModel.kt$MainViewModel$errorMessage = "VM bootstrap finished, but could not reach ${result.connectionConfig.httpBaseUrl()}: ${lastErr ?: "connection refused"}. Verify Tailscale is active on your phone."</ID>
-    <ID>MaxLineLength:MarkdownRenderTest.kt$MarkdownRenderTest$private</ID>
     <ID>MaxLineLength:ModelsAndStateTest.kt$ModelsAndStateTest$"""{"event":"result","result":{"conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","status":"SUCCESS","response":"herdr://connect?host=100.71.219.26&amp;port=7501&amp;token=tok123\n","duration_seconds":5.3,"num_turns":2}}"""</ID>
     <ID>MaxLineLength:ModelsAndStateTest.kt$ModelsAndStateTest$"""{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"npm run build","toolSummary":"Build server"}}}}"""</ID>
     <ID>MaxLineLength:ModelsAndStateTest.kt$ModelsAndStateTest$"""{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":1.25,"tool_info":{"output":"herdr://connect?host=100.71.219.26&amp;port=7501&amp;token=abc"}}}"""</ID>
@@ -88,7 +83,6 @@
     <ID>MaxLineLength:SshBootstrapModels.kt$appendLine("Repair this VM so the AgentsTerm Android app can connect over Tailscale. The automatic install of the AgentsTerm daemon just failed here, or could not start.")</ID>
     <ID>MaxLineLength:SshBootstrapModels.kt$appendLine("The VM daemon is the Python 3 program in `daemon/` of $repoUrl, installed by its `daemon/install.sh`. Do not write your own daemon.")</ID>
     <ID>NestedBlockDepth:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleRequest(request: RecordedRequest): MockResponse</ID>
-    <ID>NestedBlockDepth:MarkdownText.kt$private fun parseMarkdownBlocks(raw: String): List&lt;MarkdownBlock&gt;</ID>
     <ID>NestedBlockDepth:MessagePresentation.kt$@Suppress("UNCHECKED_CAST") fun formatToolCallSummary(toolCall: ToolCallItem): String</ID>
     <ID>NestedBlockDepth:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
     <ID>SwallowedException:AgentsTermE2ETest.kt$AgentsTermE2ETest$e: androidx.compose.ui.test.ComposeTimeoutException</ID>

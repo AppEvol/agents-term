@@ -135,6 +135,15 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
 
+      # For each golden image test that failed: the golden, the new rendering and their difference.
+      - name: Upload golden image differences
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-image-differences
+          path: app/build/outputs/roborazzi/
+          if-no-files-found: ignore
+
   daemon-and-cli-tests:
     name: VM Daemon & CLI Tests (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
