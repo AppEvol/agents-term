@@ -168,12 +168,17 @@ jobs:
         env:
           APP_VERSION_CODE: ${{ github.run_number }}
           GITHUB_SHA_FULL: ${{ github.sha }}
+          PUBLISH_RELEASE: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           PUBLISH_PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           SHORT_SHA="${GITHUB_SHA_FULL::7}"
           export APP_VERSION_NAME="${APP_MAJOR_MINOR}.${APP_VERSION_CODE}-${SHORT_SHA}"
-          if [ "$PUBLISH_PRERELEASE" = "true" ]; then
+          if [ "$PUBLISH_RELEASE" = "true" ]; then
+            RELEASE_TAG="v${APP_VERSION_NAME}"
+            export AGENTSTERM_DAEMON_RELEASE_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+            echo "Building release APK pinned to daemon release ${AGENTSTERM_DAEMON_RELEASE_BASE_URL}"
+          elif [ "$PUBLISH_PRERELEASE" = "true" ]; then
             PRERELEASE_TAG="v${APP_VERSION_NAME}-preview"
             export AGENTSTERM_DAEMON_RELEASE_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PRERELEASE_TAG}"
             echo "Building preview APK pointing daemon bootstrap at ${AGENTSTERM_DAEMON_RELEASE_BASE_URL}"
