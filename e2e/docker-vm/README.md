@@ -1,9 +1,6 @@
 # Docker VM End-to-End Test Harness
 
-Provides two realistic Linux Docker VM targets (`e2e/docker-vm/Dockerfile`):
-
-- **`vm-minimal`**: Zero-dependency Linux container (intentionally **no `git`** and **no `python3`**) with OpenSSH, `curl`, `busybox-static` (serving local release artifacts over HTTP), `cron`, `socat`, `bash`, a fake `tailscale` shim, and deterministic POSIX `sh` fakes for `agy`, `claude`, and `codex`.
-- **`vm-legacy-python`**: Adds `git` and `python3` to test in-place upgrades from the legacy Python daemon to the static Rust binary.
+The `vm-minimal` container runs the Rust daemon on a Linux VM without Git or Python. OpenSSH and a local HTTP release mirror exercise the app's bootstrap flow. The VM provides deterministic stand-ins for Tailscale and the agent CLIs.
 
 ## Run Headless Docker VM E2E Locally
 
