@@ -5,8 +5,10 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
@@ -86,7 +88,8 @@ private val LunaColors = lightColorScheme(
     onSurface = LunaInk,
     surfaceVariant = LunaBeigeDeep,
     onSurfaceVariant = LunaInkMuted,
-    surfaceTint = LunaBlue,
+    // Raised surfaces stay beige instead of picking up a blue cast.
+    surfaceTint = LunaBeige,
     // Snackbars look like XP's pale-yellow tooltips.
     inverseSurface = LunaTooltip,
     inverseOnSurface = LunaInk,
@@ -98,7 +101,7 @@ private val LunaColors = lightColorScheme(
     surfaceContainerHigh = LunaBeigeDeep,
     surfaceContainerHighest = LunaBeigeDeeper,
     outline = LunaInputBorder,
-    outlineVariant = LunaBeigeShadow,
+    outlineVariant = LunaGroupBorder,
     error = LunaRed,
     onError = Color.White,
 )
@@ -175,6 +178,8 @@ private fun flatChrome(scheme: ColorScheme, semantic: SemanticColors, isDark: Bo
         mutedContent = scheme.onSurfaceVariant,
         semantic = semantic,
     ),
+    controls = ControlStyle.MATERIAL,
+    selectedRow = null,
     primaryAction = scheme.primary,
     onPrimaryAction = scheme.onPrimary,
     maxCorner = Dp.Infinity,
@@ -182,10 +187,11 @@ private fun flatChrome(scheme: ColorScheme, semantic: SemanticColors, isDark: Bo
 )
 
 private val LunaBar = BarStyle(
-    background = Brush.verticalGradient(LunaTitleBarColors),
+    background = LunaTitleBarBrush,
     content = Color.White,
     mutedContent = LunaOnTitleBarMuted,
     semantic = LunaTitleBarSemantic,
+    titleShadow = Shadow(color = LunaTitleTextShadow, offset = Offset(2f, 2f), blurRadius = 1f),
 )
 
 val MidnightTheme = AppThemeSpec(
@@ -215,6 +221,14 @@ val XpLunaTheme = AppThemeSpec(
     colors = LunaSemantic,
     chrome = ChromeStyle(
         titleBar = LunaBar,
+        controls = ControlStyle.LUNA,
+        // The solid blue bar XP puts behind the selected item of a list or menu.
+        selectedRow = BarStyle(
+            background = SolidColor(LunaSelection),
+            content = Color.White,
+            mutedContent = LunaOnTitleBarMuted,
+            semantic = LunaTitleBarSemantic,
+        ),
         panelHeader = LunaBar,
         // The green of the Start button.
         primaryAction = LunaStartGreen,

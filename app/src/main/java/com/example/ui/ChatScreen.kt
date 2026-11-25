@@ -54,7 +54,6 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -117,7 +116,10 @@ import com.example.data.formatToolCallSummary
 import com.example.data.formatToolRunSummary
 import com.example.ui.markdown.MarkdownText
 import com.example.ui.theme.AppTheme
+import com.example.ui.theme.LunaInputBorder
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.ThemedButton
+import com.example.ui.theme.isLunaControls
 import com.example.ui.theme.themedCorner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -1113,7 +1115,7 @@ private fun BlockedPermissionCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Button(
+            ThemedButton(
                 onClick = onRetryFullAccess,
                 shape = themedCorner(10.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -1419,13 +1421,15 @@ private fun ChatComposer(
 
                 val composerBorderColor = if (isWorking && isHolding) {
                     AppTheme.colors.danger.copy(alpha = 0.85f)
+                } else if (isLunaControls) {
+                    LunaInputBorder
                 } else {
                     MaterialTheme.colorScheme.outlineVariant
                 }
 
                 Surface(
                     shape = themedCorner(26.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    color = if (isLunaControls) Color.White else MaterialTheme.colorScheme.surfaceContainerHigh,
                     border = BorderStroke(if (isWorking && isHolding) 1.25.dp else 1.dp, composerBorderColor),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -1507,13 +1511,15 @@ private fun ChatComposer(
                             else -> stringResource(R.string.action_send)
                         }
                         val holdActionLabel = stringResource(R.string.action_hold_interrupt_queue)
+                        // XP has no round buttons.
+                        val sendButtonShape = if (isLunaControls) themedCorner(4.dp) else CircleShape
 
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
                                 .padding(bottom = 2.dp)
                                 .size(48.dp)
-                                .clip(CircleShape)
+                                .clip(sendButtonShape)
                                 .semantics {
                                     contentDescription = buttonDescription
                                     if (isConnected) {
@@ -1616,7 +1622,7 @@ private fun ChatComposer(
                                 .testTag("send_button"),
                         ) {
                             Surface(
-                                shape = CircleShape,
+                                shape = sendButtonShape,
                                 color = buttonBg,
                                 border = buttonBorder,
                                 modifier = Modifier.fillMaxSize(),

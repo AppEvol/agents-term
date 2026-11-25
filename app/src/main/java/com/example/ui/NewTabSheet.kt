@@ -27,18 +27,13 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +56,11 @@ import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.FsListResponse
 import com.example.data.resolveAgentModelCatalog
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.ThemedButton
+import com.example.ui.theme.ThemedFilterChip
+import com.example.ui.theme.ThemedSwitch
+import com.example.ui.theme.ThemedTextButton
+import com.example.ui.theme.ThemedTextField
 import com.example.ui.theme.themedCorner
 import kotlinx.coroutines.launch
 
@@ -248,7 +248,7 @@ fun NewTabSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedTextField(
+                    ThemedTextField(
                         value = cwd,
                         onValueChange = { cwd = it },
                         singleLine = true,
@@ -329,14 +329,14 @@ fun NewTabSheet(
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        FilterChip(
+                        ThemedFilterChip(
                             selected = selectedModel == null,
                             onClick = { selectedModel = null },
                             label = { Text(defaultChipText, maxLines = 1) },
                             modifier = Modifier.testTag("new_tab_model_default"),
                         )
                         for (option in availableModels) {
-                            FilterChip(
+                            ThemedFilterChip(
                                 selected = selectedModel == option.id,
                                 onClick = { selectedModel = option.id },
                                 label = { Text(option.name, maxLines = 1) },
@@ -363,7 +363,7 @@ fun NewTabSheet(
                     )
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for ((value, label) in modes) {
-                            FilterChip(
+                            ThemedFilterChip(
                                 selected = permissionMode == value,
                                 onClick = {
                                     if (permissionMode != value) {
@@ -419,7 +419,7 @@ fun NewTabSheet(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            Switch(
+                            ThemedSwitch(
                                 checked = includeSystemPrompt,
                                 onCheckedChange = { checked ->
                                     includeSystemPrompt = checked
@@ -440,7 +440,7 @@ fun NewTabSheet(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
-                                TextButton(
+                                ThemedTextButton(
                                     onClick = { showSystemPromptEditor = !showSystemPromptEditor },
                                     modifier = Modifier.testTag("new_tab_system_prompt_toggle_editor"),
                                 ) {
@@ -463,7 +463,7 @@ fun NewTabSheet(
                                     )
                                 }
                                 if (!isDefaultPrompt) {
-                                    TextButton(
+                                    ThemedTextButton(
                                         onClick = { systemPromptText = activeDefaultSystemPrompt },
                                         modifier = Modifier.testTag("new_tab_system_prompt_reset"),
                                     ) {
@@ -473,7 +473,7 @@ fun NewTabSheet(
                             }
 
                             AnimatedVisibility(visible = showSystemPromptEditor) {
-                                OutlinedTextField(
+                                ThemedTextField(
                                     value = systemPromptText,
                                     onValueChange = { systemPromptText = it },
                                     placeholder = {
@@ -493,7 +493,7 @@ fun NewTabSheet(
                 }
             }
 
-            OutlinedTextField(
+            ThemedTextField(
                 value = customTitle,
                 onValueChange = { customTitle = it },
                 label = { Text(stringResource(R.string.new_tab_name_label)) },
@@ -505,7 +505,7 @@ fun NewTabSheet(
                 shape = themedCorner(12.dp),
             )
 
-            Button(
+            ThemedButton(
                 onClick = {
                     val effectiveSystemPrompt = if (selectedAgent == "shell") {
                         null

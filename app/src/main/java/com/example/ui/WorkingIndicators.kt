@@ -28,7 +28,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.ui.theme.AppTheme
+import com.example.ui.theme.LunaMarquee
 import com.example.ui.theme.SemanticColors
+import com.example.ui.theme.isLunaControls
 import com.example.ui.theme.statusColor
 import kotlin.math.PI
 import kotlin.math.sin
@@ -120,6 +122,10 @@ fun WorkingPulseDots(
         ),
         label = "working_dots_phase",
     )
+    if (isLunaControls) {
+        LunaMarquee(phase = phase, modifier = modifier)
+        return
+    }
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
