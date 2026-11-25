@@ -1,7 +1,11 @@
 package com.example.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,12 +22,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
@@ -73,7 +79,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.data.AgentModelOption
 import com.example.data.ConnectionState
 import com.example.data.ModelSlashCommand
 import com.example.data.TabRecord
@@ -85,12 +90,15 @@ import com.example.data.resolveAgentModelCatalog
 import com.example.data.resolveDefaultSystemPrompt
 import com.example.data.resolveModelIdFromQuery
 import com.example.data.resolvePreferredNewTabCwd
+import com.example.data.resolveTabLatestDetail
+import com.example.data.resolveTabTaskSummary
 import com.example.data.shareDebugBundleFile
 import com.example.ui.theme.HerdrAmber
 import com.example.ui.theme.HerdrEmerald
 import com.example.ui.theme.HerdrRed
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.statusColor
+import com.example.ui.theme.statusLabel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -168,6 +176,8 @@ fun HerdrApp(viewModel: MainViewModel) {
     var showModelPicker by remember { mutableStateOf(false) }
     var showQuickDebugDialog by remember { mutableStateOf(false) }
     var pendingScreenshotBase64 by remember { mutableStateOf<String?>(null) }
+    var taskSummaryTabId by remember { mutableStateOf<String?>(null) }
+    var taskSummaryAllowEmpty by remember { mutableStateOf(false) }
     val activeTabDefaultSystemPrompt = remember(
         state.serverInfo?.defaultSystemPrompt,
         state.serverInfo?.defaultSystemPromptFullAccess,
@@ -208,8 +218,44 @@ fun HerdrApp(viewModel: MainViewModel) {
         }
     }
 
+    fun isSummaryCurrentlyVisibleFor(tabId: String): Boolean {
+        if (taskSummaryTabId != tabId) return false
+        val tab = state.tabs.firstOrNull { it.id == tabId } ?: return false
+        val summary = resolveTabTaskSummary(tab, state.messagesByTab[tabId].orEmpty())
+        return summary != null || taskSummaryAllowEmpty
+    }
+
+    fun handleTabTap(tabId: String) {
+        val currentId = state.activeTab?.id
+        if (tabId == currentId) {
+            if (isSummaryCurrentlyVisibleFor(tabId)) {
+                taskSummaryTabId = null
+                taskSummaryAllowEmpty = false
+            } else {
+                taskSummaryTabId = tabId
+                taskSummaryAllowEmpty = true
+            }
+        } else {
+            viewModel.selectTab(tabId)
+            taskSummaryTabId = tabId
+            taskSummaryAllowEmpty = false
+        }
+    }
+
+    fun toggleActiveTabSummary() {
+        val currentId = state.activeTab?.id ?: return
+        if (isSummaryCurrentlyVisibleFor(currentId)) {
+            taskSummaryTabId = null
+            taskSummaryAllowEmpty = false
+        } else {
+            taskSummaryTabId = currentId
+            taskSummaryAllowEmpty = true
+        }
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isExpanded = maxWidth >= 840.dp
+        val showTaskSummary = state.activeTab != null && taskSummaryTabId == state.activeTab?.id
 
         val mainScaffold: @Composable () -> Unit = {
             WorkspaceScaffold(
@@ -222,11 +268,28 @@ fun HerdrApp(viewModel: MainViewModel) {
                 onOpenDrawer = { scope.launch { drawerState.open() } },
                 onNewTab = { showNewTabSheet = true },
                 onQuickDebugDump = { triggerQuickDebugDialog() },
-                onSelectTab = { viewModel.selectTab(it) },
+                onSelectTab = { handleTabTap(it) },
+                showTaskSummary = showTaskSummary,
+                showTaskSummaryWhenEmpty = taskSummaryAllowEmpty,
+                onToggleTaskSummary = { toggleActiveTabSummary() },
+                onDismissTaskSummary = {
+                    taskSummaryTabId = null
+                    taskSummaryAllowEmpty = false
+                },
                 onRenameTab = { showRenameDialog = true },
                 onChangePermission = { showPermissionDialog = true },
                 onChangeSystemPrompt = { showSystemPromptDialog = true },
                 onChangeModel = { openModelPickerForActiveTab() },
+                onToggleTaskDone = { tab, markDone ->
+                    val nextStatus = if (markDone) "done" else "idle"
+                    viewModel.updateTabStatus(tab.id, nextStatus) {
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                if (markDone) "Tab marked as done" else "Tab marked as active",
+                            )
+                        }
+                    }
+                },
                 defaultSystemPrompt = activeTabDefaultSystemPrompt,
                 onDeleteTab = { viewModel.deleteTab(it) },
                 onOpenSettings = { viewModel.openConnectionSettings() },
@@ -241,6 +304,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                     }
                     when (modelCmd) {
                         is ModelSlashCommand.OpenPicker -> openModelPickerForActiveTab()
+
                         is ModelSlashCommand.ResetToDefault -> {
                             if (current != null) {
                                 viewModel.updateTabModel(current.id, null) {
@@ -250,6 +314,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                                 }
                             }
                         }
+
                         is ModelSlashCommand.SetModel -> {
                             if (current != null) {
                                 val (models, _) = resolveAgentModelCatalog(
@@ -265,10 +330,17 @@ fun HerdrApp(viewModel: MainViewModel) {
                                 }
                             }
                         }
+
                         null -> viewModel.sendMessage(rawText)
                     }
                 },
                 onInterrupt = { viewModel.interruptActiveTab() },
+                onForceInterrupt = { draftText ->
+                    viewModel.interruptActiveTab(processQueue = true, text = draftText)
+                },
+                onRemoveQueuedMessage = { queuedId ->
+                    viewModel.removeQueuedMessage(queuedId)
+                },
                 onRetryFullAccess = { viewModel.retryLastUserPromptWithFullAccess() },
             )
         }
@@ -284,9 +356,10 @@ fun HerdrApp(viewModel: MainViewModel) {
                     TabSidebarBody(
                         state = state,
                         debugSharingEnabled = debugSettings.enabled,
-                        onSelectTab = { viewModel.selectTab(it) },
+                        onSelectTab = { handleTabTap(it) },
                         onNewTab = { showNewTabSheet = true },
                         onDeleteTab = { viewModel.deleteTab(it) },
+                        onCloseFinishedTabs = { viewModel.closeFinishedTabs() },
                         onOpenSettings = { viewModel.openConnectionSettings() },
                         onOpenAppSettings = { viewModel.openAppSettings() },
                         onReconnect = { viewModel.reconnectNow() },
@@ -305,7 +378,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         state = state,
                         debugSharingEnabled = debugSettings.enabled,
                         onSelectTab = { id ->
-                            viewModel.selectTab(id)
+                            handleTabTap(id)
                             scope.launch { drawerState.close() }
                         },
                         onNewTab = {
@@ -313,6 +386,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                             showNewTabSheet = true
                         },
                         onDeleteTab = { viewModel.deleteTab(it) },
+                        onCloseFinishedTabs = { viewModel.closeFinishedTabs() },
                         onOpenSettings = {
                             scope.launch { drawerState.close() }
                             viewModel.openConnectionSettings()
@@ -404,7 +478,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                             viewModel.renameTab(current.id, titleInput.trim())
                         }
                         showRenameDialog = false
-                    }
+                    },
                 ) { Text(stringResource(R.string.action_save)) }
             },
             dismissButton = {
@@ -542,7 +616,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         viewModel.updateTabSystemPrompt(current.id, effective) {
                             scope.launch {
                                 snackbarHostState.showSnackbar(
-                                    if (effective.isEmpty()) "System prompt cleared" else "System prompt updated"
+                                    if (effective.isEmpty()) "System prompt cleared" else "System prompt updated",
                                 )
                             }
                         }
@@ -664,7 +738,7 @@ fun HerdrApp(viewModel: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WorkspaceScaffold(
+internal fun WorkspaceScaffold(
     state: WorkspaceState,
     isExpanded: Boolean,
     debugSharingEnabled: Boolean,
@@ -675,10 +749,15 @@ private fun WorkspaceScaffold(
     onNewTab: () -> Unit,
     onQuickDebugDump: () -> Unit,
     onSelectTab: (String) -> Unit,
+    showTaskSummary: Boolean = false,
+    showTaskSummaryWhenEmpty: Boolean = false,
+    onToggleTaskSummary: () -> Unit = {},
+    onDismissTaskSummary: () -> Unit = {},
     onRenameTab: () -> Unit,
     onChangePermission: () -> Unit,
     onChangeSystemPrompt: () -> Unit,
     onChangeModel: () -> Unit,
+    onToggleTaskDone: (TabRecord, Boolean) -> Unit,
     defaultSystemPrompt: String,
     onDeleteTab: (String) -> Unit,
     onOpenSettings: () -> Unit,
@@ -686,9 +765,19 @@ private fun WorkspaceScaffold(
     onReconnect: () -> Unit,
     onSendMessage: (String) -> Unit,
     onInterrupt: () -> Unit,
+    onForceInterrupt: (String?) -> Unit,
+    onRemoveQueuedMessage: (String) -> Unit,
     onRetryFullAccess: () -> Unit,
 ) {
     val activeTab = state.activeTab
+    val finishedTabIds = state.finishedTabIds
+    val activeTabFinished = activeTab != null && activeTab.id in finishedTabIds
+    val activeTaskSummary = remember(activeTab, state.activeMessages) {
+        activeTab?.let { resolveTabTaskSummary(it, state.activeMessages) }
+    }
+    val shouldDisplayTaskSummary = activeTab != null &&
+        showTaskSummary &&
+        (activeTaskSummary != null || showTaskSummaryWhenEmpty)
     val activeModelInfo = remember(activeTab?.agent, activeTab?.model, state.serverInfo?.agents) {
         if (activeTab == null || activeTab.agent == "shell") {
             null
@@ -720,7 +809,7 @@ private fun WorkspaceScaffold(
                                         if (state.attentionCount > 0) {
                                             Badge { Text(state.attentionCount.toString()) }
                                         }
-                                    }
+                                    },
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.Menu,
@@ -738,18 +827,37 @@ private fun WorkspaceScaffold(
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(
+                                        enabled = activeTab != null,
+                                        onClickLabel = stringResource(R.string.action_toggle_task_summary),
+                                        onClick = onToggleTaskSummary,
+                                    )
+                                    .testTag("top_bar_tab_title"),
                             )
                             if (activeTab != null) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(7.dp)
-                                            .clip(CircleShape)
-                                            .background(statusColor(activeTab.status))
-                                    )
+                                    if (activeTabFinished) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.CheckCircle,
+                                            contentDescription = null,
+                                            tint = HerdrEmerald,
+                                            modifier = Modifier
+                                                .size(13.dp)
+                                                .testTag("topbar_done_icon"),
+                                        )
+                                    } else {
+                                        TabStatusDot(
+                                            status = activeTab.status,
+                                            dotSize = 7.dp,
+                                            modifier = Modifier.testTag("top_bar_status_dot"),
+                                        )
+                                    }
                                     Text(
                                         text = "${activeTab.agentLabel} · ${activeTab.folderName}",
                                         style = MaterialTheme.typography.labelSmall,
@@ -757,7 +865,25 @@ private fun WorkspaceScaffold(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier
+                                            .weight(1f, fill = false)
+                                            .clickable(onClick = onToggleTaskSummary),
                                     )
+                                    if (activeTabFinished) {
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = HerdrEmerald.copy(alpha = 0.18f),
+                                            modifier = Modifier.testTag("topbar_done_badge"),
+                                        ) {
+                                            Text(
+                                                text = statusLabel("done"),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = HerdrEmerald,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -835,6 +961,26 @@ private fun WorkspaceScaffold(
                                             },
                                             modifier = Modifier.testTag("menu_system_prompt"),
                                         )
+                                        if (activeTab.status != "working") {
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        stringResource(
+                                                            if (activeTabFinished) {
+                                                                R.string.action_mark_tab_active
+                                                            } else {
+                                                                R.string.action_mark_task_done
+                                                            },
+                                                        ),
+                                                    )
+                                                },
+                                                onClick = {
+                                                    onToggleOverflow(false)
+                                                    onToggleTaskDone(activeTab, !activeTabFinished)
+                                                },
+                                                modifier = Modifier.testTag("menu_toggle_task_done"),
+                                            )
+                                        }
                                     }
                                     DropdownMenuItem(
                                         text = {
@@ -877,7 +1023,7 @@ private fun WorkspaceScaffold(
                         } else {
                             HerdrAmber.copy(alpha = 0.2f)
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().testTag("connection_banner"),
                     ) {
                         Row(
                             modifier = Modifier
@@ -926,8 +1072,25 @@ private fun WorkspaceScaffold(
                     QuickTabStrip(
                         tabs = state.tabs,
                         activeTabId = activeTab?.id,
+                        finishedTabIds = finishedTabIds,
                         onSelect = onSelectTab,
                     )
+                }
+
+                // Task summary card shown when tapping a tab or toggling the tab header
+                AnimatedVisibility(
+                    visible = shouldDisplayTaskSummary,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut(),
+                ) {
+                    if (activeTab != null) {
+                        TabTaskSummaryCard(
+                            tab = activeTab,
+                            taskSummary = activeTaskSummary,
+                            isTaskFinished = activeTabFinished,
+                            onDismiss = onDismissTaskSummary,
+                        )
+                    }
                 }
             }
         },
@@ -951,6 +1114,8 @@ private fun WorkspaceScaffold(
                 onOpenModelPicker = if (activeTab.agent != "shell") onChangeModel else null,
                 onSendMessage = onSendMessage,
                 onInterrupt = onInterrupt,
+                onForceInterrupt = onForceInterrupt,
+                onRemoveQueuedMessage = onRemoveQueuedMessage,
                 onRetryFullAccess = onRetryFullAccess,
                 modifier = Modifier.padding(innerPadding),
             )
@@ -959,9 +1124,152 @@ private fun WorkspaceScaffold(
 }
 
 @Composable
+private fun TabTaskSummaryCard(
+    tab: TabRecord,
+    taskSummary: String?,
+    isTaskFinished: Boolean = false,
+    onDismiss: () -> Unit,
+) {
+    var expanded by remember(tab.id, taskSummary) { mutableStateOf(false) }
+    var isOverflowing by remember(tab.id, taskSummary) { mutableStateOf(false) }
+    val latestDetail = remember(tab.status, tab.statusDetail, tab.lastMessagePreview, taskSummary) {
+        resolveTabLatestDetail(tab, taskSummary)
+    }
+    val badgeColor = if (isTaskFinished) HerdrEmerald else statusColor(tab.status)
+    val badgeLabel = statusLabel(if (isTaskFinished) "done" else tab.status)
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .testTag("tab_task_summary_card"),
+        ) {
+            Column(
+                modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.task_summary_label).uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = MonoFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = badgeColor.copy(alpha = 0.16f),
+                    ) {
+                        Text(
+                            text = badgeLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = badgeColor,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("dismiss_task_summary_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = stringResource(R.string.action_dismiss_task_summary),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+
+                if (taskSummary != null) {
+                    Text(
+                        text = taskSummary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = if (expanded) 8 else 3,
+                        overflow = TextOverflow.Ellipsis,
+                        onTextLayout = { layout ->
+                            if (!expanded) {
+                                isOverflowing = layout.hasVisualOverflow
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(end = 6.dp)
+                            .clickable(enabled = isOverflowing || expanded) { expanded = !expanded }
+                            .testTag("tab_task_summary_text"),
+                    )
+                    if (isOverflowing || expanded) {
+                        Text(
+                            text = stringResource(
+                                if (expanded) R.string.task_summary_show_less else R.string.task_summary_show_more,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clickable { expanded = !expanded }
+                                .testTag("toggle_task_summary_expand"),
+                        )
+                    }
+                } else {
+                    Text(
+                        text = stringResource(R.string.task_summary_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .testTag("tab_task_summary_empty"),
+                    )
+                }
+
+                if (latestDetail != null) {
+                    val latestText = if (tab.status == "idle") {
+                        stringResource(R.string.task_summary_latest_prefix, latestDetail)
+                    } else {
+                        latestDetail
+                    }
+                    Text(
+                        text = latestText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .testTag("tab_task_summary_latest"),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun QuickTabStrip(
     tabs: List<TabRecord>,
     activeTabId: String?,
+    finishedTabIds: Set<String> = emptySet(),
     onSelect: (String) -> Unit,
 ) {
     Surface(
@@ -977,17 +1285,18 @@ private fun QuickTabStrip(
         ) {
             for (tab in tabs) {
                 val selected = tab.id == activeTabId
+                val finished = tab.id in finishedTabIds
                 Surface(
                     shape = RoundedCornerShape(20.dp),
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainer
+                    color = when {
+                        selected -> MaterialTheme.colorScheme.primaryContainer
+                        finished -> HerdrEmerald.copy(alpha = 0.10f)
+                        else -> MaterialTheme.colorScheme.surfaceContainer
                     },
-                    border = if (selected) {
-                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
-                    } else {
-                        BorderStroke(1.dp, Color.Transparent)
+                    border = when {
+                        selected -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+                        finished -> BorderStroke(1.dp, HerdrEmerald.copy(alpha = 0.45f))
+                        else -> BorderStroke(1.dp, Color.Transparent)
                     },
                     modifier = Modifier
                         .clip(RoundedCornerShape(20.dp))
@@ -999,20 +1308,32 @@ private fun QuickTabStrip(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(statusColor(tab.status))
-                        )
+                        if (finished) {
+                            Icon(
+                                imageVector = Icons.Rounded.CheckCircle,
+                                contentDescription = statusLabel("done"),
+                                tint = HerdrEmerald,
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .testTag("quick_tab_done_icon_${tab.id}"),
+                            )
+                        } else {
+                            TabStatusDot(
+                                status = tab.status,
+                                dotSize = 8.dp,
+                            )
+                        }
                         Text(
                             text = tab.title,
                             style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (selected || tab.unread) FontWeight.SemiBold else FontWeight.Normal,
+                            fontWeight = if (selected || tab.unread || finished) FontWeight.SemiBold else FontWeight.Normal,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.width(105.dp),
                         )
+                        if (tab.unread && !selected) {
+                            UnreadDot(modifier = Modifier.testTag("quick_tab_unread_${tab.id}"))
+                        }
                     }
                 }
             }

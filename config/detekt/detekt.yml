@@ -1,0 +1,42 @@
+# Detekt configuration, layered on top of detekt's defaults
+# (run with --build-upon-default-config). Only deviations are listed here.
+# Formatting and import order are ktlint's job (see .editorconfig).
+
+naming:
+  FunctionNaming:
+    # @Composable functions are PascalCase by convention.
+    ignoreAnnotated: ['Composable']
+    # Tests may use `backticked names` or snake_case.
+    excludes: ['**/test/**', '**/androidTest/**']
+
+style:
+  MagicNumber:
+    # Compose UI code is full of literal dp/sp/alpha/colour values.
+    active: false
+  MaxLineLength:
+    maxLineLength: 140
+    excludeRawStrings: true
+  ReturnCount:
+    # Early returns are idiomatic in the parsers and reducers here.
+    active: false
+  LoopWithTooManyJumpStatements:
+    maxJumpCount: 3
+  UnusedPrivateMember:
+    # @Preview composables are only referenced by the IDE.
+    ignoreAnnotated: ['Preview']
+
+complexity:
+  LongMethod:
+    # Composables are declarative layout trees and naturally long.
+    ignoreAnnotated: ['Composable']
+  LongParameterList:
+    ignoreAnnotated: ['Composable']
+    ignoreDefaultParameters: true
+  CyclomaticComplexMethod:
+    ignoreAnnotated: ['Composable']
+    ignoreSimpleWhenEntries: true
+  TooManyFunctions:
+    thresholdInFiles: 40
+    thresholdInClasses: 40
+    thresholdInObjects: 40
+    ignorePrivate: true

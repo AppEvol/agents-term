@@ -13,7 +13,10 @@ import com.example.data.DeniedAction
 import com.example.data.FsDirectoryEntry
 import com.example.data.FsListResponse
 import com.example.data.HerdrMoshi
+import com.example.data.InterruptTabRequest
 import com.example.data.MessageSegment
+import com.example.data.QueueActionResponse
+import com.example.data.QueuedMessage
 import com.example.data.SendMessageRequest
 import com.example.data.SendMessageResponse
 import com.example.data.ServerInfo
@@ -72,8 +75,7 @@ class FakeAgentsTermDaemon(
     private val appStateRequestCounter = AtomicInteger(0)
 
     @Suppress("UNCHECKED_CAST")
-    private fun parseFrame(raw: String): Map<String, Any?> =
-        (HerdrMoshi.adapter(Any::class.java).fromJson(raw) as? Map<String, Any?>).orEmpty()
+    private fun parseFrame(raw: String): Map<String, Any?> = (HerdrMoshi.adapter(Any::class.java).fromJson(raw) as? Map<String, Any?>).orEmpty()
 
     /** `reporter.enabled` from the most recent app_hello frame, or null if none arrived yet. */
     @Suppress("UNCHECKED_CAST")
@@ -217,15 +219,13 @@ class FakeAgentsTermDaemon(
 
     private val server = MockWebServer().apply {
         dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse {
-                return try {
-                    val resp = handleRequest(request)
-                    recordedRequests.add("  -> ${resp.status}")
-                    resp
-                } catch (t: Throwable) {
-                    recordedRequests.add("  -> EXCEPTION: $t")
-                    throw t
-                }
+            override fun dispatch(request: RecordedRequest): MockResponse = try {
+                val resp = handleRequest(request)
+                recordedRequests.add("  -> ${resp.status}")
+                resp
+            } catch (t: Throwable) {
+                recordedRequests.add("  -> EXCEPTION: $t")
+                throw t
             }
         }
     }
@@ -238,9 +238,7 @@ class FakeAgentsTermDaemon(
         server.start(InetAddress.getByName(host), 0)
     }
 
-    fun pairingUri(scheme: String = "agentsterm"): String {
-        return "$scheme://connect?host=$host&port=$port&token=$token"
-    }
+    fun pairingUri(scheme: String = "agentsterm"): String = "$scheme://connect?host=$host&port=$port&token=$token"
 
     private fun handleRequest(request: RecordedRequest): MockResponse {
         val path = request.requestUrl?.encodedPath.orEmpty()
@@ -337,10 +335,11 @@ class FakeAgentsTermDaemon(
             return jsonResponse(200, encodeHerdrJson(SingleTabResponse(tab)))
         }
 
-        val tabSubMatch = Regex("^/api/tabs/([^/]+)(?:/(messages|interrupt|read))?$").matchEntire(path)
+        val tabSubMatch = Regex("^/api/tabs/([^/]+)(?:/(messages|interrupt|read|queue)(?:/([^/]+))?)?$").matchEntire(path)
         if (tabSubMatch != null) {
             val tabId = tabSubMatch.groupValues[1]
             val subResource = tabSubMatch.groupValues[2]
+            val itemId = tabSubMatch.groupValues[3]
 
             if (subResource.isEmpty()) {
                 return when (method) {
@@ -356,8 +355,21 @@ class FakeAgentsTermDaemon(
                     "POST" -> handleSendMessage(tabId, request.body.readUtf8())
                     else -> jsonResponse(405, """{"error":"Method not allowed"}""")
                 }
-                "interrupt" -> handleInterrupt(tabId)
+
+                "queue" -> when (method) {
+                    "DELETE" -> if (itemId.isNotEmpty()) {
+                        handleRemoveQueuedMessage(tabId, itemId)
+                    } else {
+                        jsonResponse(404, """{"error":"Not found"}""")
+                    }
+
+                    else -> jsonResponse(405, """{"error":"Method not allowed"}""")
+                }
+
+                "interrupt" -> handleInterrupt(tabId, request.body.readUtf8())
+
                 "read" -> handleMarkRead(tabId)
+
                 else -> jsonResponse(404, """{"error":"Not found"}""")
             }
         }
@@ -407,7 +419,7 @@ class FakeAgentsTermDaemon(
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     activeSockets.remove(webSocket)
                 }
-            }
+            },
         )
     }
 
@@ -427,12 +439,24 @@ class FakeAgentsTermDaemon(
             } else {
                 cur.systemPrompt
             }
+            val nextStatus = if (req.status in setOf("done", "idle") && cur.agent != "shell") {
+                req.status!!
+            } else {
+                cur.status
+            }
+            val nextStatusDetail = when {
+                req.status == "done" && cur.agent != "shell" -> "Task finished"
+                req.status == "idle" && cur.agent != "shell" -> null
+                else -> cur.statusDetail
+            }
             val next = cur.copy(
                 title = req.title ?: cur.title,
                 cwd = req.cwd ?: cur.cwd,
                 permissionMode = req.permissionMode ?: cur.permissionMode,
                 model = nextModel,
                 systemPrompt = nextSystemPrompt,
+                status = nextStatus,
+                statusDetail = nextStatusDetail,
                 updatedAt = System.currentTimeMillis(),
             )
             tabs[idx] = next
@@ -468,52 +492,146 @@ class FakeAgentsTermDaemon(
         req.overridePermissionMode?.let { receivedOverrideModes.add(it) }
 
         val now = System.currentTimeMillis()
-        val userMsg = ChatMessage(
-            id = "msg_${msgCounter.incrementAndGet()}",
-            tabId = tabId,
-            role = "user",
-            text = req.text,
-            status = "complete",
-            createdAt = now,
-            updatedAt = now,
-        )
-        val assistantMsg = ChatMessage(
-            id = "msg_${msgCounter.incrementAndGet()}",
-            tabId = tabId,
-            role = "assistant",
-            text = "",
-            status = "streaming",
-            createdAt = now + 1,
-            updatedAt = now + 1,
-        )
-
-        val workingTab = synchronized(lock) {
+        val queuedResult = synchronized(lock) {
             val idx = tabs.indexOfFirst { it.id == tabId }
             if (idx < 0) return jsonResponse(404, """{"error":"Tab not found"}""")
-            val msgs = messagesByTab.getOrPut(tabId) { mutableListOf() }
-            msgs.add(userMsg)
-            msgs.add(assistantMsg)
-            val updated = tabs[idx].copy(
-                status = "working",
-                statusDetail = "Processing prompt...",
-                lastMessagePreview = req.text,
-                updatedAt = now,
-            )
-            tabs[idx] = updated
-            updated
+            val cur = tabs[idx]
+            if (cur.status == "working") {
+                val item = QueuedMessage(
+                    id = "q_${msgCounter.incrementAndGet()}",
+                    text = req.text.trim(),
+                    overridePermissionMode = req.overridePermissionMode,
+                    createdAt = now,
+                )
+                val updated = cur.copy(
+                    queuedMessages = cur.queuedMessages + item,
+                    updatedAt = now,
+                )
+                tabs[idx] = updated
+                Pair(updated, item)
+            } else {
+                null
+            }
         }
+        if (queuedResult != null) {
+            val (updatedTab, item) = queuedResult
+            broadcast(WsServerEnvelope(type = "tab_updated", tab = updatedTab))
+            return jsonResponse(
+                200,
+                encodeHerdrJson(SendMessageResponse(queued = true, queuedMessage = item, tab = updatedTab)),
+            )
+        }
+
+        val (workingTab, userMsg, assistantMsg, effectivePrompt) = startTurnInternal(
+            tabId = tabId,
+            promptText = req.text,
+        ) ?: return jsonResponse(404, """{"error":"Tab not found"}""")
 
         executor.submit {
             emitTurnEvents(
                 tab = workingTab,
                 userMsg = userMsg,
                 assistantMsg = assistantMsg,
-                prompt = req.text,
+                prompt = effectivePrompt,
                 overridePermissionMode = req.overridePermissionMode,
             )
         }
 
-        return jsonResponse(200, encodeHerdrJson(SendMessageResponse(userMsg, assistantMsg)))
+        return jsonResponse(200, encodeHerdrJson(SendMessageResponse(userMessage = userMsg, assistantMessage = assistantMsg)))
+    }
+
+    private data class StartedTurn(
+        val tab: TabRecord,
+        val userMsg: ChatMessage,
+        val assistantMsg: ChatMessage,
+        val effectivePrompt: String,
+    )
+
+    private fun startTurnInternal(
+        tabId: String,
+        promptText: String,
+    ): StartedTurn? {
+        val now = System.currentTimeMillis()
+        return synchronized(lock) {
+            val idx = tabs.indexOfFirst { it.id == tabId }
+            if (idx < 0) return@synchronized null
+            val cur = tabs[idx]
+            val combinedText = if (cur.queuedMessages.isNotEmpty()) {
+                (cur.queuedMessages.map { it.text } + promptText.trim()).filter { it.isNotBlank() }.joinToString("\n\n")
+            } else {
+                promptText
+            }
+            val userMsg = ChatMessage(
+                id = "msg_${msgCounter.incrementAndGet()}",
+                tabId = tabId,
+                role = "user",
+                text = combinedText,
+                status = "complete",
+                createdAt = now,
+                updatedAt = now,
+            )
+            val assistantMsg = ChatMessage(
+                id = "msg_${msgCounter.incrementAndGet()}",
+                tabId = tabId,
+                role = "assistant",
+                text = "",
+                status = "streaming",
+                createdAt = now + 1,
+                updatedAt = now + 1,
+            )
+            val msgs = messagesByTab.getOrPut(tabId) { mutableListOf() }
+            msgs.add(userMsg)
+            msgs.add(assistantMsg)
+            val updated = cur.copy(
+                status = "working",
+                statusDetail = "Processing prompt...",
+                lastMessagePreview = combinedText,
+                queuedMessages = emptyList(),
+                updatedAt = now,
+            )
+            tabs[idx] = updated
+            StartedTurn(updated, userMsg, assistantMsg, combinedText)
+        }
+    }
+
+    private fun handleRemoveQueuedMessage(tabId: String, queuedId: String): MockResponse {
+        val updated = synchronized(lock) {
+            val idx = tabs.indexOfFirst { it.id == tabId }
+            if (idx < 0) return jsonResponse(404, """{"error":"Tab not found"}""")
+            val cur = tabs[idx]
+            val next = cur.copy(
+                queuedMessages = cur.queuedMessages.filterNot { it.id == queuedId },
+                updatedAt = System.currentTimeMillis(),
+            )
+            tabs[idx] = next
+            next
+        }
+        broadcast(WsServerEnvelope(type = "tab_updated", tab = updated))
+        return jsonResponse(200, encodeHerdrJson(QueueActionResponse(ok = true, tab = updated)))
+    }
+
+    private fun emitFinishTaskTurn(tab: TabRecord, assistantMsg: ChatMessage) {
+        val doneText = "All done! This task is finished — you can close this tab whenever you're ready."
+        broadcast(
+            WsServerEnvelope(
+                type = "message_delta",
+                tabId = tab.id,
+                messageId = assistantMsg.id,
+                textDelta = doneText,
+            ),
+        )
+        val completeMsg = assistantMsg.copy(
+            text = doneText,
+            status = "complete",
+            usage = UsageStats(inputTokens = 60, outputTokens = 20, durationMs = 200L),
+            updatedAt = System.currentTimeMillis(),
+        )
+        replaceMessage(tab.id, completeMsg)
+        val doneTab = updateTabState(tab.id, status = "done", statusDetail = "Task finished")
+        broadcast(WsServerEnvelope(type = "message_updated", tabId = tab.id, message = completeMsg))
+        if (doneTab != null) {
+            broadcast(WsServerEnvelope(type = "tab_updated", tab = doneTab))
+        }
     }
 
     private fun emitTurnEvents(
@@ -529,6 +647,11 @@ class FakeAgentsTermDaemon(
 
         if (prompt.contains("hold_working")) {
             // Stay in working state until client calls POST /api/tabs/:id/interrupt
+            return
+        }
+
+        if (prompt.contains("finish_task")) {
+            emitFinishTaskTurn(tab, assistantMsg)
             return
         }
 
@@ -644,7 +767,7 @@ class FakeAgentsTermDaemon(
                         action = "bash",
                         displayName = "Run Shell Command",
                         detail = "gradle test",
-                    )
+                    ),
                 ),
                 status = "complete",
                 updatedAt = System.currentTimeMillis(),
@@ -665,7 +788,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 thinkingDelta = thinkingText,
-            )
+            ),
         )
 
         val runningTool = ToolCallItem(
@@ -681,7 +804,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 toolCall = runningTool,
-            )
+            ),
         )
 
         val doneTool = runningTool.copy(
@@ -695,7 +818,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 toolCall = doneTool,
-            )
+            ),
         )
 
         val chunk1 = if (overridePermissionMode == "full-access") {
@@ -716,7 +839,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 textDelta = chunk1,
-            )
+            ),
         )
         broadcast(
             WsServerEnvelope(
@@ -724,7 +847,7 @@ class FakeAgentsTermDaemon(
                 tabId = tab.id,
                 messageId = assistantMsg.id,
                 textDelta = chunk2,
-            )
+            ),
         )
 
         val completeMsg = assistantMsg.copy(
@@ -743,7 +866,12 @@ class FakeAgentsTermDaemon(
         }
     }
 
-    private fun handleInterrupt(tabId: String): MockResponse {
+    private fun handleInterrupt(tabId: String, body: String): MockResponse {
+        val req = if (body.isNotBlank()) {
+            runCatching { decodeHerdrJson<InterruptTabRequest>(body) }.getOrDefault(InterruptTabRequest())
+        } else {
+            InterruptTabRequest()
+        }
         interruptedTabIds.add(tabId)
         val interruptedMsg = synchronized(lock) {
             val list = messagesByTab[tabId] ?: return@synchronized null
@@ -756,14 +884,63 @@ class FakeAgentsTermDaemon(
             list[idx] = updated
             updated
         }
-        val idleTab = updateTabState(tabId, status = "idle", statusDetail = null)
         if (interruptedMsg != null) {
             broadcast(WsServerEnvelope(type = "message_updated", tabId = tabId, message = interruptedMsg))
         }
+
+        val combinedToRun: Pair<String, String?>? = synchronized(lock) {
+            val idx = tabs.indexOfFirst { it.id == tabId }
+            if (idx < 0) return@synchronized null
+            val cur = tabs[idx]
+            val draftText = req.text?.trim()?.takeIf { it.isNotEmpty() }
+            val allQueued = if (draftText != null) {
+                cur.queuedMessages + QueuedMessage(
+                    id = "q_${msgCounter.incrementAndGet()}",
+                    text = draftText,
+                    overridePermissionMode = req.overridePermissionMode,
+                    createdAt = System.currentTimeMillis(),
+                )
+            } else {
+                cur.queuedMessages
+            }
+            if (req.processQueue && allQueued.isNotEmpty()) {
+                val combined = allQueued.joinToString("\n\n") { it.text }
+                val override = allQueued.mapNotNull { it.overridePermissionMode }.lastOrNull()
+                tabs[idx] = cur.copy(queuedMessages = emptyList(), updatedAt = System.currentTimeMillis())
+                Pair(combined, override)
+            } else {
+                tabs[idx] = cur.copy(
+                    queuedMessages = allQueued,
+                    status = "idle",
+                    statusDetail = null,
+                    updatedAt = System.currentTimeMillis(),
+                )
+                null
+            }
+        }
+
+        if (combinedToRun != null) {
+            val (combinedPrompt, overrideMode) = combinedToRun
+            val started = startTurnInternal(tabId, combinedPrompt)
+            if (started != null) {
+                executor.submit {
+                    emitTurnEvents(
+                        tab = started.tab,
+                        userMsg = started.userMsg,
+                        assistantMsg = started.assistantMsg,
+                        prompt = started.effectivePrompt,
+                        overridePermissionMode = overrideMode,
+                    )
+                }
+                return jsonResponse(200, encodeHerdrJson(QueueActionResponse(ok = true, tab = started.tab)))
+            }
+        }
+
+        val idleTab = synchronized(lock) { tabs.firstOrNull { it.id == tabId } }
         if (idleTab != null) {
             broadcast(WsServerEnvelope(type = "tab_updated", tab = idleTab))
         }
-        return jsonResponse(200, """{"ok":true}""")
+        return jsonResponse(200, encodeHerdrJson(QueueActionResponse(ok = true, tab = idleTab)))
     }
 
     private fun handleMarkRead(tabId: String): MockResponse {
@@ -810,13 +987,11 @@ class FakeAgentsTermDaemon(
         }
     }
 
-    private fun jsonResponse(code: Int, body: String): MockResponse {
-        return MockResponse()
-            .setResponseCode(code)
-            .addHeader("Content-Type", "application/json; charset=utf-8")
-            .addHeader("Connection", "close")
-            .setBody(body)
-    }
+    private fun jsonResponse(code: Int, body: String): MockResponse = MockResponse()
+        .setResponseCode(code)
+        .addHeader("Content-Type", "application/json; charset=utf-8")
+        .addHeader("Connection", "close")
+        .setBody(body)
 
     override fun close() {
         for (ws in activeSockets) {

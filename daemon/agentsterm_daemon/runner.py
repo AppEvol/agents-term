@@ -18,7 +18,7 @@ import sys
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 
-from .config import enriched_path, home_dir, resolve_binary
+from .config import enriched_path, resolve_binary
 from .store import StateStore
 from .util import (
     first_not_none,
@@ -31,6 +31,7 @@ from .util import (
     json_pretty,
     now_ms,
     rand_hex,
+    summarize_task_prompt,
     summarize_tool_input,
     truncate,
 )
@@ -39,9 +40,174 @@ Broadcast = Callable[[Dict[str, Any]], None]
 
 CWD_MARKER = "__AGENTSTERM_CWD__"
 MAX_TOOL_OUTPUT = 12000
+TASK_SUMMARY_OPEN_TAG = "<tab_task_summary>"
+TASK_SUMMARY_CLOSE_TAG = "</tab_task_summary>"
+TASK_SUMMARY_PROMPT_ADDENDUM = (
+    "Before your response, output a single line wrapped in "
+    "<tab_task_summary>...</tab_task_summary> containing a concise one-sentence summary "
+    "(max 120 characters) of what this tab's task is about. "
+    "Do not mention these tags in your response."
+)
+_TASK_SUMMARY_TAG_RE = re.compile(r"<tab_task_summary>(.*?)</tab_task_summary>\s*", re.S)
 _LINE_SPLIT_RE = re.compile(r"\r?\n")
 _MODEL_CMD_RE = re.compile(r"^/model(?:\s+(.*))?$", re.I)
 _MODEL_RESET_RE = re.compile(r"(default|reset|auto)", re.I)
+_FENCED_CODE_RE = re.compile(r"```[\s\S]*?```")
+_NEGATED_CLOSE_TAB_RE = re.compile(
+    r"\b(?:do\s+not|don't|cannot|can't|avoid|never|wait\s+before)\b[^\n.!?]{0,40}\bclose\s+(?:this|the)\s+tab\b",
+    re.I,
+)
+_CLOSE_TAB_CUE_RE = re.compile(
+    r"(?:"
+    r"\b(?:you\s+(?:can|may)|feel\s+free\s+to|(?:it(?:'s|\s+is)\s+)?safe\s+to|safely|good\s+to|ready\s+to)\s+"
+    r"(?:now\s+)?(?:safely\s+)?close\s+(?:this|the)\s+tab\b"
+    r"|\bclose\s+(?:this|the)\s+tab\s+(?:now|whenever|if\s+you(?:'d|\s+would)?\s+like)\b"
+    r")",
+    re.I,
+)
+
+
+def is_task_finished_response(text: Optional[str]) -> bool:
+    """Detect when a coding agent signals in its closing paragraph that the task is done and the tab can be closed."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    without_code = _FENCED_CODE_RE.sub("", text).strip()
+    if not without_code:
+        return False
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", without_code) if p.strip()]
+    tail = (paragraphs[-1] if paragraphs else without_code)[-320:]
+    if _NEGATED_CLOSE_TAB_RE.search(tail):
+        return False
+    return bool(_CLOSE_TAB_CUE_RE.search(tail))
+
+
+def pad_first_prompt_for_task_summary(prompt: str) -> str:
+    """Append an instruction asking the coding agent to emit a tab task summary tag."""
+    return f"{prompt}\n\n<task_summary_request>\n{TASK_SUMMARY_PROMPT_ADDENDUM}\n</task_summary_request>"
+
+
+class TaskSummaryStreamFilter:
+    """Strips <tab_task_summary>...</tab_task_summary> from streamed text deltas and extracts the summary."""
+
+    MAX_TAG_BODY_LEN = 400
+    MAX_LEADING_WS_HOLD = 8
+
+    def __init__(self) -> None:
+        self._done = False
+        self._in_tag = False
+        self._buf = ""
+        self._emitted_any = False
+        self._strip_post_tag_ws = False
+        self.summary: Optional[str] = None
+
+    @staticmethod
+    def _open_tag_prefix_suffix_len(text: str) -> int:
+        max_k = min(len(text), len(TASK_SUMMARY_OPEN_TAG) - 1)
+        for k in range(max_k, 0, -1):
+            if TASK_SUMMARY_OPEN_TAG.startswith(text[-k:]):
+                return k
+        return 0
+
+    def _consume_post_tag_ws(self, text: str) -> str:
+        if not self._strip_post_tag_ws or not text:
+            return text
+        stripped = text.lstrip(" \t\r\n") if not self._emitted_any else text.lstrip("\r\n")
+        if stripped:
+            self._strip_post_tag_ws = False
+        return stripped
+
+    def feed(self, chunk: str) -> tuple[str, Optional[str]]:
+        if not chunk:
+            return "", None
+        if self._done:
+            out = chunk
+            if not self._emitted_any:
+                # Guard against a fallback result event repeating the stripped summary tag.
+                out = _TASK_SUMMARY_TAG_RE.sub("", out, count=1)
+            out = self._consume_post_tag_ws(out)
+            if out:
+                self._emitted_any = True
+            return out, None
+
+        data = self._buf + chunk
+        self._buf = ""
+        visible_parts: List[str] = []
+        extracted: Optional[str] = None
+
+        while data:
+            if not self._in_tag:
+                idx = data.find(TASK_SUMMARY_OPEN_TAG)
+                if idx >= 0:
+                    before = data[:idx]
+                    if before and (self._emitted_any or before.strip()):
+                        visible_parts.append(before)
+                        self._emitted_any = True
+                    data = data[idx + len(TASK_SUMMARY_OPEN_TAG) :]
+                    self._in_tag = True
+                    continue
+
+                if not self._emitted_any and not data.strip() and len(data) <= self.MAX_LEADING_WS_HOLD:
+                    self._buf = data
+                    break
+
+                suffix_len = self._open_tag_prefix_suffix_len(data)
+                if suffix_len > 0:
+                    emit = data[:-suffix_len]
+                    if emit and not self._emitted_any and not emit.strip() and len(emit) <= self.MAX_LEADING_WS_HOLD:
+                        self._buf = data
+                    else:
+                        if emit:
+                            visible_parts.append(emit)
+                            self._emitted_any = True
+                        self._buf = data[-suffix_len:]
+                else:
+                    visible_parts.append(data)
+                    self._emitted_any = True
+                break
+
+            close_idx = data.find(TASK_SUMMARY_CLOSE_TAG)
+            if close_idx >= 0:
+                raw_summary = data[:close_idx]
+                cleaned = summarize_task_prompt(raw_summary, max_len=160)
+                if cleaned:
+                    self.summary = cleaned
+                    extracted = cleaned
+                self._in_tag = False
+                self._done = True
+                self._strip_post_tag_ws = True
+                rest = self._consume_post_tag_ws(data[close_idx + len(TASK_SUMMARY_CLOSE_TAG) :])
+                if rest:
+                    visible_parts.append(rest)
+                    self._emitted_any = True
+                break
+
+            if len(data) > self.MAX_TAG_BODY_LEN:
+                visible_parts.append(TASK_SUMMARY_OPEN_TAG + data)
+                self._emitted_any = True
+                self._in_tag = False
+                self._done = True
+                break
+
+            self._buf = data
+            break
+
+        return "".join(visible_parts), extracted
+
+    def flush(self) -> str:
+        if self._in_tag:
+            out = TASK_SUMMARY_OPEN_TAG + self._buf
+            self._in_tag = False
+            self._buf = ""
+            self._done = True
+            self._emitted_any = True
+            return out
+        if self._buf:
+            out = self._buf
+            self._buf = ""
+            if out:
+                self._emitted_any = True
+            return out
+        return ""
 
 
 def _reject_constant(name: str) -> Any:
@@ -70,9 +236,7 @@ def _tool_output_text(raw_out: Any) -> Optional[str]:
     if isinstance(raw_out, str):
         return raw_out
     if isinstance(raw_out, list):
-        return "\n".join(
-            js_str(x["text"]) if isinstance(x, dict) and "text" in x else json_compact(x) for x in raw_out
-        )
+        return "\n".join(js_str(x["text"]) if isinstance(x, dict) and "text" in x else json_compact(x) for x in raw_out)
     if raw_out is not None:
         return json_pretty(raw_out)
     return None
@@ -131,6 +295,8 @@ class _ActiveTurn:
         self.assistant_msg_id = assistant_msg_id
         self.proc: Optional[asyncio.subprocess.Process] = None
         self.interrupted = False
+        self.drain_queue_on_exit = False
+        self.kill_scheduled = False
         self.signal_on_spawn: Optional[int] = None
         self.kill_handles: List[asyncio.TimerHandle] = []
 
@@ -167,6 +333,7 @@ class AgentRunner:
         self._active: Dict[str, _ActiveTurn] = {}
         self._tasks: set = set()
         self._agy_prompt_dirty: set = set()
+        self._summary_filters: Dict[str, TaskSummaryStreamFilter] = {}
 
     def is_running(self, tab_id: str) -> bool:
         return tab_id in self._active
@@ -179,6 +346,15 @@ class AgentRunner:
     def start_turn(
         self, tab: Dict[str, Any], prompt_text: str, override_permission_mode: Optional[str] = None
     ) -> Dict[str, Any]:
+        has_prior_task = any(
+            m.get("role") == "user"
+            and isinstance(m.get("text"), str)
+            and m["text"].strip()
+            and not _MODEL_CMD_RE.match(m["text"].strip())
+            for m in self.store.get_messages(tab["id"])
+        )
+        is_first_task_prompt = not has_prior_task
+
         now = now_ms()
         user_message = self._new_message(tab["id"], "user", prompt_text, "complete", now)
         assistant_message = self._new_message(tab["id"], "assistant", "", "streaming", now + 1)
@@ -190,18 +366,18 @@ class AgentRunner:
         if model_cmd:
             return self._handle_model_command(tab, user_message, assistant_message, (model_cmd.group(1) or "").strip())
 
-        effective_mode = (
-            (override_permission_mode or "").strip() or tab.get("permissionMode") or "full-access"
-        )
-        working_tab = self.store.update_tab(
-            tab["id"],
-            {
-                "status": "working",
-                "statusDetail": f"Starting {tab.get('agent')}…",
-                "lastMessagePreview": truncate(prompt_text, 120),
-                "unread": False,
-            },
-        )
+        effective_mode = (override_permission_mode or "").strip() or tab.get("permissionMode") or "full-access"
+        working_patch: Dict[str, Any] = {
+            "status": "working",
+            "statusDetail": f"Starting {tab.get('agent')}…",
+            "lastMessagePreview": truncate(prompt_text, 120),
+            "unread": False,
+        }
+        if not (isinstance(tab.get("taskSummary"), str) and tab["taskSummary"].strip()):
+            fallback_summary = summarize_task_prompt(prompt_text)
+            if fallback_summary:
+                working_patch["taskSummary"] = fallback_summary
+        working_tab = self.store.update_tab(tab["id"], working_patch)
         self.broadcast({"type": "message_created", "tabId": tab["id"], "message": user_message})
         self.broadcast({"type": "message_created", "tabId": tab["id"], "message": assistant_message})
         if working_tab:
@@ -214,44 +390,131 @@ class AgentRunner:
             "userMessage": self._snapshot_message(user_message),
             "assistantMessage": self._snapshot_message(assistant_message),
         }
+        if agent in ("agy", "claude", "codex") and is_first_task_prompt:
+            self._summary_filters[assistant_message["id"]] = TaskSummaryStreamFilter()
+            cli_prompt = pad_first_prompt_for_task_summary(prompt_text)
+        else:
+            cli_prompt = prompt_text
+
         if agent == "shell":
             self._run_shell_turn(tab, assistant_message, prompt_text, run_cwd)
         elif agent == "agy":
-            self._run_agy_turn(tab, assistant_message, prompt_text, run_cwd, effective_mode)
+            self._run_agy_turn(tab, assistant_message, cli_prompt, run_cwd, effective_mode)
         elif agent == "claude":
-            self._run_claude_turn(tab, assistant_message, prompt_text, run_cwd, effective_mode)
+            self._run_claude_turn(tab, assistant_message, cli_prompt, run_cwd, effective_mode)
         elif agent == "codex":
-            self._run_codex_turn(tab, assistant_message, prompt_text, run_cwd, effective_mode)
+            self._run_codex_turn(tab, assistant_message, cli_prompt, run_cwd, effective_mode)
         else:
             self._finish_turn_with_error(tab["id"], assistant_message, f"Unsupported agent type: {agent}")
         return result
 
-    def interrupt(self, tab_id: str) -> bool:
+    def enqueue_message(
+        self, tab_id: str, prompt_text: str, override_permission_mode: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        enqueued = self.store.enqueue_message(tab_id, prompt_text, override_permission_mode)
+        if not enqueued:
+            return None
+        updated_tab, queued_item = enqueued
+        self.broadcast({"type": "tab_updated", "tab": updated_tab})
+        return {"queued": True, "queuedMessage": queued_item, "tab": updated_tab}
+
+    def remove_queued_message(self, tab_id: str, queued_id: str) -> Optional[Dict[str, Any]]:
+        updated_tab = self.store.remove_queued_message(tab_id, queued_id)
+        if updated_tab:
+            self.broadcast({"type": "tab_updated", "tab": updated_tab})
+        return updated_tab
+
+    @staticmethod
+    def _combine_queued_messages(items: List[Dict[str, Any]]) -> tuple[str, Optional[str]]:
+        texts = [m["text"].strip() for m in items if isinstance(m.get("text"), str) and m["text"].strip()]
+        overrides = [
+            m["overridePermissionMode"].strip()
+            for m in items
+            if isinstance(m.get("overridePermissionMode"), str) and m["overridePermissionMode"].strip()
+        ]
+        combined_override = "full-access" if "full-access" in overrides else (overrides[-1] if overrides else None)
+        return "\n\n".join(texts), combined_override
+
+    def drain_and_start_queued(self, tab_id: str) -> Optional[Dict[str, Any]]:
+        popped_res = self.store.pop_queued_messages(tab_id)
+        if not popped_res:
+            return None
+        updated_tab, popped = popped_res
+        if not popped:
+            return None
+        combined_text, combined_override = self._combine_queued_messages(popped)
+        if not combined_text:
+            self.broadcast({"type": "tab_updated", "tab": updated_tab})
+            return None
+        return self.start_turn(updated_tab, combined_text, combined_override)
+
+    def submit_message(
+        self, tab: Dict[str, Any], prompt_text: str, override_permission_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        tab_id = tab["id"]
+        if self.is_running(tab_id):
+            enqueued = self.enqueue_message(tab_id, prompt_text, override_permission_mode)
+            assert enqueued is not None
+            return enqueued
+        if tab.get("queuedMessages"):
+            self.enqueue_message(tab_id, prompt_text, override_permission_mode)
+            drained = self.drain_and_start_queued(tab_id)
+            assert drained is not None
+            return drained
+        return self.start_turn(tab, prompt_text, override_permission_mode)
+
+    def interrupt(
+        self,
+        tab_id: str,
+        *,
+        process_queue: bool = False,
+        text: Optional[str] = None,
+        override_permission_mode: Optional[str] = None,
+    ) -> bool:
+        if isinstance(text, str) and text.strip():
+            self.enqueue_message(tab_id, text.strip(), override_permission_mode)
+
         active = self._active.get(tab_id)
         if not active:
+            if process_queue and self.drain_and_start_queued(tab_id) is not None:
+                return True
             idle = self.store.update_tab(tab_id, {"status": "idle", "statusDetail": None})
             if idle:
                 self.broadcast({"type": "tab_updated", "tab": idle})
             return False
 
         active.interrupted = True
-        active.send_signal(signal.SIGINT)
-        loop = asyncio.get_running_loop()
+        tab = self.store.get_tab(tab_id)
+        if process_queue and tab and tab.get("queuedMessages"):
+            active.drain_queue_on_exit = True
 
-        def escalate_term() -> None:
-            active.send_signal(signal.SIGTERM)
-            active.kill_handles.append(loop.call_later(2.0, lambda: active.send_signal(signal.SIGKILL)))
+        if not active.kill_scheduled:
+            active.kill_scheduled = True
+            active.send_signal(signal.SIGINT)
+            loop = asyncio.get_running_loop()
 
-        active.kill_handles.append(loop.call_later(1.5, escalate_term))
+            def escalate_term() -> None:
+                active.send_signal(signal.SIGTERM)
+                active.kill_handles.append(loop.call_later(2.0, lambda: active.send_signal(signal.SIGKILL)))
+
+            active.kill_handles.append(loop.call_later(1.5, escalate_term))
 
         existing = self.store.get_message(tab_id, active.assistant_msg_id)
         if existing and existing.get("status") == "streaming":
             interrupted_msg = {**existing, "status": "interrupted", "updatedAt": now_ms()}
             self.store.replace_message(tab_id, interrupted_msg)
             self.broadcast({"type": "message_updated", "tabId": tab_id, "message": interrupted_msg})
-        idle_tab = self.store.update_tab(tab_id, {"status": "idle", "statusDetail": None})
-        if idle_tab:
-            self.broadcast({"type": "tab_updated", "tab": idle_tab})
+
+        if active.drain_queue_on_exit:
+            pending_tab = self.store.update_tab(
+                tab_id, {"status": "working", "statusDetail": "Interrupting to run queued messages…"}
+            )
+            if pending_tab:
+                self.broadcast({"type": "tab_updated", "tab": pending_tab})
+        else:
+            idle_tab = self.store.update_tab(tab_id, {"status": "idle", "statusDetail": None})
+            if idle_tab:
+                self.broadcast({"type": "tab_updated", "tab": idle_tab})
         return True
 
     def kill_if_running(self, tab_id: str) -> None:
@@ -259,6 +522,7 @@ class AgentRunner:
         active = self._active.pop(tab_id, None)
         if not active:
             return
+        self._summary_filters.pop(active.assistant_msg_id, None)
         active.interrupted = True
         active.cancel_kill_timers()
         active.send_signal(signal.SIGKILL)
@@ -312,15 +576,25 @@ class AgentRunner:
         elif _MODEL_RESET_RE.fullmatch(arg):
             updated_tab = self.store.update_tab(
                 tab["id"],
-                {"model": None, "status": "idle", "statusDetail": None,
-                 "lastMessagePreview": "Model reset to default", "unread": False},
+                {
+                    "model": None,
+                    "status": "idle",
+                    "statusDetail": None,
+                    "lastMessagePreview": "Model reset to default",
+                    "unread": False,
+                },
             )
             reply = "Model reset to CLI default for this tab."
         else:
             updated_tab = self.store.update_tab(
                 tab["id"],
-                {"model": arg, "status": "idle", "statusDetail": None,
-                 "lastMessagePreview": f"Model: {arg}", "unread": False},
+                {
+                    "model": arg,
+                    "status": "idle",
+                    "statusDetail": None,
+                    "lastMessagePreview": f"Model: {arg}",
+                    "unread": False,
+                },
             )
             reply = f"Model switched to `{arg}` for this tab. Subsequent messages will use this model."
         complete_msg = {
@@ -343,8 +617,24 @@ class AgentRunner:
         return {**os.environ, "PATH": enriched_path(), "FORCE_COLOR": "0", "NO_COLOR": "1", "TERM": "dumb"}
 
     def _emit_delta(
-        self, tab_id: str, msg: Dict[str, Any], text_delta: Optional[str] = None, thinking_delta: Optional[str] = None
+        self,
+        tab_id: str,
+        msg: Dict[str, Any],
+        text_delta: Optional[str] = None,
+        thinking_delta: Optional[str] = None,
+        *,
+        bypass_summary_filter: bool = False,
     ) -> None:
+        if text_delta and not bypass_summary_filter:
+            summary_filter = self._summary_filters.get(msg["id"])
+            if summary_filter is not None:
+                text_delta, extracted_summary = summary_filter.feed(text_delta)
+                if extracted_summary:
+                    updated_tab = self.store.update_tab(tab_id, {"taskSummary": extracted_summary})
+                    if updated_tab:
+                        self.broadcast({"type": "tab_updated", "tab": updated_tab})
+                if not text_delta and not thinking_delta:
+                    return
         if text_delta:
             msg["text"] += text_delta
             segments = msg.setdefault("segments", [])
@@ -393,6 +683,7 @@ class AgentRunner:
         self._set_status_detail(tab_id, f"Running {name}" + (f": {truncate(summary, 40)}" if summary else ""))
 
     def _finish_turn_with_error(self, tab_id: str, msg: Dict[str, Any], error_text: str) -> None:
+        self._summary_filters.pop(msg["id"], None)
         final_msg = {**msg, "status": "error", "error": error_text, "updatedAt": now_ms()}
         self.store.replace_message(tab_id, final_msg)
         updated_tab = self.store.update_tab(tab_id, {"status": "error", "statusDetail": None, "unread": True})
@@ -417,15 +708,26 @@ class AgentRunner:
         active = self._active.pop(tab_id, None)
         if active:
             active.cancel_kill_timers()
-        if self.store.get_tab(tab_id) is None:
+        summary_filter = self._summary_filters.pop(msg["id"], None)
+        tab = self.store.get_tab(tab_id)
+        if tab is None:
             return  # Tab was deleted mid-turn; don't resurrect its message list.
+        if summary_filter is not None:
+            leftover = summary_filter.flush()
+            if leftover:
+                self._emit_delta(tab_id, msg, text_delta=leftover, bypass_summary_filter=True)
 
         denied = first_not_none(denied_actions, msg.get("deniedActions"), [])
         if usage:
             final_usage = {**usage, "durationMs": first_not_none(usage.get("durationMs"), duration_ms)}
         else:
-            final_usage = {"inputTokens": None, "outputTokens": None, "thinkingTokens": None,
-                           "costUsd": None, "durationMs": duration_ms}
+            final_usage = {
+                "inputTokens": None,
+                "outputTokens": None,
+                "thinkingTokens": None,
+                "costUsd": None,
+                "durationMs": duration_ms,
+            }
 
         final_status, final_error = "complete", msg.get("error")
         tab_status, status_detail = "idle", None
@@ -440,6 +742,8 @@ class AgentRunner:
             tab_status = "error"
         elif failed and stderr_text.strip():
             final_error = f"Exited with code {exit_code}: {truncate(stderr_text.strip(), 240)}"
+        elif not failed and tab.get("agent") != "shell" and is_task_finished_response(msg["text"]):
+            tab_status, status_detail = "done", "Task finished"
 
         final_msg = {
             **self._snapshot_message(msg),
@@ -464,6 +768,12 @@ class AgentRunner:
         self.broadcast({"type": "message_updated", "tabId": tab_id, "message": final_msg})
         if updated_tab:
             self.broadcast({"type": "tab_updated", "tab": updated_tab})
+
+        should_drain = (not interrupted and tab_status in ("idle", "done")) or (
+            interrupted and active is not None and active.drain_queue_on_exit
+        )
+        if should_drain and updated_tab and updated_tab.get("queuedMessages"):
+            self.drain_and_start_queued(tab_id)
 
     # ---------------------------------------------------------------- process plumbing
 
@@ -525,7 +835,7 @@ class AgentRunner:
                 await run()
             except asyncio.CancelledError:
                 raise
-            except Exception as err:  # Parser bugs must not leave the tab stuck "working".
+            except Exception as err:  # noqa: BLE001 - parser bugs must not leave the tab stuck "working".
                 traceback.print_exc(file=sys.stderr)
                 if self._active.get(tab_id) is active:
                     del self._active[tab_id]
@@ -601,11 +911,11 @@ class AgentRunner:
                 if before:
                     st["raw"] += before
                     append_text(before)
-                after = pending[idx + marker_len:]
+                after = pending[idx + marker_len :]
                 nl = after.find("\n")
                 if nl >= 0:
                     detect_cwd(after[:nl])
-                    st["pending"] = after[nl + 1:]
+                    st["pending"] = after[nl + 1 :]
                 else:
                     st["pending"] = pending[idx:]
             elif len(pending) > marker_len + 2:
@@ -629,7 +939,7 @@ class AgentRunner:
                 before = pending[:idx]
                 if before:
                     append_text(before)
-                detect_cwd(pending[idx + marker_len:])
+                detect_cwd(pending[idx + marker_len :])
 
             if st["fence"]:
                 self._emit_delta(tab_id, msg, text_delta="```" if msg["text"].endswith("\n") else "\n```")
@@ -637,8 +947,13 @@ class AgentRunner:
                 self._emit_delta(tab_id, msg, text_delta="_Command completed with no output._" if code == 0 else "")
 
             self._finalize_turn(
-                tab_id, msg, interrupted=interrupted, exit_code=code, stderr_text=st["stderr"],
-                new_cwd=st["new_cwd"], duration_ms=now_ms() - start,
+                tab_id,
+                msg,
+                interrupted=interrupted,
+                exit_code=code,
+                stderr_text=st["stderr"],
+                new_cwd=st["new_cwd"],
+                duration_ms=now_ms() - start,
             )
 
         self._spawn(tab_id, msg, [bash, "-lc", wrapped], cwd, "bash", on_stdout, on_stderr, on_close)
@@ -680,8 +995,13 @@ class AgentRunner:
 
         self._set_status_detail(tab_id, "Antigravity is thinking…")
 
-        st: Dict[str, Any] = {"session_ref": session, "usage": None, "saw_text": False,
-                              "text_step": None, "think_step": None}
+        st: Dict[str, Any] = {
+            "session_ref": session,
+            "usage": None,
+            "saw_text": False,
+            "text_step": None,
+            "think_step": None,
+        }
         denied: List[Dict[str, Any]] = []
         tool_starts: Dict[str, int] = {}
         breaks = _BlockBreaks()
@@ -755,10 +1075,14 @@ class AgentRunner:
             if step_type == "tool":
                 tool_info = as_obj(step.get("tool_info")) or {}
                 step_idx = js_str(step["step_index"]) if step.get("step_index") is not None else None
-                tool_id = js_str(first_not_none(
-                    step.get("tool_call_id"), step.get("tool_use_id"), tool_info.get("id"),
-                    f"agy_step_{step_idx}" if step_idx else f"tool_{rand_hex(4)}",
-                ))
+                tool_id = js_str(
+                    first_not_none(
+                        step.get("tool_call_id"),
+                        step.get("tool_use_id"),
+                        tool_info.get("id"),
+                        f"agy_step_{step_idx}" if step_idx else f"tool_{rand_hex(4)}",
+                    )
+                )
                 name = js_str(first_not_none(step.get("tool_name"), tool_info.get("name"), "Tool"))
                 params = first_not_none(tool_info.get("parameters"), tool_info.get("input"), tool_info.get("args"))
                 summary = summarize_tool_input(params)
@@ -767,18 +1091,29 @@ class AgentRunner:
                 if step_state in ("ACTIVE", "RUNNING", "PENDING"):
                     tool_starts.setdefault(tool_id, now_ms())
                     self._running_status(tab_id, name, summary)
-                    self._upsert_tool_call(tab_id, msg, {
-                        "id": tool_id,
-                        "name": name,
-                        "inputSummary": summary or (existing or {}).get("inputSummary") or "",
-                        "inputJson": json_pretty(params) if params is not None else (existing or {}).get("inputJson"),
-                        "output": (existing or {}).get("output"),
-                        "status": "running",
-                        "durationMs": None,
-                    })
+                    self._upsert_tool_call(
+                        tab_id,
+                        msg,
+                        {
+                            "id": tool_id,
+                            "name": name,
+                            "inputSummary": summary or (existing or {}).get("inputSummary") or "",
+                            "inputJson": json_pretty(params)
+                            if params is not None
+                            else (existing or {}).get("inputJson"),
+                            "output": (existing or {}).get("output"),
+                            "status": "running",
+                            "durationMs": None,
+                        },
+                    )
                 else:
-                    raw_out = first_not_none(tool_info.get("output"), tool_info.get("result"), tool_info.get("error"),
-                                             step.get("output"), step.get("error"))
+                    raw_out = first_not_none(
+                        tool_info.get("output"),
+                        tool_info.get("result"),
+                        tool_info.get("error"),
+                        step.get("output"),
+                        step.get("error"),
+                    )
                     if isinstance(raw_out, str):
                         out_text: Optional[str] = raw_out
                     elif raw_out is not None:
@@ -788,7 +1123,8 @@ class AgentRunner:
                     is_denied = step_state == "DENIED" or js_truthy(tool_info.get("denied"))
                     is_err = not is_denied and (
                         step_state in ("ERROR", "FAILED")
-                        or js_truthy(tool_info.get("is_error")) or js_truthy(tool_info.get("error"))
+                        or js_truthy(tool_info.get("is_error"))
+                        or js_truthy(tool_info.get("error"))
                     )
                     started = tool_starts.get(tool_id)
                     if is_finite_number(step.get("duration_seconds")):
@@ -799,17 +1135,21 @@ class AgentRunner:
                         dur = None
                     if is_denied:
                         denied.append({"action": name, "displayName": name, "detail": summary or None})
-                    self._upsert_tool_call(tab_id, msg, {
-                        "id": tool_id,
-                        "name": first_not_none((existing or {}).get("name"), name),
-                        "inputSummary": (existing or {}).get("inputSummary") or summary,
-                        "inputJson": first_not_none(
-                            (existing or {}).get("inputJson"), json_pretty(params) if params is not None else None
-                        ),
-                        "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
-                        "status": "denied" if is_denied else "error" if is_err else "done",
-                        "durationMs": dur,
-                    })
+                    self._upsert_tool_call(
+                        tab_id,
+                        msg,
+                        {
+                            "id": tool_id,
+                            "name": first_not_none((existing or {}).get("name"), name),
+                            "inputSummary": (existing or {}).get("inputSummary") or summary,
+                            "inputJson": first_not_none(
+                                (existing or {}).get("inputJson"), json_pretty(params) if params is not None else None
+                            ),
+                            "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
+                            "status": "denied" if is_denied else "error" if is_err else "done",
+                            "durationMs": dur,
+                        },
+                    )
                     self._set_status_detail(tab_id, "Antigravity is thinking…")
 
         def handle_result(res: Dict[str, Any]) -> None:
@@ -907,7 +1247,9 @@ class AgentRunner:
             if ev_type in ("tool_use", "tool_call", "tool_start"):
                 input_obj = first_not_none(ev.get("input"), ev.get("args"), ev.get("arguments"))
                 self._tool_use_started(
-                    tab_id, msg, tool_starts,
+                    tab_id,
+                    msg,
+                    tool_starts,
                     first_not_none(ev.get("id"), ev.get("tool_use_id")),
                     first_not_none(ev.get("name"), ev.get("tool")),
                     input_obj,
@@ -930,15 +1272,21 @@ class AgentRunner:
                     out_text = _tool_output_text(first_not_none(b.get("content"), b.get("output"), b.get("result")))
                     is_err = js_truthy(b.get("is_error")) or js_truthy(b.get("error"))
                     started = tool_starts.get(tool_id)
-                    self._upsert_tool_call(tab_id, msg, {
-                        "id": tool_id,
-                        "name": first_not_none((existing or {}).get("name"), js_str(first_not_none(b.get("name"), "Tool"))),
-                        "inputSummary": first_not_none((existing or {}).get("inputSummary"), ""),
-                        "inputJson": (existing or {}).get("inputJson"),
-                        "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
-                        "status": "error" if is_err else "done",
-                        "durationMs": now_ms() - started if started else None,
-                    })
+                    self._upsert_tool_call(
+                        tab_id,
+                        msg,
+                        {
+                            "id": tool_id,
+                            "name": first_not_none(
+                                (existing or {}).get("name"), js_str(first_not_none(b.get("name"), "Tool"))
+                            ),
+                            "inputSummary": first_not_none((existing or {}).get("inputSummary"), ""),
+                            "inputJson": (existing or {}).get("inputJson"),
+                            "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
+                            "status": "error" if is_err else "done",
+                            "durationMs": now_ms() - started if started else None,
+                        },
+                    )
                 return
 
             if ev_type == "result":
@@ -968,8 +1316,15 @@ class AgentRunner:
 
         def finish(code: Optional[int], interrupted: bool, stderr: str, duration: int) -> None:
             self._finalize_turn(
-                tab_id, msg, interrupted=interrupted, exit_code=code, stderr_text=stderr,
-                session_ref=st["session_ref"], usage=st["usage"], denied_actions=denied, duration_ms=duration,
+                tab_id,
+                msg,
+                interrupted=interrupted,
+                exit_code=code,
+                stderr_text=stderr,
+                session_ref=st["session_ref"],
+                usage=st["usage"],
+                denied_actions=denied,
+                duration_ms=duration,
             )
 
         self._spawn_json_lines(tab, msg, [binary, *args], cwd, "agy", handle_line, finish)
@@ -982,15 +1337,19 @@ class AgentRunner:
         tool_starts[tool_id] = now_ms()
         summary = summarize_tool_input(input_obj)
         self._running_status(tab_id, name, summary)
-        self._upsert_tool_call(tab_id, msg, {
-            "id": tool_id,
-            "name": name,
-            "inputSummary": summary,
-            "inputJson": json_pretty(input_obj) if input_obj is not None else None,
-            "output": None,
-            "status": "running",
-            "durationMs": None,
-        })
+        self._upsert_tool_call(
+            tab_id,
+            msg,
+            {
+                "id": tool_id,
+                "name": name,
+                "inputSummary": summary,
+                "inputJson": json_pretty(input_obj) if input_obj is not None else None,
+                "output": None,
+                "status": "running",
+                "durationMs": None,
+            },
+        )
 
     # ---------------------------------------------------------------- claude
 
@@ -1079,15 +1438,19 @@ class AgentRunner:
                         existing = self._find_tool(msg, tool_id)
                         out_text = _tool_output_text(b.get("content"))
                         started = tool_starts.get(tool_id)
-                        self._upsert_tool_call(tab_id, msg, {
-                            "id": tool_id,
-                            "name": first_not_none((existing or {}).get("name"), "Tool"),
-                            "inputSummary": first_not_none((existing or {}).get("inputSummary"), ""),
-                            "inputJson": (existing or {}).get("inputJson"),
-                            "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
-                            "status": "error" if js_truthy(b.get("is_error")) else "done",
-                            "durationMs": now_ms() - started if started else None,
-                        })
+                        self._upsert_tool_call(
+                            tab_id,
+                            msg,
+                            {
+                                "id": tool_id,
+                                "name": first_not_none((existing or {}).get("name"), "Tool"),
+                                "inputSummary": first_not_none((existing or {}).get("inputSummary"), ""),
+                                "inputJson": (existing or {}).get("inputJson"),
+                                "output": out_text[:MAX_TOOL_OUTPUT] if out_text else None,
+                                "status": "error" if js_truthy(b.get("is_error")) else "done",
+                                "durationMs": now_ms() - started if started else None,
+                            },
+                        )
             elif ev_type == "result":
                 result_val = ev.get("result")
                 if isinstance(result_val, str) and result_val and not msg["text"].strip():
@@ -1110,8 +1473,15 @@ class AgentRunner:
 
         def finish(code: Optional[int], interrupted: bool, stderr: str, duration: int) -> None:
             self._finalize_turn(
-                tab_id, msg, interrupted=interrupted, exit_code=code, stderr_text=stderr,
-                session_ref=st["session_ref"], usage=st["usage"], denied_actions=denied, duration_ms=duration,
+                tab_id,
+                msg,
+                interrupted=interrupted,
+                exit_code=code,
+                stderr_text=stderr,
+                session_ref=st["session_ref"],
+                usage=st["usage"],
+                denied_actions=denied,
+                duration_ms=duration,
             )
 
         self._spawn_json_lines(tab, msg, [binary, *args], cwd, "claude", handle_line, finish)
@@ -1129,8 +1499,11 @@ class AgentRunner:
 
         session = tab.get("sessionRef")
         is_resume = isinstance(session, dict) and session.get("kind") == "codex" and bool(session.get("value"))
-        args = (["exec", "resume", "--json", "--skip-git-repo-check"] if is_resume
-                else ["exec", "--json", "--skip-git-repo-check", "-C", cwd])
+        args = (
+            ["exec", "resume", "--json", "--skip-git-repo-check"]
+            if is_resume
+            else ["exec", "--json", "--skip-git-repo-check", "-C", cwd]
+        )
         if permission_mode == "full-access":
             args.append("--dangerously-bypass-approvals-and-sandbox")
         elif not is_resume:
@@ -1181,15 +1554,19 @@ class AgentRunner:
                     started = tool_starts.get(item_id)
                     exit_code = item.get("exit_code") if is_number(item.get("exit_code")) else None
                     agg = item.get("aggregated_output")
-                    self._upsert_tool_call(tab_id, msg, {
-                        "id": item_id,
-                        "name": "Bash",
-                        "inputSummary": cmd_summary,
-                        "inputJson": json_pretty({"command": cmd}),
-                        "output": agg[:MAX_TOOL_OUTPUT] if isinstance(agg, str) else None,
-                        "status": ("error" if exit_code and exit_code != 0 else "done") if completed else "running",
-                        "durationMs": now_ms() - started if completed and started else None,
-                    })
+                    self._upsert_tool_call(
+                        tab_id,
+                        msg,
+                        {
+                            "id": item_id,
+                            "name": "Bash",
+                            "inputSummary": cmd_summary,
+                            "inputJson": json_pretty({"command": cmd}),
+                            "output": agg[:MAX_TOOL_OUTPUT] if isinstance(agg, str) else None,
+                            "status": ("error" if exit_code and exit_code != 0 else "done") if completed else "running",
+                            "durationMs": now_ms() - started if completed and started else None,
+                        },
+                    )
             elif ev_type == "turn.completed" and as_obj(ev.get("usage")) is not None:
                 u = as_obj(ev["usage"]) or {}
                 st["usage"] = {
@@ -1204,8 +1581,14 @@ class AgentRunner:
 
         def finish(code: Optional[int], interrupted: bool, stderr: str, duration: int) -> None:
             self._finalize_turn(
-                tab_id, msg, interrupted=interrupted, exit_code=code, stderr_text=stderr,
-                session_ref=st["session_ref"], usage=st["usage"], duration_ms=duration,
+                tab_id,
+                msg,
+                interrupted=interrupted,
+                exit_code=code,
+                stderr_text=stderr,
+                session_ref=st["session_ref"],
+                usage=st["usage"],
+                duration_ms=duration,
             )
 
         self._spawn_json_lines(tab, msg, [binary, *args], cwd, "codex", handle_line, finish)

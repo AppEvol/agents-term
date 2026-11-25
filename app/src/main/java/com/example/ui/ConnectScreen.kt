@@ -90,8 +90,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
-import java.util.Locale
 import com.example.R
 import com.example.data.BootstrapPhase
 import com.example.data.BootstrapUiState
@@ -109,6 +107,8 @@ import com.example.ui.theme.HerdrBlue
 import com.example.ui.theme.HerdrEmerald
 import com.example.ui.theme.HerdrRed
 import com.example.ui.theme.MonoFontFamily
+import kotlinx.coroutines.delay
+import java.util.Locale
 
 private enum class ConnectMode {
     SSH_BOOTSTRAP,
@@ -158,7 +158,7 @@ fun ConnectScreen(
                 pendingSshAutofill != null -> ConnectMode.SSH_BOOTSTRAP
                 initialConfig.isValid || pendingPairing != null -> ConnectMode.DIRECT_URI
                 else -> ConnectMode.SSH_BOOTSTRAP
-            }
+            },
         )
     }
 
@@ -313,9 +313,9 @@ fun ConnectScreen(
                                             DarkBackground.copy(alpha = 0.92f),
                                             DarkBackground.copy(alpha = 0.65f),
                                             Color.Transparent,
-                                        )
-                                    )
-                                )
+                                        ),
+                                    ),
+                                ),
                         )
                         Column(
                             modifier = Modifier
@@ -1003,7 +1003,7 @@ fun ConnectScreen(
                                     host = host.trim(),
                                     port = port,
                                     token = token.trim(),
-                                )
+                                ),
                             )
                         },
                         enabled = host.isNotBlank() && !isTesting,

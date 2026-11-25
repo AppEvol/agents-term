@@ -19,9 +19,6 @@ import com.example.ui.INLINE_CODE_TAG
 import com.example.ui.MarkdownText
 import com.example.ui.parseInlineStyles
 import com.example.ui.theme.HerdrTheme
-import java.io.File
-import java.io.FileOutputStream
-import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -30,6 +27,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.io.File
+import java.io.FileOutputStream
+import kotlin.math.abs
 
 /**
  * Renders [MarkdownText] to real pixels (Robolectric native graphics) at phone width.
@@ -66,7 +66,7 @@ class MarkdownRenderTest {
                         .testTag("root")
                         .width(411.dp)
                         .background(MaterialTheme.colorScheme.background)
-                        .padding(16.dp)
+                        .padding(16.dp),
                 ) {
                     MarkdownText(markdown = message)
                 }
@@ -97,10 +97,9 @@ class MarkdownRenderTest {
         return Rendered(cropped, background, codeBackground)
     }
 
-    private fun near(a: Int, b: Int, tolerance: Int = 6): Boolean =
-        abs(android.graphics.Color.red(a) - android.graphics.Color.red(b)) <= tolerance &&
-            abs(android.graphics.Color.green(a) - android.graphics.Color.green(b)) <= tolerance &&
-            abs(android.graphics.Color.blue(a) - android.graphics.Color.blue(b)) <= tolerance
+    private fun near(a: Int, b: Int, tolerance: Int = 6): Boolean = abs(android.graphics.Color.red(a) - android.graphics.Color.red(b)) <= tolerance &&
+        abs(android.graphics.Color.green(a) - android.graphics.Color.green(b)) <= tolerance &&
+        abs(android.graphics.Color.blue(a) - android.graphics.Color.blue(b)) <= tolerance
 
     /**
      * Heights of the vertical bands of rows that contain code background. Each text line with inline

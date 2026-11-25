@@ -406,7 +406,7 @@ internal fun inlineCodeLineRects(layout: TextLayoutResult): List<Rect> {
                     top = layout.getLineTop(line),
                     right = maxOf(first.right, last.right),
                     bottom = layout.getLineBottom(line),
-                )
+                ),
             )
         }
     }

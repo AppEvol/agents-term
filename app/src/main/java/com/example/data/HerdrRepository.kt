@@ -24,6 +24,7 @@ data class WorkspaceState(
     val lastCwd: String? = null,
     val messagesByTab: Map<String, List<ChatMessage>> = emptyMap(),
     val loadingTabIds: Set<String> = emptySet(),
+    val reopenedTabIds: Set<String> = emptySet(),
     val bannerMessage: String? = null,
 ) {
     val activeTab: TabRecord?
@@ -32,8 +33,31 @@ data class WorkspaceState(
     val activeMessages: List<ChatMessage>
         get() = activeTab?.let { messagesByTab[it.id] }.orEmpty()
 
+    /**
+     * The drawer button's badge: tabs whose latest turn ended without the user opening the result.
+     * The tab on screen never counts, since its result is already in front of the user. Each tab
+     * counted here carries an unread dot in the drawer.
+     */
     val attentionCount: Int
-        get() = tabs.count { it.unread || it.status == "blocked" || it.status == "error" }
+        get() = tabs.count { isTabUnread(it) }
+
+    fun isTabUnread(tab: TabRecord): Boolean = tab.unread && tab.id != activeTab?.id
+
+    /** Every tab is in exactly one of the three [TabActivity] states. */
+    fun activityOf(tab: TabRecord): TabActivity = when {
+        tab.status == "working" -> TabActivity.WORKING
+        isTabFinished(tab) -> TabActivity.FINISHED
+        else -> TabActivity.WAITING
+    }
+
+    fun isTabFinished(tab: TabRecord): Boolean = isTabTaskFinished(
+        tab = tab,
+        messages = messagesByTab[tab.id].orEmpty(),
+        manuallyReopened = tab.id in reopenedTabIds,
+    )
+
+    val finishedTabIds: Set<String>
+        get() = tabs.filter { isTabFinished(it) }.map { it.id }.toSet()
 }
 
 /**
@@ -80,7 +104,12 @@ fun reduceWorkspaceEvent(
             } else {
                 state.tabs + tab
             }
-            state.copy(tabs = updated)
+            val nextReopened = if (tab.status == "working" || tab.status == "done") {
+                state.reopenedTabIds - tab.id
+            } else {
+                state.reopenedTabIds
+            }
+            state.copy(tabs = updated, reopenedTabIds = nextReopened)
         }
 
         "tab_deleted" -> {
@@ -91,6 +120,7 @@ fun reduceWorkspaceEvent(
                 tabs = remaining,
                 selectedTabId = nextSelected,
                 messagesByTab = state.messagesByTab - id,
+                reopenedTabIds = state.reopenedTabIds - id,
             )
         }
 
@@ -202,10 +232,8 @@ suspend fun resolveInitialDirectoryListing(
         return result
     }
 
-    suspend fun loadHomeFallback(): Result<ResolvedDirectoryListing> {
-        return loadWithRetry(normalizedHome).map { homeListing ->
-            ResolvedDirectoryListing(listing = homeListing, fellBackToHome = true)
-        }
+    suspend fun loadHomeFallback(): Result<ResolvedDirectoryListing> = loadWithRetry(normalizedHome).map { homeListing ->
+        ResolvedDirectoryListing(listing = homeListing, fellBackToHome = true)
     }
 
     val initialResult = loadWithRetry(candidate)
@@ -271,7 +299,7 @@ class HerdrRepository(
                 config = cfg,
                 lastCwd = settings.loadLastCwd(cfg.host),
             )
-        }
+        },
     )
     val state: StateFlow<WorkspaceState> = _state.asStateFlow()
 
@@ -300,28 +328,26 @@ class HerdrRepository(
         }
     }
 
-    suspend fun testAndConnect(config: ConnectionConfig): Result<ServerInfo> {
-        return runCatching {
-            val info = api.getInfo(config)
-            settings.saveConnection(config)
-            val savedLastCwd = settings.loadLastCwd(config.host)
-            _state.update {
-                it.copy(
-                    config = config,
-                    serverInfo = info,
-                    lastCwd = savedLastCwd,
-                    connectionError = null,
-                )
-            }
-            connect(config)
-            info
-        }.onFailure { err ->
-            _state.update {
-                it.copy(
-                    connectionState = ConnectionState.ERROR,
-                    connectionError = err.message ?: "Unable to reach VM",
-                )
-            }
+    suspend fun testAndConnect(config: ConnectionConfig): Result<ServerInfo> = runCatching {
+        val info = api.getInfo(config)
+        settings.saveConnection(config)
+        val savedLastCwd = settings.loadLastCwd(config.host)
+        _state.update {
+            it.copy(
+                config = config,
+                serverInfo = info,
+                lastCwd = savedLastCwd,
+                connectionError = null,
+            )
+        }
+        connect(config)
+        info
+    }.onFailure { err ->
+        _state.update {
+            it.copy(
+                connectionState = ConnectionState.ERROR,
+                connectionError = err.message ?: "Unable to reach VM",
+            )
         }
     }
 
@@ -358,10 +384,13 @@ class HerdrRepository(
         val action = synchronized(socketLock) {
             when {
                 !shouldStayConnected -> ForegroundAction.NONE
+
                 s.connectionState == ConnectionState.CONNECTED -> ForegroundAction.REFRESH_ACTIVE_TAB
+
                 s.connectionState == ConnectionState.CONNECTING &&
                     webSocket != null &&
                     (clockMs() - lastConnectAttemptMs) < FOREGROUND_CONNECT_GRACE_MS -> ForegroundAction.NONE
+
                 else -> ForegroundAction.RECONNECT
             }
         }
@@ -422,6 +451,7 @@ class HerdrRepository(
                     return@openWebSocket
                 }
                 var selectedAfter: String? = null
+                var unreadVisibleTabId: String? = null
                 val applied = synchronized(socketLock) {
                     if (generation != socketGeneration || !shouldStayConnected) {
                         false
@@ -429,7 +459,15 @@ class HerdrRepository(
                         _state.update { current ->
                             val next = reduceWorkspaceEvent(current, envelope, preferredTabId = lastSavedTabId)
                             selectedAfter = next.selectedTabId
-                            next
+                            val visibleId = next.activeTab?.takeIf { it.unread }?.id
+                            unreadVisibleTabId = visibleId
+                            if (visibleId == null) {
+                                next
+                            } else {
+                                // Cleared locally too, so later events do not ask again while the
+                                // daemon's own update is still on its way.
+                                next.copy(tabs = next.tabs.map { if (it.id == visibleId) it.copy(unread = false) else it })
+                            }
                         }
                         true
                     }
@@ -441,6 +479,11 @@ class HerdrRepository(
                     selectedAfter?.let { tabId ->
                         refreshTabMessages(tabId)
                     }
+                }
+                if (applied) {
+                    // The daemon flags a tab unread whenever its turn ends, including the tab on
+                    // screen. Clear it here, or it shows up as unread once the user switches away.
+                    unreadVisibleTabId?.let { markTabRead(config, it) }
                 }
             },
             onClosed = { reason ->
@@ -537,11 +580,13 @@ class HerdrRepository(
         settings.saveLastTabId(tabId)
         _state.update { it.copy(selectedTabId = tabId) }
         refreshTabMessages(tabId)
-        val cfg = _state.value.config
-        if (cfg.isValid) {
-            scope.launch {
-                runCatching { api.markRead(cfg, tabId) }
-            }
+        markTabRead(_state.value.config, tabId)
+    }
+
+    private fun markTabRead(cfg: ConnectionConfig, tabId: String) {
+        if (!cfg.isValid) return
+        scope.launch {
+            runCatching { api.markRead(cfg, tabId) }
         }
     }
 
@@ -649,6 +694,15 @@ class HerdrRepository(
         return updateTab(tabId, UpdateTabRequest(systemPrompt = normalized))
     }
 
+    suspend fun updateTabStatus(tabId: String, status: String): Result<TabRecord> {
+        debugRecorder?.record("ui", "update_tab_status", "Updating tab=$tabId status=$status")
+        _state.update { cur ->
+            val nextReopened = if (status == "idle") cur.reopenedTabIds + tabId else cur.reopenedTabIds - tabId
+            cur.copy(reopenedTabIds = nextReopened)
+        }
+        return updateTab(tabId, UpdateTabRequest(status = status))
+    }
+
     suspend fun refreshAgentModels(
         agent: String,
         forceRefresh: Boolean = false,
@@ -710,18 +764,57 @@ class HerdrRepository(
             payload = text.take(500),
         )
         return runCatching {
-            api.sendMessage(cfg, tabId, text, overridePermissionMode)
+            val resp = api.sendMessage(cfg, tabId, text, overridePermissionMode)
+            resp.tab?.let { updated ->
+                _state.update { cur ->
+                    cur.copy(tabs = cur.tabs.map { if (it.id == updated.id) updated else it })
+                }
+            }
             Unit
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to send message")
         }
     }
 
-    suspend fun interruptTab(tabId: String) {
+    suspend fun interruptTab(
+        tabId: String,
+        processQueue: Boolean = false,
+        text: String? = null,
+        overridePermissionMode: String? = null,
+    ) {
         val cfg = _state.value.config
-        debugRecorder?.record("ui", "interrupt_tab", "Interrupting tab=$tabId")
-        runCatching { api.interruptTab(cfg, tabId) }
-            .onFailure { err -> showBanner(err.message ?: "Failed to interrupt") }
+        debugRecorder?.record(
+            "ui",
+            "interrupt_tab",
+            "Interrupting tab=$tabId processQueue=$processQueue hasText=${!text.isNullOrBlank()}",
+        )
+        runCatching {
+            val updated = api.interruptTab(
+                config = cfg,
+                tabId = tabId,
+                processQueue = processQueue,
+                text = text,
+                overridePermissionMode = overridePermissionMode,
+            )
+            if (updated != null) {
+                _state.update { cur ->
+                    cur.copy(tabs = cur.tabs.map { if (it.id == updated.id) updated else it })
+                }
+            }
+        }.onFailure { err -> showBanner(err.message ?: "Failed to interrupt") }
+    }
+
+    suspend fun removeQueuedMessage(tabId: String, queuedId: String) {
+        val cfg = _state.value.config
+        debugRecorder?.record("ui", "remove_queued_message", "Removing queued=$queuedId from tab=$tabId")
+        runCatching {
+            val updated = api.removeQueuedMessage(cfg, tabId, queuedId)
+            if (updated != null) {
+                _state.update { cur ->
+                    cur.copy(tabs = cur.tabs.map { if (it.id == updated.id) updated else it })
+                }
+            }
+        }.onFailure { err -> showBanner(err.message ?: "Failed to remove queued message") }
     }
 
     suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> {

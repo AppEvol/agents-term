@@ -1,5 +1,8 @@
 package com.example
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -139,6 +142,55 @@ class ChatToolCallsUiTest {
 
         // Verify strict chronological vertical layout: step 1 -> tools 1 -> step 2 -> tools 2 -> final answer
         assertTrue("Expected step1 < group1 < step2 < group2 < final", step1Top < group1Top && group1Top < step2Top && step2Top < group2Top && group2Top < finalTop)
+    }
+
+    @Test
+    fun liveRunKeepsItsLatestCallVisibleBetweenCallsAndCollapsesOnceTheTurnEnds() {
+        fun call(id: String, description: String) = ToolCallItem(
+            id = id,
+            name = "Bash",
+            inputSummary = "git $id",
+            inputJson = """{"command":"git $id","description":"$description"}""",
+            status = "done",
+            durationMs = 100L,
+        )
+        val t1 = call("t1", "Check git status")
+        val t2 = call("t2", "Inspect diff")
+
+        fun message(status: String) = ChatMessage(
+            id = "msg_between_calls",
+            tabId = "tab_1",
+            role = "assistant",
+            text = "",
+            toolCalls = listOf(t1, t2),
+            segments = listOf(MessageSegment("tool", toolCallId = "t1"), MessageSegment("tool", toolCallId = "t2")),
+            status = status,
+        )
+        var current by mutableStateOf(message("streaming"))
+
+        composeRule.setContent {
+            HerdrTheme {
+                ChatWorkspace(
+                    tab = testTab.copy(status = "working"),
+                    messages = listOf(current),
+                    isLoading = false,
+                    isConnected = true,
+                    onSendMessage = {},
+                    onInterrupt = {},
+                    onRetryFullAccess = {},
+                )
+            }
+        }
+
+        // Nothing is running, but the turn is: the last call holds the row the next one will take.
+        composeRule.onNodeWithText("2 tool calls · 2 done").assertIsDisplayed()
+        composeRule.onNodeWithText("Inspect diff").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithText("Check git status").fetchSemanticsNodes().isEmpty())
+
+        current = message("complete")
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("2 tool calls · 2 done").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithText("Inspect diff").fetchSemanticsNodes().isEmpty())
     }
 
     @Test

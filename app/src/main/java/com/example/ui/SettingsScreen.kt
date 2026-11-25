@@ -226,7 +226,7 @@ fun SettingsScreen(
                                 modifier = Modifier
                                     .size(10.dp)
                                     .clip(CircleShape)
-                                    .background(dotColor)
+                                    .background(dotColor),
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
@@ -381,6 +381,17 @@ fun SettingsScreen(
                             testTag = "debug_remote_inspection_switch",
                         )
 
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.settings_debug_remote_control_title),
+                            subtitle = stringResource(R.string.settings_debug_remote_control_subtitle),
+                            checked = debugSettings.remoteControlEnabled,
+                            enabled = debugSettings.enabled && debugSettings.remoteInspectionEnabled,
+                            onCheckedChange = { checked ->
+                                onUpdateDebugSettings { it.copy(remoteControlEnabled = checked) }
+                            },
+                            testTag = "debug_remote_control_switch",
+                        )
+
                         // VM destination path indicator
                         Surface(
                             shape = RoundedCornerShape(12.dp),
@@ -510,12 +521,12 @@ fun SettingsScreen(
                                         runCatching { shareDebugBundleFile(context, file) }
                                             .onFailure { err ->
                                                 snackbarHostState.showSnackbar(
-                                                    err.message ?: "Unable to open Android share sheet"
+                                                    err.message ?: "Unable to open Android share sheet",
                                                 )
                                             }
                                     }.onFailure { err ->
                                         snackbarHostState.showSnackbar(
-                                            err.message ?: "Failed to export debug ZIP"
+                                            err.message ?: "Failed to export debug ZIP",
                                         )
                                     }
                                 }
@@ -758,7 +769,7 @@ private fun SettingsSwitchRow(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
-                    alpha = if (enabled) 0.9f else 0.55f
+                    alpha = if (enabled) 0.9f else 0.55f,
                 ),
             )
         }

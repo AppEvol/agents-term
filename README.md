@@ -38,6 +38,15 @@ Verify the protocol models, pairing URI parser, WebSocket state reducer, and SSH
 gradle :app:testDebugUnitTest --tests "com.example.ModelsAndStateTest"
 ```
 
+### Static Checks
+Linting, formatting, import order, and dead-code detection for the Kotlin, Python, shell, and workflow code run from one script (CI runs the same one). It needs a JDK on `PATH` and downloads its pinned tools on first use:
+
+```bash
+scripts/static-checks.sh          # check
+scripts/static-checks.sh --fix    # apply automatic fixes, then check
+gradle :app:lintDebug             # Android Lint (needs the Android SDK)
+```
+
 ### Step 3: Build the Debug APK
 ```bash
 gradle :app:assembleDebug
@@ -66,7 +75,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ### Automatic Verified Releases (GitHub Actions)
-Every push to `main` that passes both `Build APK & Unit Tests` and `End-to-End Android Instrumented Tests` automatically publishes a new versioned GitHub Release (`v0.3.<run_number>-<short_sha>`) with auto-generated release notes, incrementing Android `versionCode` / `versionName`, and both `AgentsTerm-debug.apk` and `AgentsTerm-v0.3.<run_number>-<short_sha>-debug.apk` attached.
+Every push to `main` that passes `Static Checks`, `Build APK & Unit Tests`, the VM daemon tests, and `End-to-End Android Instrumented Tests` automatically publishes a new versioned GitHub Release (`v0.3.<run_number>-<short_sha>`) with auto-generated release notes, incrementing Android `versionCode` / `versionName`, and both `AgentsTerm-debug.apk` and `AgentsTerm-v0.3.<run_number>-<short_sha>-debug.apk` attached.
 
 - **Always-latest verified APK:** `https://github.com/nedn/agents-term/releases/latest/download/AgentsTerm-debug.apk`
 - **Legacy rolling tag link (also kept in sync):** `https://github.com/nedn/agents-term/releases/download/latest/AgentsTerm-debug.apk`
@@ -100,7 +109,7 @@ else git clone --depth 1 https://github.com/nedn/agents-term.git "$DIR" && bash 
 `install.sh` does the following:
 - Updates the checkout (`--ref <branch>`, default `main`; `--no-update` skips this step).
 - Restarts the daemon unless it is already running the checkout's exact commit (`--force-restart` always restarts). A restart ends agent turns that are in progress, so an up-to-date daemon is left alone.
-- Installs `~/.config/systemd/user/herdr-mobile.service` and enables linger. Without `systemd --user` it starts a detached process logging to `~/.config/herdr-mobile/daemon.log`.
+- Enables linger (`loginctl enable-linger`) and installs `~/.config/systemd/user/herdr-mobile.service`. Without `systemd --user` it starts a detached process logging to `~/.config/herdr-mobile/daemon.log` and installs an `@reboot` crontab entry so the daemon survives a reboot. Output always states whether the daemon will survive a reboot.
 - Replaces the legacy Node daemon (`~/agent-terminal`) if one is running. Config, token, and tab history in `~/.config/herdr-mobile/` are reused as-is.
 - Health-checks `http://<tailscale-ip>:<port>/api/info`, requires it to report the commit that was just installed, and prints the `herdr://connect?...` pairing URI.
 
@@ -132,7 +141,7 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 | `GET /api/agents/:agent/models` | Returns (and optionally refreshes via `?refresh=1`) available models for an agent CLI (`agy`, `claude`, `codex`). |
 | `GET /api/tabs` | Lists all persistent agent tabs and `activeTabId`. |
 | `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`, optional `systemPrompt`). |
-| `PATCH /api/tabs/:id` | Renames a tab, updates its tool `permissionMode`, changes its `model`, or updates its `systemPrompt` (pass `""` to clear). |
+| `PATCH /api/tabs/:id` | Renames a tab, updates its tool `permissionMode`, changes its `model`, updates its `systemPrompt` (pass `""` to clear), or sets its task `status` (`"done"` / `"idle"`). |
 | `DELETE /api/tabs/:id` | Closes a persistent tab. |
 | `GET /api/tabs/:id/messages` | Fetches full message/tool/thinking transcript for a tab. |
 | `POST /api/tabs/:id/messages` | Sends a prompt to the tab (with optional `overridePermissionMode`). |
@@ -141,7 +150,7 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 | `GET /api/fs?path=...` | Lists directories on the VM for the New Tab directory browser. |
 | `POST /api/debug/dumps` | Uploads an Android debug dump (`events.ndjson`, `state.json`, `logcat.txt`, `crash.txt`, optional `screenshot.png`) into `~/.config/herdr-mobile/debug-dumps/` and updates the `latest` symlink. |
 | `GET /api/debug/dumps` | Lists recent Android debug dump folders stored on the VM. |
-| `GET /api/app/status` | App state reporter: whether a connected app has remote inspection enabled. |
+| `GET /api/app/status` | App state reporter: whether a connected app has remote inspection (`ready`) and remote control (`controlReady`) enabled. |
 | `POST /api/app/command` | App state reporter: relays `{command, args, timeoutMs}` to the app over the WebSocket and returns its result (used by `app_state_cli/`). |
 | `WS /ws?token=...` | Real-time stream of `snapshot`, `tab_*`, `message_created`, `message_delta`, `tool_update`, and `message_updated` events. The app sends `app_hello` and `app_state_response` frames, and the daemon sends `app_state_request` frames (see `app_state_cli/README.md`). |
 

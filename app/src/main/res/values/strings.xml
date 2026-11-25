@@ -23,7 +23,10 @@
     <string name="action_rename_tab">Rename tab</string>
     <string name="action_close_tab">Close tab</string>
     <string name="action_send">Send message</string>
-    <string name="action_stop_agent">Stop agent</string>
+    <string name="action_queue_message">Queue message</string>
+    <string name="action_stop_agent">Hold to stop agent</string>
+    <string name="action_hold_interrupt_queue">Hold to interrupt and process queue</string>
+    <string name="action_remove_queued">Remove queued message</string>
     <string name="action_copy_code">Copy code</string>
     <string name="action_copy_message">Copy response</string>
     <string name="action_toggle_token">Toggle token visibility</string>
@@ -53,6 +56,15 @@
     <string name="composer_reconnecting">Reconnecting to VM…</string>
     <string name="composer_shell_placeholder">Run a command in %1$s…</string>
     <string name="composer_agent_placeholder">Message %1$s…</string>
+    <string name="composer_queue_shell_placeholder">Queue next command…</string>
+    <string name="composer_queue_agent_placeholder">Queue next message…</string>
+    <string name="queue_header_count">Queued (%1$d)</string>
+    <string name="queue_hint_hold_to_run">Hold send to interrupt &amp; run</string>
+    <string name="queue_hint_tap_to_run">Tap send to run</string>
+    <string name="hold_hint_stop">Hold button to stop agent</string>
+    <string name="hold_hint_interrupt_run">Hold button to interrupt &amp; run</string>
+    <string name="holding_interrupt_status">Keep holding to interrupt…</string>
+    <string name="holding_interrupt_run_status">Keep holding to interrupt &amp; run…</string>
     <string name="permission_required_title">Permission Required</string>
     <string name="permission_required_body">Agent was blocked waiting for approval: %1$s</string>
     <string name="thinking_label">Reasoning</string>
@@ -61,8 +73,12 @@
     <string name="tool_input_label">Input</string>
     <string name="tool_output_label">Output</string>
     <string name="status_interrupted">Interrupted by user</string>
-    <string name="copied_snackbar">Copied to clipboard</string>
     <string name="markdown_path_copied">Copied VM path: %1$s</string>
+    <string name="tab_unread">Unread</string>
+    <string name="tab_activity_working">Working</string>
+    <string name="tab_activity_waiting">Waiting for instructions</string>
+    <string name="status_working_badge">Working</string>
+    <string name="status_working_fallback">Working…</string>
     <string name="scroll_to_bottom">Scroll to latest</string>
     <string name="connect_mode_ssh_bootstrap">SSH Auto-Setup</string>
     <string name="connect_mode_direct">Direct / URI</string>
@@ -83,7 +99,6 @@
     <string name="ssh_prompt_customize">Customize repair agent prompt</string>
     <string name="ssh_prompt_reset">Reset default</string>
     <string name="ssh_bootstrap_button">SSH &amp; Bootstrap VM</string>
-    <string name="ssh_bootstrap_running">Bootstrapping VM over SSH…</string>
     <string name="ssh_bootstrap_cancel">Cancel</string>
     <string name="ssh_console_title">LIVE VM BOOTSTRAP OUTPUT</string>
     <string name="ssh_copy_logs">Copy bootstrap logs</string>
@@ -114,8 +129,11 @@
     <string name="settings_debug_logcat_subtitle">Attach recent process logs from Android logcat.</string>
     <string name="settings_debug_autoupload_title">Auto-upload on errors</string>
     <string name="settings_debug_remote_inspection_title">Allow VM agents to inspect the app</string>
-    <string name="settings_debug_remote_inspection_subtitle">Agents on the connected VM can read this app\'s debug log, state, logcat and crash report, and take screenshots (app_state_cli). Read-only; you get a notice for each screenshot.</string>
+    <string name="settings_debug_remote_inspection_subtitle">Agents on the connected VM can read this app\'s debug log, state, logcat and crash report, and take screenshots and read what is on screen (app_state_cli). Read-only; you get a notice for each screenshot.</string>
     <string name="app_state_screenshot_toast">VM agent captured a screenshot</string>
+    <string name="settings_debug_remote_control_title">Allow VM agents to control the app</string>
+    <string name="settings_debug_remote_control_subtitle">Agents on the connected VM can also tap, swipe, type and press Back in this app, as if they were holding the phone (app_state_cli), for example to QA test it. Anything you can do in the app, they can do. Leave off unless you are running such a test.</string>
+    <string name="app_state_control_toast">VM agent is controlling the app</string>
     <string name="settings_debug_autoupload_subtitle">Automatically send a dump to the VM when HTTP or WebSocket errors occur (max once per minute).</string>
     <string name="settings_debug_vm_path_label">VM debug storage folder</string>
     <string name="settings_debug_vm_path_default">~/.config/herdr-mobile/debug-dumps/latest</string>
@@ -163,4 +181,20 @@
     <string name="dialog_system_prompt_title">Tab System Prompt</string>
     <string name="dialog_system_prompt_include_label">Include system prompt</string>
     <string name="dialog_system_prompt_note">Applies to this tab\'s agent harness on subsequent turns. Turn off or leave empty to send no custom system prompt.</string>
+    <plurals name="drawer_finished_count">
+        <item quantity="one">%1$d finished</item>
+        <item quantity="other">%1$d finished</item>
+    </plurals>
+    <string name="drawer_close_finished">Close finished</string>
+    <string name="drawer_task_finished_hint">Task finished · safe to close</string>
+    <string name="action_close_finished_tab">Close finished tab</string>
+    <string name="action_mark_task_done">Mark task done</string>
+    <string name="action_mark_tab_active">Mark as active</string>
+    <string name="task_summary_label">Task summary</string>
+    <string name="task_summary_empty">No task yet — send a prompt to summarize this tab.</string>
+    <string name="task_summary_latest_prefix">Latest: %1$s</string>
+    <string name="task_summary_show_more">Show more</string>
+    <string name="task_summary_show_less">Show less</string>
+    <string name="action_dismiss_task_summary">Dismiss task summary</string>
+    <string name="action_toggle_task_summary">Toggle task summary</string>
 </resources>

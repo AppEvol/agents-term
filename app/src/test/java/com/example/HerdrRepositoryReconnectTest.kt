@@ -14,7 +14,6 @@ import com.example.data.TabMessagesResponse
 import com.example.data.TabRecord
 import com.example.data.WsServerEnvelope
 import com.example.data.resolveInitialDirectoryListing
-import java.io.IOException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -28,6 +27,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HerdrRepositoryReconnectTest {
@@ -101,6 +101,11 @@ class HerdrRepositoryReconnectTest {
     ) : HerdrApiClient() {
         val sockets = mutableListOf<FakeWebSocketHandle>()
         val listDirCalls = mutableListOf<String?>()
+        val markReadCalls = mutableListOf<String>()
+
+        override suspend fun markRead(config: ConnectionConfig, tabId: String) {
+            markReadCalls.add(tabId)
+        }
 
         override fun openWebSocket(
             config: ConnectionConfig,
@@ -142,12 +147,10 @@ class HerdrRepositoryReconnectTest {
             )
         }
 
-        override suspend fun getTabMessages(config: ConnectionConfig, tabId: String): TabMessagesResponse {
-            return TabMessagesResponse(
-                tab = TabRecord(id = tabId, title = "Tab", agent = "agy", cwd = "/home/test"),
-                messages = emptyList(),
-            )
-        }
+        override suspend fun getTabMessages(config: ConnectionConfig, tabId: String): TabMessagesResponse = TabMessagesResponse(
+            tab = TabRecord(id = tabId, title = "Tab", agent = "agy", cwd = "/home/test"),
+            messages = emptyList(),
+        )
     }
 
     private val testConfig = ConnectionConfig(host = "100.71.219.26", port = 7501, token = "tok_test")
@@ -219,7 +222,7 @@ class HerdrRepositoryReconnectTest {
                 type = "snapshot",
                 tabs = listOf(TabRecord(id = "stale_tab", title = "Stale", agent = "agy", cwd = "/tmp")),
                 activeTabId = "stale_tab",
-            )
+            ),
         )
         socket1.emitClosed("Socket closed")
 
@@ -451,7 +454,7 @@ class HerdrRepositoryReconnectTest {
                 type = "snapshot",
                 server = ServerInfo(version = "0.1.0", hostname = "vm", defaultCwd = "/home/test"),
                 tabs = emptyList(),
-            )
+            ),
         )
 
         // Creating a tab persists lastCwd in both WorkspaceState and ConnectionSettings
@@ -489,6 +492,37 @@ class HerdrRepositoryReconnectTest {
     }
 
     @Test
+    fun turnFinishingOnTheVisibleTabIsMarkedReadButOtherTabsStayUnread() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val api = FakeApiClient(fireClosedOnCancel = false)
+        val repo = HerdrRepository(
+            api = api,
+            settings = InMemorySettings(connection = testConfig),
+            ioDispatcher = dispatcher,
+        )
+        val visible = TabRecord(id = "t1", title = "Visible", agent = "claude", cwd = "/home/test", status = "working")
+        val other = TabRecord(id = "t2", title = "Other", agent = "claude", cwd = "/home/test", status = "working")
+
+        repo.connect(testConfig)
+        val socket = api.sockets[0]
+        socket.emitOpen()
+        socket.emitEvent(WsServerEnvelope(type = "snapshot", tabs = listOf(visible, other), activeTabId = "t1"))
+        runCurrent()
+        assertEquals(emptyList<String>(), api.markReadCalls)
+
+        // The daemon flags every finished turn unread, including the tab on screen.
+        socket.emitEvent(WsServerEnvelope(type = "tab_updated", tab = visible.copy(status = "done", unread = true)))
+        runCurrent()
+        assertEquals(listOf("t1"), api.markReadCalls)
+        assertEquals(0, repo.state.value.attentionCount)
+
+        socket.emitEvent(WsServerEnvelope(type = "tab_updated", tab = other.copy(status = "done", unread = true)))
+        runCurrent()
+        assertEquals(listOf("t1"), api.markReadCalls)
+        assertEquals(1, repo.state.value.attentionCount)
+    }
+
+    @Test
     fun appStateRequestsAreAnsweredOnTheSocketAndHelloFollowsSnapshot() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
@@ -514,7 +548,7 @@ class HerdrRepositoryReconnectTest {
                 requestId = "r1",
                 command = "logs",
                 args = mapOf("limit" to 5.0),
-            )
+            ),
         )
         runCurrent()
         assertEquals(listOf(Triple("r1", "logs", mapOf<String, Any?>("limit" to 5.0))), handler.requests)
@@ -554,7 +588,7 @@ class HerdrRepositoryReconnectTest {
     @Test
     fun appStateRequestDecodesFromDaemonJson() {
         val env = com.example.data.decodeHerdrJson<WsServerEnvelope>(
-            """{"type":"app_state_request","requestId":"abc","command":"logs","args":{"limit":5,"categories":["http"]}}"""
+            """{"type":"app_state_request","requestId":"abc","command":"logs","args":{"limit":5,"categories":["http"]}}""",
         )
         assertEquals("abc", env.requestId)
         assertEquals("logs", env.command)

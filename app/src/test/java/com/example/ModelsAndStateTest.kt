@@ -1,8 +1,6 @@
 package com.example
 
-import com.example.data.AgentModelOption
 import com.example.data.AssistantDisplayBlock
-import com.example.data.AvailableAgentInfo
 import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
 import com.example.data.CreateTabRequest
@@ -12,12 +10,17 @@ import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DebugRecorder
 import com.example.data.FsListResponse
+import com.example.data.InterruptTabRequest
 import com.example.data.MessageSegment
 import com.example.data.ModelSlashCommand
+import com.example.data.QueueActionResponse
+import com.example.data.QueuedMessage
+import com.example.data.SendMessageResponse
 import com.example.data.ServerInfo
 import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
+import com.example.data.TabActivity
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
 import com.example.data.UpdateTabRequest
@@ -33,6 +36,8 @@ import com.example.data.extractPairingUriFromOutput
 import com.example.data.formatModelChipLabel
 import com.example.data.formatToolCallSummary
 import com.example.data.formatToolRunSummary
+import com.example.data.isTabTaskFinished
+import com.example.data.isTaskFinishedText
 import com.example.data.normalizeFsPath
 import com.example.data.parseAgyStreamJsonLine
 import com.example.data.parseModelSlashCommand
@@ -43,8 +48,11 @@ import com.example.data.resolveAgentModelCatalog
 import com.example.data.resolveDefaultSystemPrompt
 import com.example.data.resolveModelIdFromQuery
 import com.example.data.resolvePreferredNewTabCwd
+import com.example.data.resolveTabLatestDetail
+import com.example.data.resolveTabTaskSummary
 import com.example.data.sanitizeDebugText
 import com.example.data.summarizeCommandForDisplay
+import com.example.data.summarizeTaskPromptForDisplay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -58,7 +66,7 @@ class ModelsAndStateTest {
     @Test
     fun parsePairingUriExtractsHostPortAndToken() {
         val cfg = ConnectionConfig.parsePairingUri(
-            "herdr://connect?host=100.71.219.26&port=7501&token=abc_123"
+            "herdr://connect?host=100.71.219.26&port=7501&token=abc_123",
         )
         assertNotNull(cfg)
         assertEquals("100.71.219.26", cfg!!.host)
@@ -185,7 +193,7 @@ class ModelsAndStateTest {
         val rawOutput = """
             >>> Invoking Antigravity (agy --dangerously-skip-permissions) on dev-vm...
             Setup complete! Connect using:
-            ${esc}[32m`herdr://connect?host=100.88.12.4&port=7501&token=tok_xyz99`.${esc}[0m
+            $esc[32m`herdr://connect?host=100.88.12.4&port=7501&token=tok_xyz99`.$esc[0m
         """.trimIndent()
 
         val extracted = extractPairingUriFromOutput(rawOutput)
@@ -236,6 +244,7 @@ class ModelsAndStateTest {
         assertTrue(prompt.contains("git clone --depth 1 --branch main https://github.com/nedn/agents-term.git"))
         assertTrue(prompt.contains("bash \"\$HOME/.local/share/agentsterm/agents-term/daemon/install.sh\" --port 7600 --ref main"))
         assertTrue(prompt.contains("Do not write your own daemon"))
+        assertTrue(prompt.contains("sudo loginctl enable-linger"))
         assertFalse(prompt.contains("Node.js"))
     }
 
@@ -259,33 +268,33 @@ class ModelsAndStateTest {
         assertNull(parseAgyStreamJsonLine(">>> plain shell output"))
 
         val initEvent = parseAgyStreamJsonLine(
-            """{"event":"init","conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","init":{"cwd":"/home/ned"}}"""
+            """{"event":"init","conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","init":{"cwd":"/home/ned"}}""",
         )
         assertNotNull(initEvent)
         assertEquals("9fedea5e-6c97-4678-b333-f40fa796d7ed", initEvent!!.conversationId)
         assertTrue(initEvent.displayLines.single().contains("9fedea5e"))
 
         val activeTool = parseAgyStreamJsonLine(
-            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"npm run build","toolSummary":"Build server"}}}}"""
+            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"npm run build","toolSummary":"Build server"}}}}""",
         )
         assertNotNull(activeTool)
         assertEquals("[tool] run_command: Build server", activeTool!!.displayLines.single())
 
         val doneTool = parseAgyStreamJsonLine(
-            """{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":1.25,"tool_info":{"output":"herdr://connect?host=100.71.219.26&port=7501&token=abc"}}}"""
+            """{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":1.25,"tool_info":{"output":"herdr://connect?host=100.71.219.26&port=7501&token=abc"}}}""",
         )
         assertNotNull(doneTool)
         assertEquals("[tool done] run_command (1.3s)", doneTool!!.displayLines.single())
         assertNotNull(extractPairingUriFromOutput(doneTool.pairingSourceText!!))
 
         val delta = parseAgyStreamJsonLine(
-            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"Setup done\n"}}"""
+            """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"Setup done\n"}}""",
         )
         assertNotNull(delta)
         assertEquals("Setup done\n", delta!!.textDelta)
 
         val result = parseAgyStreamJsonLine(
-            """{"event":"result","result":{"conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","status":"SUCCESS","response":"herdr://connect?host=100.71.219.26&port=7501&token=tok123\n","duration_seconds":5.3,"num_turns":2}}"""
+            """{"event":"result","result":{"conversation_id":"9fedea5e-6c97-4678-b333-f40fa796d7ed","status":"SUCCESS","response":"herdr://connect?host=100.71.219.26&port=7501&token=tok123\n","duration_seconds":5.3,"num_turns":2}}""",
         )
         assertNotNull(result)
         assertTrue(result!!.isResult)
@@ -297,16 +306,16 @@ class ModelsAndStateTest {
     @Test
     fun sshBootstrapConfigValidatesHostAndUsername() {
         assertTrue(
-            SshBootstrapConfig(host = "100.71.219.26", username = "ned").isValid
+            SshBootstrapConfig(host = "100.71.219.26", username = "ned").isValid,
         )
         assertTrue(
-            SshBootstrapConfig(host = "dev-vm.tail1234.ts.net", username = "ubuntu").isValid
+            SshBootstrapConfig(host = "dev-vm.tail1234.ts.net", username = "ubuntu").isValid,
         )
         assertFalse(
-            SshBootstrapConfig(host = "100.71.219.26; rm -rf /", username = "ned").isValid
+            SshBootstrapConfig(host = "100.71.219.26; rm -rf /", username = "ned").isValid,
         )
         assertFalse(
-            SshBootstrapConfig(host = "100.71.219.26", username = "ned && id").isValid
+            SshBootstrapConfig(host = "100.71.219.26", username = "ned && id").isValid,
         )
     }
 
@@ -340,11 +349,53 @@ class ModelsAndStateTest {
     }
 
     @Test
+    fun everyTabIsWorkingWaitingOrFinishedAndTheBadgeCountsUnopenedResults() {
+        fun tab(id: String, status: String = "idle", unread: Boolean = false) = TabRecord(
+            id = id,
+            title = id,
+            agent = "claude",
+            cwd = "/home/ned/app",
+            status = status,
+            unread = unread,
+        )
+
+        val state = WorkspaceState(
+            tabs = listOf(
+                tab("t1", unread = true),
+                tab("t2", unread = true),
+                tab("t3", status = "blocked"),
+                tab("t4", status = "error", unread = true),
+                tab("t5", status = "working"),
+                tab("t6", status = "done", unread = true),
+            ),
+            selectedTabId = "t1",
+        )
+        assertEquals(
+            listOf(
+                TabActivity.WAITING,
+                TabActivity.WAITING,
+                TabActivity.WAITING,
+                TabActivity.WAITING,
+                TabActivity.WORKING,
+                TabActivity.FINISHED,
+            ),
+            state.tabs.map { state.activityOf(it) },
+        )
+        // The badge is the unread tabs other than the one on screen, whatever state they are in.
+        assertEquals(listOf("t2", "t4", "t6"), state.tabs.filter { state.isTabUnread(it) }.map { it.id })
+        assertEquals(3, state.attentionCount)
+        assertEquals(4, state.copy(selectedTabId = "t5").attentionCount)
+        // With no explicit selection the first tab is the one shown.
+        assertEquals(3, state.copy(selectedTabId = null).attentionCount)
+        assertEquals(0, WorkspaceState(tabs = listOf(tab("t1", unread = true)), selectedTabId = "t1").attentionCount)
+    }
+
+    @Test
     fun debugDumpUploadSerializationAndWorkspaceRedaction() {
         val state = WorkspaceState(
             config = ConnectionConfig(host = "100.71.219.26", port = 7501, token = "my_private_bearer_token"),
             tabs = listOf(
-                TabRecord(id = "t1", title = "Agy", agent = "agy", cwd = "/home/ned/app", status = "working")
+                TabRecord(id = "t1", title = "Agy", agent = "agy", cwd = "/home/ned/app", status = "working"),
             ),
             selectedTabId = "t1",
         )
@@ -368,7 +419,7 @@ class ModelsAndStateTest {
         assertEquals("agy agent mode glitched", decoded.note)
 
         val resp = decodeHerdrJson<DebugDumpUploadResponse>(
-            """{"ok":true,"dumpId":"abcd1234","remoteDir":"/home/ned/.config/herdr-mobile/debug-dumps/latest","latestSymlink":"/home/ned/.config/herdr-mobile/debug-dumps/latest","files":["summary.md","events.ndjson"]}"""
+            """{"ok":true,"dumpId":"abcd1234","remoteDir":"/home/ned/.config/herdr-mobile/debug-dumps/latest","latestSymlink":"/home/ned/.config/herdr-mobile/debug-dumps/latest","files":["summary.md","events.ndjson"]}""",
         )
         assertTrue(resp.ok)
         assertEquals("abcd1234", resp.dumpId)
@@ -398,7 +449,7 @@ class ModelsAndStateTest {
         assertEquals(SshAuthMethod.PRIVATE_KEY, parsed.authMethod)
 
         val herdrUri = parseSshSetupUri(
-            "herdr://ssh?host=ned-vm&username=ubuntu&port=2200&daemonPort=7505&authMethod=password"
+            "herdr://ssh?host=ned-vm&username=ubuntu&port=2200&daemonPort=7505&authMethod=password",
         )
         assertNotNull(herdrUri)
         assertEquals("ned-vm", herdrUri!!.host)
@@ -557,11 +608,11 @@ class ModelsAndStateTest {
         assertEquals("/home/ned/projects", normalizeFsPath(" /home/ned/projects/ "))
 
         val legacyFs = decodeHerdrJson<FsListResponse>(
-            """{"path":"/home/ned","parent":"/home","directories":[]}"""
+            """{"path":"/home/ned","parent":"/home","directories":[]}""",
         )
         assertNull(legacyFs.exists)
         val explicitFs = decodeHerdrJson<FsListResponse>(
-            """{"path":"/home/ned/gone","parent":"/home/ned","directories":[],"exists":false}"""
+            """{"path":"/home/ned/gone","parent":"/home/ned","directories":[],"exists":false}""",
         )
         assertEquals(false, explicitFs.exists)
     }
@@ -728,11 +779,11 @@ class ModelsAndStateTest {
 
         // JSON backward compatibility: decodes with and without segments
         val withoutSegments = decodeHerdrJson<ChatMessage>(
-            """{"id":"m1","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[]}"""
+            """{"id":"m1","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[]}""",
         )
         assertTrue(withoutSegments.segments.isEmpty())
         val withSegments = decodeHerdrJson<ChatMessage>(
-            """{"id":"m2","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[],"segments":[{"type":"text","text":"Hi"}]}"""
+            """{"id":"m2","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[],"segments":[{"type":"text","text":"Hi"}]}""",
         )
         assertEquals(listOf(MessageSegment(type = "text", text = "Hi")), withSegments.segments)
     }
@@ -789,7 +840,7 @@ class ModelsAndStateTest {
                 }
               ]
             }
-            """.trimIndent()
+            """.trimIndent(),
         )
         assertEquals("From daemon", snapshotWithPrompt.server?.defaultSystemPrompt)
         assertEquals("From daemon full access", snapshotWithPrompt.server?.defaultSystemPromptFullAccess)
@@ -802,5 +853,169 @@ class ModelsAndStateTest {
         assertTrue(clearJson.contains("\"systemPrompt\":\"\""))
         val titleOnlyJson = encodeHerdrJson(UpdateTabRequest(title = "Renamed"))
         assertFalse(titleOnlyJson.contains("\"systemPrompt\""))
+    }
+
+    @Test
+    fun finishedTaskDetectionAndWorkspaceStateWork() {
+        assertTrue(isTaskFinishedText("This task is finished — you can close this tab whenever you're ready."))
+        assertTrue(isTaskFinishedText("All tests pass.\n\nFeel free to close this tab."))
+        assertTrue(isTaskFinishedText("Done, it is safe to close the tab now."))
+        assertFalse(isTaskFinishedText("Do not close this tab yet."))
+        assertFalse(isTaskFinishedText("The prompt asks agents to tell users that they can close the tab."))
+        assertFalse(isTaskFinishedText("```text\nYou can close this tab.\n```"))
+        assertFalse(isTaskFinishedText("You can close this tab.\n\nWait, one more thing to fix."))
+
+        val explicitDone = TabRecord("t_done", "Done Tab", "agy", "/home/ned", status = "done")
+        val legacyDone = TabRecord(
+            "t_legacy",
+            "Legacy Tab",
+            "claude",
+            "/home/ned",
+            status = "idle",
+            lastMessagePreview = "All set — you can close this tab.",
+        )
+        val workingTab = TabRecord("t_work", "Working Tab", "codex", "/home/ned", status = "working")
+        val shellTab = TabRecord(
+            "t_shell",
+            "Shell",
+            "shell",
+            "/home/ned",
+            status = "done",
+            lastMessagePreview = "You can close this tab.",
+        )
+
+        assertTrue(isTabTaskFinished(explicitDone))
+        assertTrue(isTabTaskFinished(legacyDone))
+        assertFalse(isTabTaskFinished(legacyDone, manuallyReopened = true))
+        assertFalse(isTabTaskFinished(workingTab))
+        assertFalse(isTabTaskFinished(shellTab))
+
+        val ws = WorkspaceState(tabs = listOf(explicitDone, legacyDone, workingTab, shellTab))
+        assertEquals(setOf("t_done", "t_legacy"), ws.finishedTabIds)
+
+        val statusJson = encodeHerdrJson(UpdateTabRequest(status = "done"))
+        assertTrue(statusJson.contains("\"status\":\"done\""))
+    }
+
+    @Test
+    fun queuedMessagesSerializationAndWorkspaceReductionRemainBackwardCompatible() {
+        // Legacy tab JSON without queuedMessages decodes with an empty queue
+        val legacyTab = decodeHerdrJson<TabRecord>(
+            """{"id":"tab_legacy","title":"Agy","agent":"agy","cwd":"/home/ned","status":"working"}""",
+        )
+        assertTrue(legacyTab.queuedMessages.isEmpty())
+
+        // Queued SendMessageResponse decodes cleanly without userMessage/assistantMessage
+        val queuedResp = decodeHerdrJson<SendMessageResponse>(
+            """
+            {
+              "queued": true,
+              "queuedMessage": {"id": "q_1", "text": "Follow up", "createdAt": 1700000001000},
+              "tab": {
+                "id": "tab_1",
+                "title": "Agy",
+                "agent": "agy",
+                "cwd": "/home/ned",
+                "status": "working",
+                "queuedMessages": [{"id": "q_1", "text": "Follow up", "createdAt": 1700000001000}]
+              }
+            }
+            """.trimIndent(),
+        )
+        assertTrue(queuedResp.queued)
+        assertNull(queuedResp.userMessage)
+        assertEquals("q_1", queuedResp.queuedMessage?.id)
+        assertEquals(listOf("Follow up"), queuedResp.tab?.queuedMessages?.map { it.text })
+
+        // InterruptTabRequest and QueueActionResponse round-trip cleanly (including legacy {"ok":true})
+        val intrJson = encodeHerdrJson(InterruptTabRequest(processQueue = true, text = "Run now"))
+        assertTrue(intrJson.contains("\"processQueue\":true"))
+        assertTrue(intrJson.contains("\"text\":\"Run now\""))
+        val legacyOk = decodeHerdrJson<QueueActionResponse>("""{"ok":true}""")
+        assertTrue(legacyOk.ok)
+        assertNull(legacyOk.tab)
+
+        // reduceWorkspaceEvent propagates queuedMessages updates via tab_updated
+        val initial = reduceWorkspaceEvent(
+            WorkspaceState(),
+            WsServerEnvelope(type = "snapshot", tabs = listOf(legacyTab), activeTabId = "tab_legacy"),
+        )
+        val withQueue = legacyTab.copy(
+            queuedMessages = listOf(QueuedMessage(id = "q_1", text = "Second prompt")),
+        )
+        val afterUpdate = reduceWorkspaceEvent(
+            initial,
+            WsServerEnvelope(type = "tab_updated", tab = withQueue),
+        )
+        assertEquals(listOf("Second prompt"), afterUpdate.activeTab?.queuedMessages?.map { it.text })
+    }
+
+    @Test
+    fun taskSummarySerializationAndFallbackResolutionWork() {
+        // Legacy JSON without taskSummary decodes with null
+        val legacyTab = decodeHerdrJson<TabRecord>(
+            """{"id":"tab_old","title":"Agy","agent":"agy","cwd":"/home/ned","lastMessagePreview":"Done!"}""",
+        )
+        assertNull(legacyTab.taskSummary)
+
+        // Newer daemon JSON with taskSummary decodes cleanly
+        val modernTab = decodeHerdrJson<TabRecord>(
+            """
+            {
+              "id": "tab_new",
+              "title": "Agy",
+              "agent": "agy",
+              "cwd": "/home/ned",
+              "status": "idle",
+              "lastMessagePreview": "All tests pass.",
+              "taskSummary": "Fix daemon reconnect race condition"
+            }
+            """.trimIndent(),
+        )
+        assertEquals("Fix daemon reconnect race condition", modernTab.taskSummary)
+        assertEquals("Fix daemon reconnect race condition", resolveTabTaskSummary(modernTab, emptyList()))
+        assertEquals("All tests pass.", resolveTabLatestDetail(modernTab, modernTab.taskSummary))
+        // Avoid repeating identical text in latest detail
+        assertNull(
+            resolveTabLatestDetail(
+                modernTab.copy(lastMessagePreview = "Fix daemon reconnect race condition"),
+                modernTab.taskSummary,
+            ),
+        )
+
+        // Older daemon fallback derives summary from first non-/model user message
+        val messages = listOf(
+            ChatMessage(id = "m1", tabId = "tab_old", role = "user", text = "/model opus"),
+            ChatMessage(id = "m2", tabId = "tab_old", role = "assistant", text = "Switched"),
+            ChatMessage(
+                id = "m3",
+                tabId = "tab_old",
+                role = "user",
+                text = "## Debug `ws` drop\nCheck [logs](https://example.com)",
+            ),
+        )
+        assertEquals("Debug ws drop Check logs", resolveTabTaskSummary(legacyTab, messages))
+        assertEquals("Done!", resolveTabTaskSummary(legacyTab, emptyList()))
+        assertNull(resolveTabTaskSummary(legacyTab.copy(lastMessagePreview = null), emptyList()))
+
+        // Working / blocked / error latest detail uses statusDetail or clear fallback
+        assertEquals(
+            "Running pytest",
+            resolveTabLatestDetail(modernTab.copy(status = "working", statusDetail = "Running pytest"), modernTab.taskSummary),
+        )
+        assertEquals(
+            "Waiting for approval",
+            resolveTabLatestDetail(modernTab.copy(status = "blocked", statusDetail = null), modernTab.taskSummary),
+        )
+        assertEquals(
+            "Last turn failed",
+            resolveTabLatestDetail(modernTab.copy(status = "error", statusDetail = null), modernTab.taskSummary),
+        )
+
+        // Code-block stripping and clean truncation
+        assertEquals(
+            "Investigate crash in MainActivity",
+            summarizeTaskPromptForDisplay("Investigate crash in `MainActivity`\n```kotlin\nthrow Error()\n```"),
+        )
     }
 }

@@ -23,6 +23,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
@@ -41,12 +44,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.ConnectionState
+import com.example.data.TabActivity
 import com.example.data.TabRecord
 import com.example.data.WorkspaceState
 import com.example.ui.theme.HerdrBlue
@@ -64,6 +70,7 @@ fun TabDrawerContent(
     onSelectTab: (String) -> Unit,
     onNewTab: () -> Unit,
     onDeleteTab: (String) -> Unit,
+    onCloseFinishedTabs: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenAppSettings: () -> Unit = {},
     onReconnect: () -> Unit,
@@ -78,6 +85,7 @@ fun TabDrawerContent(
             onSelectTab = onSelectTab,
             onNewTab = onNewTab,
             onDeleteTab = onDeleteTab,
+            onCloseFinishedTabs = onCloseFinishedTabs,
             onOpenSettings = onOpenSettings,
             onOpenAppSettings = onOpenAppSettings,
             onReconnect = onReconnect,
@@ -92,6 +100,7 @@ fun TabSidebarBody(
     onSelectTab: (String) -> Unit,
     onNewTab: () -> Unit,
     onDeleteTab: (String) -> Unit,
+    onCloseFinishedTabs: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenAppSettings: () -> Unit = {},
     onReconnect: () -> Unit,
@@ -125,7 +134,7 @@ fun TabSidebarBody(
                     modifier = Modifier
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(connColor)
+                        .background(connColor),
                 )
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -193,13 +202,75 @@ fun TabSidebarBody(
 
         Spacer(Modifier.height(16.dp))
 
-        Text(
-            text = stringResource(R.string.drawer_persistent_tabs, state.tabs.size),
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = MonoFontFamily,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
-        )
+        val finishedTabIds = state.finishedTabIds
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = stringResource(R.string.drawer_persistent_tabs, state.tabs.size),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = MonoFontFamily,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (finishedTabIds.isNotEmpty()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = HerdrEmerald.copy(alpha = 0.16f),
+                        modifier = Modifier
+                            .semantics(mergeDescendants = true) {}
+                            .testTag("drawer_finished_count_badge"),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = null,
+                                tint = HerdrEmerald,
+                                modifier = Modifier.size(11.dp),
+                            )
+                            Text(
+                                text = pluralStringResource(
+                                    R.plurals.drawer_finished_count,
+                                    finishedTabIds.size,
+                                    finishedTabIds.size,
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = HerdrEmerald,
+                            )
+                        }
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        border = BorderStroke(1.dp, HerdrEmerald.copy(alpha = 0.4f)),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(onClick = onCloseFinishedTabs)
+                            .testTag("drawer_close_finished_button"),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.drawer_close_finished),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = HerdrEmerald,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Spacer(Modifier.height(8.dp))
 
@@ -226,6 +297,7 @@ fun TabSidebarBody(
                     DrawerTabRow(
                         tab = tab,
                         selected = tab.id == state.activeTab?.id,
+                        activity = state.activityOf(tab),
                         onClick = { onSelectTab(tab.id) },
                         onDelete = { onDeleteTab(tab.id) },
                     )
@@ -281,22 +353,25 @@ fun TabSidebarBody(
 private fun DrawerTabRow(
     tab: TabRecord,
     selected: Boolean,
+    activity: TabActivity,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val bg = if (selected) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
-    } else {
-        Color.Transparent
+    val isFinished = activity == TabActivity.FINISHED
+    val bg = when {
+        selected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+        isFinished -> HerdrEmerald.copy(alpha = 0.08f)
+        else -> Color.Transparent
+    }
+    val border = when {
+        selected -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+        isFinished -> BorderStroke(1.dp, HerdrEmerald.copy(alpha = 0.35f))
+        else -> null
     }
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = bg,
-        border = if (selected) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
-        } else {
-            null
-        },
+        border = border,
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
@@ -307,12 +382,21 @@ private fun DrawerTabRow(
             modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(9.dp)
-                    .clip(CircleShape)
-                    .background(statusColor(tab.status))
-            )
+            if (isFinished) {
+                Icon(
+                    imageVector = Icons.Rounded.CheckCircle,
+                    contentDescription = statusLabel("done"),
+                    tint = HerdrEmerald,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .testTag("drawer_tab_done_icon_${tab.id}"),
+                )
+            } else {
+                TabStatusDot(
+                    status = tab.status,
+                    dotSize = 9.dp,
+                )
+            }
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(
@@ -322,22 +406,38 @@ private fun DrawerTabRow(
                     Text(
                         text = tab.title,
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (selected || tab.unread) FontWeight.SemiBold else FontWeight.Medium,
+                        fontWeight = if (selected || tab.unread || isFinished) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    if (tab.status == "blocked" || tab.status == "working" || tab.status == "error") {
+                    if (tab.unread && !selected) {
+                        UnreadDot(modifier = Modifier.testTag("drawer_tab_unread_${tab.id}"))
+                    }
+                    if (isFinished) {
                         Surface(
                             shape = RoundedCornerShape(6.dp),
-                            color = statusColor(tab.status).copy(alpha = 0.18f),
+                            color = HerdrEmerald.copy(alpha = 0.18f),
+                            modifier = Modifier.testTag("drawer_tab_done_badge_${tab.id}"),
                         ) {
-                            Text(
-                                text = statusLabel(tab.status),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = statusColor(tab.status),
+                            Row(
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
-                            )
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = HerdrEmerald,
+                                    modifier = Modifier.size(11.dp),
+                                )
+                                Text(
+                                    text = statusLabel("done"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = HerdrEmerald,
+                                )
+                            }
                         }
                     }
                 }
@@ -350,6 +450,32 @@ private fun DrawerTabRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (!isFinished) {
+                    // Finished tabs say so in the hint below; every other tab is one of these two.
+                    val working = activity == TabActivity.WORKING
+                    Text(
+                        text = stringResource(
+                            if (working) R.string.tab_activity_working else R.string.tab_activity_waiting,
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (working) FontWeight.SemiBold else FontWeight.Normal,
+                        color = statusColor(tab.status),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("drawer_tab_activity_${tab.id}"),
+                    )
+                }
+                if (isFinished) {
+                    Text(
+                        text = stringResource(R.string.drawer_task_finished_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = HerdrEmerald,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("drawer_tab_done_hint_${tab.id}"),
+                    )
+                }
                 if (tab.agent != "shell" && !tab.model.isNullOrBlank()) {
                     Text(
                         text = tab.model,
@@ -360,13 +486,16 @@ private fun DrawerTabRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (!tab.lastMessagePreview.isNullOrBlank()) {
+                val summaryText = tab.taskSummary?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: tab.lastMessagePreview?.trim()?.takeIf { it.isNotEmpty() }
+                if (summaryText != null) {
                     Text(
-                        text = tab.lastMessagePreview,
+                        text = summaryText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("drawer_tab_summary_${tab.id}"),
                     )
                 }
             }
@@ -375,10 +504,12 @@ private fun DrawerTabRow(
                 modifier = Modifier.testTag("delete_tab_${tab.id}"),
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.DeleteOutline,
-                    contentDescription = stringResource(R.string.action_close_tab),
+                    imageVector = if (isFinished) Icons.Rounded.Close else Icons.Rounded.DeleteOutline,
+                    contentDescription = stringResource(
+                        if (isFinished) R.string.action_close_finished_tab else R.string.action_close_tab,
+                    ),
                     modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = if (isFinished) HerdrEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
