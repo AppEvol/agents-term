@@ -24,6 +24,7 @@ import com.example.data.TabActivity
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
 import com.example.data.UpdateTabRequest
+import com.example.data.WORK_DONE_TOKEN
 import com.example.data.WorkspaceState
 import com.example.data.WsServerEnvelope
 import com.example.data.buildAssistantDisplayBlocks
@@ -50,6 +51,7 @@ import com.example.data.resolvePreferredNewTabCwd
 import com.example.data.resolveTabLatestDetail
 import com.example.data.resolveTabTaskSummary
 import com.example.data.sanitizeDebugText
+import com.example.data.stripWorkDoneToken
 import com.example.data.summarizeCommandForDisplay
 import com.example.data.summarizeTaskPromptForDisplay
 import org.junit.Assert.assertEquals
@@ -788,19 +790,59 @@ class ModelsAndStateTest {
     }
 
     @Test
-    fun finishedTaskDetectionAndWorkspaceStateWork() {
-        assertTrue(isTaskFinishedText("This task is finished — you can close this tab whenever you're ready."))
-        assertTrue(isTaskFinishedText("All tests pass.\n\nFeel free to close this tab."))
-        assertTrue(isTaskFinishedText("Done, it is safe to close the tab now."))
+    fun workDoneTokenDetectionAndStrippingIgnoreCodeBlocks() {
+        assertTrue(isTaskFinishedText("All tests pass.\n\n$WORK_DONE_TOKEN"))
+        assertTrue(isTaskFinishedText("Done!\n${WORK_DONE_TOKEN.uppercase()}\n"))
+        assertFalse(isTaskFinishedText("This task is finished — you can close this tab whenever you're ready."))
         assertFalse(isTaskFinishedText("Do not close this tab yet."))
-        assertFalse(isTaskFinishedText("The prompt asks agents to tell users that they can close the tab."))
-        assertFalse(isTaskFinishedText("```text\nYou can close this tab.\n```"))
-        assertFalse(isTaskFinishedText("You can close this tab.\n\nWait, one more thing to fix."))
+        assertFalse(isTaskFinishedText("I will emit `$WORK_DONE_TOKEN` once finished."))
+        assertFalse(isTaskFinishedText("```text\n$WORK_DONE_TOKEN\n```"))
+        assertFalse(isTaskFinishedText("~~~\n$WORK_DONE_TOKEN\n~~~\nStill working."))
+        assertFalse(isTaskFinishedText("```$WORK_DONE_TOKEN```"))
+        assertTrue(
+            isTaskFinishedText(
+                "```kotlin\nconst val T = \"$WORK_DONE_TOKEN\"\n```\n\nAll fixed!\n\n$WORK_DONE_TOKEN",
+            ),
+        )
+        assertEquals(
+            "```kotlin\nconst val T = \"$WORK_DONE_TOKEN\"\n```\n\nAll fixed!",
+            stripWorkDoneToken(
+                "```kotlin\nconst val T = \"$WORK_DONE_TOKEN\"\n```\n\nAll fixed!\n\n$WORK_DONE_TOKEN\n",
+            ),
+        )
+        assertEquals(
+            "Look at foo`bar above.\n\nDone!",
+            stripWorkDoneToken("Look at foo`bar above.\n\nDone!\n\n$WORK_DONE_TOKEN"),
+        )
 
+        val msgWithRawToken = ChatMessage(
+            id = "m_done",
+            tabId = "t_tok",
+            role = "assistant",
+            text = "Shipped!\n\n$WORK_DONE_TOKEN",
+            segments = listOf(MessageSegment(type = "text", text = "Shipped!\n\n$WORK_DONE_TOKEN")),
+            status = "complete",
+        )
+        assertEquals(
+            listOf(AssistantDisplayBlock.TextBlock("Shipped!")),
+            buildAssistantDisplayBlocks(msgWithRawToken),
+        )
+    }
+
+    @Test
+    fun finishedTaskDetectionAndWorkspaceStateWork() {
         val explicitDone = TabRecord("t_done", "Done Tab", "agy", "/home/ned", status = "done")
-        val legacyDone = TabRecord(
-            "t_legacy",
-            "Legacy Tab",
+        val tokenDone = TabRecord(
+            "t_token",
+            "Token Tab",
+            "claude",
+            "/home/ned",
+            status = "idle",
+            lastMessagePreview = "All set!\n$WORK_DONE_TOKEN",
+        )
+        val proseOnlyTab = TabRecord(
+            "t_prose",
+            "Prose Tab",
             "claude",
             "/home/ned",
             status = "idle",
@@ -813,17 +855,19 @@ class ModelsAndStateTest {
             "shell",
             "/home/ned",
             status = "done",
-            lastMessagePreview = "You can close this tab.",
+            lastMessagePreview = WORK_DONE_TOKEN,
         )
 
         assertTrue(isTabTaskFinished(explicitDone))
-        assertTrue(isTabTaskFinished(legacyDone))
-        assertFalse(isTabTaskFinished(legacyDone, manuallyReopened = true))
+        assertTrue(isTabTaskFinished(tokenDone))
+        assertFalse(isTabTaskFinished(tokenDone, manuallyReopened = true))
+        assertFalse(isTabTaskFinished(proseOnlyTab))
         assertFalse(isTabTaskFinished(workingTab))
         assertFalse(isTabTaskFinished(shellTab))
+        assertEquals("All set!", resolveTabLatestDetail(tokenDone, null))
 
-        val ws = WorkspaceState(tabs = listOf(explicitDone, legacyDone, workingTab, shellTab))
-        assertEquals(setOf("t_done", "t_legacy"), ws.finishedTabIds)
+        val ws = WorkspaceState(tabs = listOf(explicitDone, tokenDone, proseOnlyTab, workingTab, shellTab))
+        assertEquals(setOf("t_done", "t_token"), ws.finishedTabIds)
 
         val statusJson = encodeHerdrJson(UpdateTabRequest(status = "done"))
         assertTrue(statusJson.contains("\"status\":\"done\""))
