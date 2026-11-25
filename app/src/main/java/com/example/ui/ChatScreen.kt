@@ -2,12 +2,7 @@ package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -1331,30 +1326,16 @@ private fun ChatComposer(
                     }
                 }
 
-                val workingBorderAlpha = if (isWorking) {
-                    val borderTransition = rememberInfiniteTransition(label = "composer_working_border")
-                    borderTransition.animateFloat(
-                        initialValue = 0.30f,
-                        targetValue = 0.80f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
-                            repeatMode = RepeatMode.Reverse,
-                        ),
-                        label = "composer_border_alpha",
-                    ).value
+                val composerBorderColor = if (isWorking && isHolding) {
+                    HerdrRed.copy(alpha = 0.85f)
                 } else {
-                    0f
-                }
-                val composerBorderColor = when {
-                    isWorking && isHolding -> HerdrRed.copy(alpha = 0.85f)
-                    isWorking -> HerdrBlue.copy(alpha = workingBorderAlpha)
-                    else -> MaterialTheme.colorScheme.outlineVariant
+                    MaterialTheme.colorScheme.outlineVariant
                 }
 
                 Surface(
                     shape = RoundedCornerShape(26.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    border = BorderStroke(if (isWorking) 1.25.dp else 1.dp, composerBorderColor),
+                    border = BorderStroke(if (isWorking && isHolding) 1.25.dp else 1.dp, composerBorderColor),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Row(
