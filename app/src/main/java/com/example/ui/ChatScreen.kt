@@ -30,8 +30,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -72,17 +72,23 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -118,8 +124,33 @@ import com.example.ui.theme.HerdrPurple
 import com.example.ui.theme.HerdrRed
 import com.example.ui.theme.MonoFontFamily
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.Locale
+
+private const val CHAT_BOTTOM_SENTINEL_KEY = "__chat_bottom_sentinel__"
+
+private data class ChatScrollSnapshot(
+    val firstVisibleItemIndex: Int,
+    val firstVisibleItemScrollOffset: Int,
+    val canScrollForward: Boolean,
+    val isScrollInProgress: Boolean,
+)
+
+private data class ChatAutoScrollSignal(
+    val messageCount: Int,
+    val lastMessageId: String?,
+    val lastTextLength: Int,
+    val lastThinkingLength: Int,
+    val lastToolCount: Int,
+    val lastToolStatus: String?,
+    val lastSegmentCount: Int,
+    val lastSegmentTextLength: Int,
+    val lastStatus: String?,
+    val hasError: Boolean,
+    val deniedActionCount: Int,
+    val sendGeneration: Int,
+)
 
 @Composable
 fun ChatWorkspace(
@@ -137,24 +168,94 @@ fun ChatWorkspace(
     onRetryFullAccess: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val listState = rememberLazyListState()
+    val listState = rememberSaveable(tab.id, saver = LazyListState.Saver) {
+        LazyListState()
+    }
     val scope = rememberCoroutineScope()
     var draft by rememberSaveable(tab.id) { mutableStateOf("") }
     val isWorking = tab.status == "working"
+    val latestMessages by rememberUpdatedState(messages)
 
-    val showScrollToBottom by remember {
-        derivedStateOf {
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            messages.isNotEmpty() && lastVisible < messages.lastIndex - 1
+    var autoScrollPinned by remember(tab.id) { mutableStateOf(true) }
+    var isProgrammaticScroll by remember(tab.id) { mutableStateOf(false) }
+    var sendGeneration by remember(tab.id) { mutableIntStateOf(0) }
+
+    val scrollAwayConnection = remember(tab.id) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // Dragging downward (available.y > 0) scrolls up toward earlier messages.
+                if (available.y > 0f && source == NestedScrollSource.UserInput) {
+                    autoScrollPinned = false
+                }
+                return Offset.Zero
+            }
         }
     }
 
-    // Auto-scroll to latest message/delta when near bottom
-    val lastTextLen = messages.lastOrNull()?.text?.length ?: 0
-    val lastToolCount = messages.lastOrNull()?.toolCalls?.size ?: 0
-    LaunchedEffect(tab.id, messages.size, lastTextLen / 40, lastToolCount) {
-        if (messages.isNotEmpty() && !showScrollToBottom) {
-            listState.animateScrollToItem(messages.lastIndex)
+    // Track manual scrolls (including non-touch scrolls) to pause/resume auto-scroll.
+    LaunchedEffect(tab.id, listState) {
+        var prevIndex = listState.firstVisibleItemIndex
+        var prevOffset = listState.firstVisibleItemScrollOffset
+        snapshotFlow {
+            ChatScrollSnapshot(
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+                canScrollForward = listState.canScrollForward,
+                isScrollInProgress = listState.isScrollInProgress,
+            )
+        }.collect { snap ->
+            val movedBackward = snap.firstVisibleItemIndex < prevIndex ||
+                (snap.firstVisibleItemIndex == prevIndex && snap.firstVisibleItemScrollOffset < prevOffset)
+            if (!isProgrammaticScroll) {
+                if (!snap.canScrollForward && !snap.isScrollInProgress) {
+                    autoScrollPinned = true
+                } else if (snap.canScrollForward && movedBackward) {
+                    autoScrollPinned = false
+                }
+            }
+            prevIndex = snap.firstVisibleItemIndex
+            prevOffset = snap.firstVisibleItemScrollOffset
+        }
+    }
+
+    val showScrollToBottom by remember(tab.id, listState) {
+        derivedStateOf {
+            val isStreaming = latestMessages.lastOrNull()?.status == "streaming"
+            latestMessages.isNotEmpty() &&
+                listState.canScrollForward &&
+                !isProgrammaticScroll &&
+                (!autoScrollPinned || !isStreaming)
+        }
+    }
+
+    // Auto-scroll to the bottom sentinel when pinned and new messages or streaming deltas arrive.
+    val lastMessage = messages.lastOrNull()
+    val autoScrollSignal = ChatAutoScrollSignal(
+        messageCount = messages.size,
+        lastMessageId = lastMessage?.id,
+        lastTextLength = lastMessage?.text?.length ?: 0,
+        lastThinkingLength = lastMessage?.thinking?.length ?: 0,
+        lastToolCount = lastMessage?.toolCalls?.size ?: 0,
+        lastToolStatus = lastMessage?.toolCalls?.lastOrNull()?.status,
+        lastSegmentCount = lastMessage?.segments?.size ?: 0,
+        lastSegmentTextLength = lastMessage?.segments?.lastOrNull()?.text?.length ?: 0,
+        lastStatus = lastMessage?.status,
+        hasError = !lastMessage?.error.isNullOrBlank(),
+        deniedActionCount = lastMessage?.deniedActions?.size ?: 0,
+        sendGeneration = sendGeneration,
+    )
+    LaunchedEffect(tab.id, autoScrollSignal) {
+        if (messages.isEmpty() || !autoScrollPinned) return@LaunchedEffect
+        if (listState.isScrollInProgress) {
+            snapshotFlow { listState.isScrollInProgress }.first { !it }
+        }
+        if (latestMessages.isNotEmpty() && autoScrollPinned) {
+            isProgrammaticScroll = true
+            try {
+                listState.scrollToItem(latestMessages.size)
+            } finally {
+                isProgrammaticScroll = false
+            }
         }
     }
 
@@ -170,8 +271,16 @@ fun ChatWorkspace(
         ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .nestedScroll(scrollAwayConnection)
+                    .testTag("chat_message_list"),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 14.dp,
+                    end = 16.dp,
+                    bottom = if (messages.isEmpty()) 14.dp else 0.dp,
+                ),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 items(messages, key = { it.id }) { msg ->
@@ -196,6 +305,11 @@ fun ChatWorkspace(
                         }
                     }
                 }
+                if (messages.isNotEmpty()) {
+                    item(key = CHAT_BOTTOM_SENTINEL_KEY) {
+                        Spacer(Modifier.height(1.dp))
+                    }
+                }
             }
 
             if (isLoading && messages.isEmpty()) {
@@ -217,8 +331,17 @@ fun ChatWorkspace(
                 SmallFloatingActionButton(
                     onClick = {
                         scope.launch {
-                            if (messages.isNotEmpty()) {
-                                listState.animateScrollToItem(messages.lastIndex)
+                            if (latestMessages.isNotEmpty()) {
+                                autoScrollPinned = true
+                                isProgrammaticScroll = true
+                                try {
+                                    listState.animateScrollToItem(latestMessages.size)
+                                    if (autoScrollPinned && listState.canScrollForward) {
+                                        listState.scrollToItem(latestMessages.size)
+                                    }
+                                } finally {
+                                    isProgrammaticScroll = false
+                                }
                             }
                         }
                     },
@@ -265,6 +388,8 @@ fun ChatWorkspace(
                 val text = draft.trim()
                 if (text.isNotEmpty()) {
                     draft = ""
+                    autoScrollPinned = true
+                    sendGeneration += 1
                     onSendMessage(text)
                 }
             },
