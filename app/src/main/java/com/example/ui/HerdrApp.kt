@@ -35,10 +35,8 @@ import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.WifiOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
@@ -48,14 +46,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
@@ -70,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -96,11 +92,21 @@ import com.example.data.resolveTabTaskSummary
 import com.example.data.shareDebugBundleFile
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.ThemedAlertDialog
+import com.example.ui.theme.ThemedButton
+import com.example.ui.theme.ThemedSwitch
+import com.example.ui.theme.ThemedTextButton
+import com.example.ui.theme.ThemedTextField
 import com.example.ui.theme.TitleBarBackground
+import com.example.ui.theme.TitleBarIconButton
+import com.example.ui.theme.isLunaControls
+import com.example.ui.theme.lunaTab
+import com.example.ui.theme.lunaTabBaseline
 import com.example.ui.theme.statusColor
 import com.example.ui.theme.statusLabel
 import com.example.ui.theme.themedCorner
 import com.example.ui.theme.titleBarColors
+import com.example.ui.theme.titleBarTitleStyle
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -425,11 +431,11 @@ fun HerdrApp(viewModel: MainViewModel) {
     if (showRenameDialog && state.activeTab != null) {
         val current = state.activeTab!!
         var titleInput by remember(current.id) { mutableStateOf(current.title) }
-        AlertDialog(
+        ThemedAlertDialog(
             onDismissRequest = { showRenameDialog = false },
             title = { Text(stringResource(R.string.dialog_rename_title)) },
             text = {
-                OutlinedTextField(
+                ThemedTextField(
                     value = titleInput,
                     onValueChange = { titleInput = it },
                     singleLine = true,
@@ -437,7 +443,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 )
             },
             confirmButton = {
-                TextButton(
+                ThemedTextButton(
                     onClick = {
                         if (titleInput.isNotBlank()) {
                             viewModel.renameTab(current.id, titleInput.trim())
@@ -447,7 +453,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 ) { Text(stringResource(R.string.action_save)) }
             },
             dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) {
+                ThemedTextButton(onClick = { showRenameDialog = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },
@@ -462,7 +468,7 @@ fun HerdrApp(viewModel: MainViewModel) {
             "plan" to "Plan Only (read-only)",
             "default" to "Default / Ask",
         )
-        AlertDialog(
+        ThemedAlertDialog(
             onDismissRequest = { showPermissionDialog = false },
             title = { Text(stringResource(R.string.dialog_permission_title)) },
             text = {
@@ -495,7 +501,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showPermissionDialog = false }) {
+                ThemedTextButton(onClick = { showPermissionDialog = false }) {
                     Text(stringResource(R.string.action_close))
                 }
             },
@@ -511,7 +517,7 @@ fun HerdrApp(viewModel: MainViewModel) {
         var promptInput by remember(current.id, current.systemPrompt) {
             mutableStateOf(current.systemPrompt.orEmpty())
         }
-        AlertDialog(
+        ThemedAlertDialog(
             onDismissRequest = { showSystemPromptDialog = false },
             title = { Text(stringResource(R.string.dialog_system_prompt_title)) },
             text = {
@@ -536,7 +542,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
                         )
-                        Switch(
+                        ThemedSwitch(
                             checked = includePrompt,
                             onCheckedChange = { checked ->
                                 includePrompt = checked
@@ -548,7 +554,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         )
                     }
                     if (includePrompt) {
-                        OutlinedTextField(
+                        ThemedTextField(
                             value = promptInput,
                             onValueChange = { promptInput = it },
                             placeholder = {
@@ -563,7 +569,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                                 .testTag("edit_tab_system_prompt_input"),
                         )
                         if (promptInput.trim() != tabDefaultPrompt.trim()) {
-                            TextButton(
+                            ThemedTextButton(
                                 onClick = { promptInput = tabDefaultPrompt },
                                 modifier = Modifier.testTag("edit_tab_system_prompt_reset"),
                             ) {
@@ -574,7 +580,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 }
             },
             confirmButton = {
-                TextButton(
+                ThemedTextButton(
                     onClick = {
                         val effective = if (includePrompt) promptInput.trim() else ""
                         showSystemPromptDialog = false
@@ -592,7 +598,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showSystemPromptDialog = false }) {
+                ThemedTextButton(onClick = { showSystemPromptDialog = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },
@@ -605,7 +611,7 @@ fun HerdrApp(viewModel: MainViewModel) {
         val hasLastCrash by viewModel.hasLastCrash.collectAsStateWithLifecycle()
         var noteInput by remember { mutableStateOf("") }
         val isConnected = state.connectionState == ConnectionState.CONNECTED && state.config.isValid
-        AlertDialog(
+        ThemedAlertDialog(
             onDismissRequest = {
                 showQuickDebugDialog = false
                 pendingScreenshotBase64 = null
@@ -630,7 +636,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         fontFamily = MonoFontFamily,
                         color = AppTheme.colors.success,
                     )
-                    OutlinedTextField(
+                    ThemedTextField(
                         value = noteInput,
                         onValueChange = { noteInput = it },
                         minLines = 2,
@@ -644,7 +650,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 }
             },
             confirmButton = {
-                TextButton(
+                ThemedTextButton(
                     enabled = isConnected && !debugUploadState.isUploading,
                     onClick = {
                         val shot = pendingScreenshotBase64
@@ -668,7 +674,7 @@ fun HerdrApp(viewModel: MainViewModel) {
             },
             dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(
+                    ThemedTextButton(
                         onClick = {
                             val shot = pendingScreenshotBase64
                             val note = noteInput.trim().ifBlank { null }
@@ -687,7 +693,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                     ) {
                         Text(stringResource(R.string.dialog_debug_dump_share))
                     }
-                    TextButton(
+                    ThemedTextButton(
                         onClick = {
                             showQuickDebugDialog = false
                             pendingScreenshotBase64 = null
@@ -719,7 +725,7 @@ internal fun WorkspaceNavigationShell(
     if (isExpanded) {
         Row(modifier = Modifier.fillMaxSize()) {
             Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                color = sidebarColor,
                 modifier = Modifier
                     .width(304.dp)
                     .fillMaxHeight(),
@@ -837,7 +843,7 @@ internal fun WorkspaceScaffold(
                         colors = titleBarColors(),
                         navigationIcon = {
                             if (!isExpanded) {
-                                IconButton(
+                                TitleBarIconButton(
                                     onClick = onOpenDrawer,
                                     modifier = Modifier.testTag("open_drawer_button"),
                                 ) {
@@ -860,8 +866,7 @@ internal fun WorkspaceScaffold(
                             Column {
                                 Text(
                                     text = activeTab?.title ?: stringResource(R.string.app_name),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
+                                    style = titleBarTitleStyle(MaterialTheme.typography.titleMedium),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier
@@ -928,7 +933,7 @@ internal fun WorkspaceScaffold(
                         },
                         actions = {
                             if (debugSharingEnabled) {
-                                IconButton(
+                                TitleBarIconButton(
                                     onClick = onQuickDebugDump,
                                     modifier = Modifier.testTag("top_debug_dump_button"),
                                 ) {
@@ -939,7 +944,7 @@ internal fun WorkspaceScaffold(
                                     )
                                 }
                             }
-                            IconButton(
+                            TitleBarIconButton(
                                 onClick = onNewTab,
                                 enabled = state.canCreateTab,
                                 modifier = Modifier.testTag("top_new_tab_button"),
@@ -950,7 +955,7 @@ internal fun WorkspaceScaffold(
                                 )
                             }
                             Box {
-                                IconButton(
+                                TitleBarIconButton(
                                     onClick = { onToggleOverflow(true) },
                                     modifier = Modifier.testTag("overflow_menu_button"),
                                 ) {
@@ -1390,35 +1395,49 @@ private fun QuickTabStrip(
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth(),
     ) {
+        // In the XP look the strip is a row of tabs standing on a line; elsewhere, a row of pills.
+        val luna = isLunaControls
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .then(if (luna) Modifier.lunaTabBaseline() else Modifier)
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(
+                    start = 12.dp,
+                    end = 12.dp,
+                    top = 6.dp,
+                    bottom = if (luna) 0.dp else 6.dp,
+                ),
+            horizontalArrangement = Arrangement.spacedBy(if (luna) 2.dp else 8.dp),
+            verticalAlignment = Alignment.Bottom,
         ) {
             for (tab in tabs) {
                 val selected = tab.id == activeTabId
                 val finished = tab.id in finishedTabIds
                 Surface(
-                    shape = themedCorner(20.dp),
+                    shape = if (luna) RectangleShape else themedCorner(20.dp),
                     color = when {
+                        luna -> Color.Transparent
                         selected -> MaterialTheme.colorScheme.primaryContainer
                         finished -> AppTheme.colors.success.copy(alpha = 0.10f)
                         else -> MaterialTheme.colorScheme.surfaceContainer
                     },
                     border = when {
+                        luna -> null
                         selected -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
                         finished -> BorderStroke(1.dp, AppTheme.colors.success.copy(alpha = 0.45f))
                         else -> BorderStroke(1.dp, Color.Transparent)
                     },
                     modifier = Modifier
-                        .clip(themedCorner(20.dp))
+                        .then(if (luna) Modifier.lunaTab(selected) else Modifier.clip(themedCorner(20.dp)))
                         .clickable { onSelect(tab.id) }
                         .testTag("quick_tab_${tab.id}"),
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(
+                            horizontal = 12.dp,
+                            vertical = if (luna && !selected) 6.dp else 8.dp,
+                        ),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
@@ -1500,7 +1519,7 @@ private fun NoTabsPlaceholder(
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(22.dp))
-        Button(
+        ThemedButton(
             onClick = onCreateTab,
             enabled = connected,
             shape = themedCorner(14.dp),

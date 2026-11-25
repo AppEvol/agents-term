@@ -38,7 +38,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.ui.theme.AppTheme
+import com.example.ui.theme.LunaMarquee
 import com.example.ui.theme.SemanticColors
+import com.example.ui.theme.isLunaControls
 import com.example.ui.theme.statusColor
 import kotlin.math.PI
 import kotlin.math.sin
@@ -131,6 +133,10 @@ fun WorkingPulseDots(
         ),
         label = "working_dots_phase",
     )
+    if (isLunaControls) {
+        LunaMarquee(phase = phase, modifier = modifier)
+        return
+    }
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
@@ -192,12 +198,13 @@ fun SandclockIndicator(
 }
 
 private fun DrawScope.drawSandclock(color: Color, drained: Float) {
-    val stroke = size.minDimension * 0.09f
+    val stroke = size.minDimension * 0.085f
+    val inset = size.minDimension * 0.12f
     val centerX = size.width / 2f
     val centerY = size.height / 2f
-    val halfWidth = size.width * 0.32f
-    val top = stroke / 2f
-    val bottom = size.height - stroke / 2f
+    val halfWidth = size.width * 0.26f
+    val top = inset + stroke / 2f
+    val bottom = size.height - inset - stroke / 2f
     val bulbHeight = centerY - top
 
     // Sand keeps its area: a bulb holding a share of the sand is filled to sqrt(share) of its height.

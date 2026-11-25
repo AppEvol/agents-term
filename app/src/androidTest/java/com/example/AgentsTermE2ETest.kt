@@ -786,6 +786,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
 
         waitForText("SSH Agy Tab")
+        waitForTag("composer_input")
         composeRule.onNodeWithTag("composer_input").performTextInput("Diagnose phone glitch")
         composeRule.onNodeWithTag("send_button").performClick()
 
@@ -1104,6 +1105,8 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
 
         waitForText("Default Prompt Tab")
+        // The name is on screen as soon as it is typed, so also wait for the daemon to have the tab.
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.hasTab("tab_1") }
         val defaultSaved = activeDaemon.tabSystemPrompt("tab_1")
         assertTrue(
             "Expected default full-access system prompt to mention docs/live-debugging.md and closing the tab, got: $defaultSaved",
@@ -1149,6 +1152,8 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
 
         waitForText("Plan Prompt Tab")
+        // The name is on screen as soon as it is typed, so also wait for the daemon to have the tab.
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.hasTab("tab_2") }
         val planSaved = activeDaemon.tabSystemPrompt("tab_2")
         assertTrue(
             "Expected plan-mode default prompt to keep docs/live-debugging.md without close-tab notice, got: $planSaved",
@@ -1167,6 +1172,8 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
 
         waitForText("Empty Prompt Tab")
+        // The name is on screen as soon as it is typed, so also wait for the daemon to have the tab.
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.hasTab("tab_3") }
         assertNull(activeDaemon.tabSystemPrompt("tab_3"))
 
         // 5) Shell tab does not show system prompt controls

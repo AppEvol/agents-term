@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.ui.theme.isLunaControls
 
 /**
  * Renders Markdown as the app shows it in chat.
@@ -89,9 +91,13 @@ private fun rememberMarkdownStyle(textColor: Color): MarkdownStyle {
     val colors = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val linkHandler = rememberMarkdownLinkHandler()
-    return remember(colors, typography, textColor, linkHandler) {
-        val body = typography.bodyLarge.copy(fontFamily = MarkdownBodyFont, lineHeight = 23.sp)
-        val title = typography.titleLarge.copy(fontFamily = MarkdownHeadingFont, fontWeight = FontWeight.SemiBold)
+    // The XP look sets everything in the system sans-serif, which has real bold weights of its own.
+    val systemFont = isLunaControls
+    return remember(colors, typography, textColor, linkHandler, systemFont) {
+        val bodyFont = if (systemFont) FontFamily.SansSerif else MarkdownBodyFont
+        val headingFont = if (systemFont) FontFamily.SansSerif else MarkdownHeadingFont
+        val body = typography.bodyLarge.copy(fontFamily = bodyFont, lineHeight = 23.sp)
+        val title = typography.titleLarge.copy(fontFamily = headingFont, fontWeight = FontWeight.SemiBold)
         MarkdownStyle(
             textColor = textColor,
             mutedColor = colors.onSurfaceVariant,

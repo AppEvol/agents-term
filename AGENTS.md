@@ -16,6 +16,11 @@
 - For non-trivial work, push your work branch to the remote and keep working on it until the work is done, then merge the work branch into `main` and push `main`.
 - After the remote branch is merged into `main` (or pushed directly to `origin/main`) and the work is finished, clean up your local worktree and delete the merged local branch (e.g., `git worktree remove <worktree-path>` and `git branch -d <branch>`) so stale worktrees do not pile up.
 
+## Testing & CI
+
+- Every test written in this repository must run in CI (`.github/workflows/ci.yml`) and hard-block PR merges into `main` (wire any new CI test job into the `ci-gate` / `All Required CI Checks` job).
+- If a test is not valuable or reliable enough to run in CI and block PR merges, do not add or keep it in the repository.
+
 ## Static Checks
 
 - Run `scripts/static-checks.sh` before pushing; CI runs the same script and blocks the release on it. It needs a JDK on `PATH` plus `uv` or `python3 -m venv`, and downloads its pinned tools into `~/.cache/agentsterm-static-checks` on first use.
@@ -38,11 +43,11 @@
 - These commands are read-only. Screenshots need the app in the foreground and show the user a toast.
 - The same CLI can drive the app to reproduce a bug or QA test a flow: `ui --brief` lists what is on screen, then `tap`, `long-press`, `type`, `scroll`, `swipe`, `key back` and `wait` (see "Driving the app" in `app_state_cli/README.md`). These need a second switch, **Allow VM agents to control the app**; `status` reports `controlReady`, and exit code 3 with `control_disabled` means it is off, so ask the user rather than retrying. Only drive the app when the task calls for it: the user is holding that phone.
 
-## VM Daemon (`daemon-rs/` & `daemon/`)
+## VM Daemon (`daemon-rs/`)
 
-- The production VM daemon is a single static Rust binary in `daemon-rs/` (built for `x86_64` and `aarch64` Linux musl). Run its tests with `cargo test` inside `daemon-rs/`. The legacy Python daemon tests and POSIX `daemon/install.sh` tests run with `python3 -m unittest discover -s daemon/tests`.
+- The VM daemon is a single static Rust binary in `daemon-rs/` (built for `x86_64` and `aarch64` Linux musl). From the repository root, run `cargo test --manifest-path daemon-rs/Cargo.toml` for the daemon and `python3 -m unittest discover -s daemon-rs/tests` for its POSIX installer.
 - **APK ↔ daemon release sync:** Every official CI release on `main` (`v0.3.<run>-<sha>`) and branch preview pre-release (`v0.3.<run>-<sha>-preview`) pins `BuildConfig.DAEMON_RELEASE_BASE_URL` to its own GitHub Release tag so each released APK bootstraps the exact daemon binary built from the same commit. Unreleased local/PR APK builds default to `releases/latest/download` (override with `-PdaemonReleaseBaseUrl=...` or `AGENTSTERM_DAEMON_RELEASE_BASE_URL` when testing unmerged daemon changes).
-- Agent sessions started from the app are child processes of the running daemon. Never restart the daemon or `herdr-mobile.service`, and never run `agentsterm-daemon install` or `daemon/install.sh` against your real `HOME`, from inside such a session: it ends your own session. Test on a scratch port with a temporary `HOME` instead (`HOME=$(mktemp -d) cargo run --manifest-path daemon-rs/Cargo.toml -- serve --host 127.0.0.1 --port 7599`).
+- Agent sessions started from the app are child processes of the running daemon. Never restart the daemon or `herdr-mobile.service`, and never run `agentsterm-daemon install` or `daemon-rs/install.sh` against your real `HOME` from inside such a session. Doing so ends your session. Test on a scratch port with a temporary `HOME` instead (`HOME=$(mktemp -d) cargo run --manifest-path daemon-rs/Cargo.toml -- serve --host 127.0.0.1 --port 7599`).
 - Keep the REST/WebSocket contract backward compatible with released app builds.
 
 ## Agent Productivity Bugs (`#agent-productivity`)

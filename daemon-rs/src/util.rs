@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const TASK_SUMMARY_OPEN_TAG: &str = "<tab_task_summary>";
 pub const TASK_SUMMARY_CLOSE_TAG: &str = "</tab_task_summary>";
+pub const WORK_DONE_TOKEN: &str = "<this-work-is-done-172728>";
 pub const TASK_SUMMARY_PROMPT_ADDENDUM: &str =
     "Before your response, output a single line wrapped in \
 <tab_task_summary>...</tab_task_summary> containing a concise one-sentence summary \
@@ -142,33 +143,6 @@ fn shell_wrapper_re() -> &'static Regex {
         )
         .unwrap()
     })
-}
-
-fn fenced_code_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?s)```.*?```").unwrap())
-}
-
-fn negated_close_tab_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:do\s+not|don't|cannot|can't|avoid|never|wait\s+before)\b[^\n.!?]{0,40}\bclose\s+(?:this|the)\s+tab\b").unwrap()
-    })
-}
-
-fn close_tab_cue_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r"(?i)(?:\b(?:you\s+(?:can|may)|feel\s+free\s+to|(?:it(?:'s|\s+is)\s+)?safe\s+to|safely|good\s+to|ready\s+to)\s+(?:now\s+)?(?:safely\s+)?close\s+(?:this|the)\s+tab\b|\bclose\s+(?:this|the)\s+tab\s+(?:now|whenever|if\s+you(?:'d|\s+would)?\s+like)\b)",
-        )
-        .unwrap()
-    })
-}
-
-fn blank_line_split_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\n\s*\n").unwrap())
 }
 
 pub fn truncate(s: &str, max_len: usize) -> String {
@@ -319,27 +293,10 @@ pub fn is_task_finished_response(text: Option<&str>) -> bool {
     if t.trim().is_empty() {
         return false;
     }
-    let without_code = fenced_code_re().replace_all(t, "");
-    let without_code = without_code.trim();
-    if without_code.is_empty() {
-        return false;
-    }
-    let paragraphs: Vec<&str> = blank_line_split_re()
-        .split(without_code)
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .collect();
-    let last = paragraphs.last().copied().unwrap_or(without_code);
-    let chars: Vec<char> = last.chars().collect();
-    let tail: String = if chars.len() > 320 {
-        chars[chars.len() - 320..].iter().collect()
-    } else {
-        last.to_string()
-    };
-    if negated_close_tab_re().is_match(&tail) {
-        return false;
-    }
-    close_tab_cue_re().is_match(&tail)
+    let mut filter = WorkDoneStreamFilter::new();
+    let _ = filter.feed(t);
+    let _ = filter.flush();
+    filter.detected()
 }
 
 pub fn pad_first_prompt_for_task_summary(prompt: &str) -> String {
@@ -565,6 +522,354 @@ impl TaskSummaryStreamFilter {
     }
 }
 
+/// Streaming filter that detects and strips [`WORK_DONE_TOKEN`] from assistant text while
+/// leaving occurrences inside Markdown fenced code blocks (`` ``` `` / `~~~`) and inline code
+/// spans (`` `...` ``) untouched.
+pub struct WorkDoneStreamFilter {
+    buf: String,
+    detected: bool,
+    at_line_start: bool,
+    fence: Option<(u8, usize)>,
+    in_fence_header: bool,
+    inline_ticks: usize,
+    inline_blank_line_pending: bool,
+    strip_post_token_ws: bool,
+}
+
+impl WorkDoneStreamFilter {
+    const MAX_FENCE_HEADER_HOLD: usize = 128;
+
+    pub fn new() -> Self {
+        Self {
+            buf: String::new(),
+            detected: false,
+            at_line_start: true,
+            fence: None,
+            in_fence_header: false,
+            inline_ticks: 0,
+            inline_blank_line_pending: false,
+            strip_post_token_ws: false,
+        }
+    }
+
+    pub fn detected(&self) -> bool {
+        self.detected
+    }
+
+    pub fn feed(&mut self, chunk: &str) -> String {
+        if chunk.is_empty() {
+            return String::new();
+        }
+        self.buf.push_str(chunk);
+        self.process(false)
+    }
+
+    pub fn flush(&mut self) -> String {
+        self.process(true)
+    }
+
+    fn process(&mut self, flush: bool) -> String {
+        let data = std::mem::take(&mut self.buf);
+        let bytes = data.as_bytes();
+        let mut pos = 0usize;
+        let mut out = String::new();
+
+        while pos < bytes.len() {
+            if self.strip_post_token_ws {
+                match bytes[pos] {
+                    b' ' | b'\t' => {
+                        pos += 1;
+                        continue;
+                    }
+                    b'\r' => {
+                        if pos + 1 < bytes.len() {
+                            pos += if bytes[pos + 1] == b'\n' { 2 } else { 1 };
+                            self.strip_post_token_ws = false;
+                            self.at_line_start = true;
+                            continue;
+                        }
+                        if !flush {
+                            self.buf.push_str(&data[pos..]);
+                            break;
+                        }
+                        pos += 1;
+                        self.strip_post_token_ws = false;
+                        self.at_line_start = true;
+                        continue;
+                    }
+                    b'\n' => {
+                        pos += 1;
+                        self.strip_post_token_ws = false;
+                        self.at_line_start = true;
+                        continue;
+                    }
+                    _ => {
+                        self.strip_post_token_ws = false;
+                    }
+                }
+            }
+
+            if let Some((fc, flen)) = self.fence {
+                if self.in_fence_header {
+                    if let Some(nl_rel) = data[pos..].find('\n') {
+                        out.push_str(&data[pos..pos + nl_rel + 1]);
+                        pos += nl_rel + 1;
+                        self.in_fence_header = false;
+                        self.at_line_start = true;
+                    } else {
+                        out.push_str(&data[pos..]);
+                        pos = bytes.len();
+                    }
+                    continue;
+                }
+
+                if self.at_line_start {
+                    let line_start = pos;
+                    let mut p = pos;
+                    let mut spaces = 0usize;
+                    while p < bytes.len() && bytes[p] == b' ' && spaces < 3 {
+                        p += 1;
+                        spaces += 1;
+                    }
+                    if p == bytes.len() {
+                        if !flush {
+                            self.buf.push_str(&data[line_start..]);
+                            break;
+                        }
+                        out.push_str(&data[line_start..]);
+                        pos = bytes.len();
+                        continue;
+                    }
+                    if bytes[p] == fc {
+                        let fence_start = p;
+                        while p < bytes.len() && bytes[p] == fc {
+                            p += 1;
+                        }
+                        let count = p - fence_start;
+                        while p < bytes.len() && matches!(bytes[p], b' ' | b'\t') {
+                            p += 1;
+                        }
+                        if p == bytes.len() {
+                            if !flush {
+                                self.buf.push_str(&data[line_start..]);
+                                break;
+                            }
+                            out.push_str(&data[line_start..]);
+                            pos = bytes.len();
+                            if count >= flen {
+                                self.fence = None;
+                                self.at_line_start = false;
+                            }
+                            continue;
+                        }
+                        if bytes[p] == b'\r' && p + 1 == bytes.len() && !flush {
+                            self.buf.push_str(&data[line_start..]);
+                            break;
+                        }
+                        let is_eol = bytes[p] == b'\n'
+                            || (bytes[p] == b'\r' && p + 1 < bytes.len() && bytes[p + 1] == b'\n')
+                            || (bytes[p] == b'\r' && flush);
+                        if count >= flen && is_eol {
+                            let end = if bytes[p] == b'\r'
+                                && p + 1 < bytes.len()
+                                && bytes[p + 1] == b'\n'
+                            {
+                                p + 2
+                            } else {
+                                p + 1
+                            };
+                            out.push_str(&data[line_start..end]);
+                            pos = end;
+                            self.fence = None;
+                            self.at_line_start = true;
+                            continue;
+                        }
+                    }
+                    // Not a closing fence; emit rest of this line verbatim.
+                    self.at_line_start = false;
+                }
+
+                if let Some(nl_rel) = data[pos..].find('\n') {
+                    out.push_str(&data[pos..pos + nl_rel + 1]);
+                    pos += nl_rel + 1;
+                    self.at_line_start = true;
+                } else {
+                    out.push_str(&data[pos..]);
+                    pos = bytes.len();
+                }
+                continue;
+            }
+
+            if self.inline_ticks > 0 {
+                if bytes[pos] == b'`' {
+                    let run_start = pos;
+                    while pos < bytes.len() && bytes[pos] == b'`' {
+                        pos += 1;
+                    }
+                    if pos == bytes.len() && !flush {
+                        self.buf.push_str(&data[run_start..]);
+                        break;
+                    }
+                    let count = pos - run_start;
+                    out.push_str(&data[run_start..pos]);
+                    self.inline_blank_line_pending = false;
+                    self.at_line_start = false;
+                    if count == self.inline_ticks {
+                        self.inline_ticks = 0;
+                    }
+                    continue;
+                }
+                let ch = data[pos..].chars().next().unwrap();
+                out.push(ch);
+                pos += ch.len_utf8();
+                if ch == '\n' {
+                    if self.inline_blank_line_pending {
+                        self.inline_ticks = 0;
+                        self.inline_blank_line_pending = false;
+                    } else {
+                        self.inline_blank_line_pending = true;
+                    }
+                    self.at_line_start = true;
+                } else if ch != '\r' && ch != ' ' && ch != '\t' {
+                    self.inline_blank_line_pending = false;
+                    self.at_line_start = false;
+                }
+                continue;
+            }
+
+            // Outside both fenced code blocks and inline code spans.
+            if self.at_line_start {
+                let line_start = pos;
+                let mut p = pos;
+                let mut spaces = 0usize;
+                while p < bytes.len() && bytes[p] == b' ' && spaces < 3 {
+                    p += 1;
+                    spaces += 1;
+                }
+                if p == bytes.len() && !flush {
+                    self.buf.push_str(&data[line_start..]);
+                    break;
+                }
+                if p < bytes.len() && matches!(bytes[p], b'`' | b'~') {
+                    let fc = bytes[p];
+                    let fence_start = p;
+                    while p < bytes.len() && bytes[p] == fc {
+                        p += 1;
+                    }
+                    if p == bytes.len() && !flush {
+                        self.buf.push_str(&data[line_start..]);
+                        break;
+                    }
+                    let count = p - fence_start;
+                    if count >= 3 {
+                        if fc == b'~' {
+                            out.push_str(&data[line_start..p]);
+                            pos = p;
+                            self.fence = Some((fc, count));
+                            self.in_fence_header = true;
+                            self.at_line_start = false;
+                            continue;
+                        }
+                        // For backtick fences, CommonMark forbids backticks in the info string.
+                        let rest = &data[p..];
+                        let nl_idx = rest.find('\n');
+                        let tick_idx = rest.find('`');
+                        let has_tick_before_nl = match (tick_idx, nl_idx) {
+                            (Some(ti), Some(ni)) => ti < ni,
+                            (Some(_), None) => true,
+                            _ => false,
+                        };
+                        if has_tick_before_nl {
+                            // Inline code span on this line (e.g., ```code```).
+                            out.push_str(&data[line_start..p]);
+                            pos = p;
+                            self.inline_ticks = count;
+                            self.inline_blank_line_pending = false;
+                            self.at_line_start = false;
+                            continue;
+                        }
+                        if nl_idx.is_none() && !flush && rest.len() < Self::MAX_FENCE_HEADER_HOLD {
+                            self.buf.push_str(&data[line_start..]);
+                            break;
+                        }
+                        out.push_str(&data[line_start..p]);
+                        pos = p;
+                        self.fence = Some((fc, count));
+                        self.in_fence_header = true;
+                        self.at_line_start = false;
+                        continue;
+                    }
+                    // Fewer than 3 fence chars: if backticks, fall through to inline code; if `~`, emit.
+                    if fc == b'`' {
+                        out.push_str(&data[line_start..p]);
+                        pos = p;
+                        self.inline_ticks = count;
+                        self.inline_blank_line_pending = false;
+                        self.at_line_start = false;
+                        continue;
+                    }
+                    out.push_str(&data[line_start..p]);
+                    pos = p;
+                    self.at_line_start = false;
+                    continue;
+                }
+                if spaces > 0 {
+                    out.push_str(&data[line_start..p]);
+                    pos = p;
+                    self.at_line_start = false;
+                    continue;
+                }
+            }
+
+            if bytes[pos] == b'`' {
+                let run_start = pos;
+                while pos < bytes.len() && bytes[pos] == b'`' {
+                    pos += 1;
+                }
+                if pos == bytes.len() && !flush {
+                    self.buf.push_str(&data[run_start..]);
+                    break;
+                }
+                let count = pos - run_start;
+                out.push_str(&data[run_start..pos]);
+                self.inline_ticks = count;
+                self.inline_blank_line_pending = false;
+                self.at_line_start = false;
+                continue;
+            }
+
+            if bytes[pos] == b'<' {
+                let rem = &data[pos..];
+                let token_len = WORK_DONE_TOKEN.len();
+                if rem.len() >= token_len {
+                    if rem.is_char_boundary(token_len)
+                        && rem[..token_len].eq_ignore_ascii_case(WORK_DONE_TOKEN)
+                    {
+                        self.detected = true;
+                        pos += token_len;
+                        self.strip_post_token_ws = true;
+                        continue;
+                    }
+                } else if !flush && WORK_DONE_TOKEN[..rem.len()].eq_ignore_ascii_case(rem) {
+                    self.buf.push_str(rem);
+                    break;
+                }
+                out.push('<');
+                pos += 1;
+                self.at_line_start = false;
+                continue;
+            }
+
+            let ch = data[pos..].chars().next().unwrap();
+            out.push(ch);
+            pos += ch.len_utf8();
+            self.at_line_start = ch == '\n';
+        }
+
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,16 +887,54 @@ mod tests {
     }
 
     #[test]
-    fn task_finished_detection_ignores_negated_and_code_blocks() {
+    fn work_done_filter_detects_and_strips_token_outside_code() {
         assert!(is_task_finished_response(Some(
+            "All done!\n\n<this-work-is-done-172728>"
+        )));
+        assert!(is_task_finished_response(Some(
+            "Finished.\n<THIS-WORK-IS-DONE-172728>\n"
+        )));
+        // Natural-language phrases without the explicit token no longer trigger completion.
+        assert!(!is_task_finished_response(Some(
             "All done. You can close this tab now."
         )));
+        // Occurrences inside fenced code blocks or inline backticks are ignored.
         assert!(!is_task_finished_response(Some(
-            "Do not close this tab yet while tests run."
+            "```rust\nconst T: &str = \"<this-work-is-done-172728>\";\n```\nStill working."
         )));
         assert!(!is_task_finished_response(Some(
-            "```\nYou can close this tab.\n```\nStill working on step 2."
+            "~~~\n<this-work-is-done-172728>\n~~~\nWaiting on tests."
         )));
+        assert!(!is_task_finished_response(Some(
+            "I will emit `<this-work-is-done-172728>` once the tests pass."
+        )));
+        assert!(!is_task_finished_response(Some(
+            "```<this-work-is-done-172728>```"
+        )));
+        // A real token after a code block mentioning the token IS detected and stripped.
+        let sample = "```rust\nconst T: &str = \"<this-work-is-done-172728>\";\n```\n\nAll fixed!\n\n<this-work-is-done-172728>\n";
+        let mut f = WorkDoneStreamFilter::new();
+        let mut visible = String::new();
+        for ch in sample.chars() {
+            let mut s = [0u8; 4];
+            visible.push_str(&f.feed(ch.encode_utf8(&mut s)));
+        }
+        visible.push_str(&f.flush());
+        assert!(f.detected());
+        assert_eq!(
+            visible.trim_end(),
+            "```rust\nconst T: &str = \"<this-work-is-done-172728>\";\n```\n\nAll fixed!"
+        );
+    }
+
+    #[test]
+    fn work_done_filter_recovers_after_unclosed_backtick_on_blank_line() {
+        let input = "Look at foo`bar above.\n\nDone!\n\n<this-work-is-done-172728>";
+        let mut f = WorkDoneStreamFilter::new();
+        let mut visible = f.feed(input);
+        visible.push_str(&f.flush());
+        assert!(f.detected());
+        assert_eq!(visible.trim_end(), "Look at foo`bar above.\n\nDone!");
     }
 
     #[test]

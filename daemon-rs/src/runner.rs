@@ -9,13 +9,14 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
-use crate::config::{enriched_path, resolve_binary};
+use crate::config::{enriched_path, resolve_binary, WORK_DONE_SYSTEM_INSTRUCTION};
 use crate::log::{log_error, log_info, log_warn};
 use crate::store::{resolve_abs_path, StateStore, RESTART_INTERRUPTED_REASON};
 use crate::util::{
     block_separator, is_finite_number, is_number, is_task_finished_response, js_round, js_str,
     js_truthy, json_compact, json_pretty, now_ms, pad_first_prompt_for_task_summary, rand_hex,
     summarize_task_prompt, summarize_tool_input, truncate, BlockBreaks, TaskSummaryStreamFilter,
+    WorkDoneStreamFilter,
 };
 
 const CWD_MARKER: &str = "__AGENTSTERM_CWD__";
@@ -39,6 +40,14 @@ fn tab_system_prompt(tab: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+fn effective_system_prompt(tab: &Value) -> String {
+    match tab_system_prompt(tab) {
+        Some(sp) if sp.contains(WORK_DONE_SYSTEM_INSTRUCTION) => sp,
+        Some(sp) => format!("{sp}\n\n{WORK_DONE_SYSTEM_INSTRUCTION}"),
+        None => WORK_DONE_SYSTEM_INSTRUCTION.to_string(),
+    }
 }
 
 fn toml_basic_string(value: &str) -> String {
@@ -182,6 +191,7 @@ pub struct AgentRunner {
     active: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveTurn>>>>>,
     agy_prompt_dirty: Arc<Mutex<HashSet<String>>>,
     summary_filters: Arc<Mutex<HashMap<String, TaskSummaryStreamFilter>>>,
+    done_filters: Arc<Mutex<HashMap<String, WorkDoneStreamFilter>>>,
     shutting_down: Arc<AtomicBool>,
 }
 
@@ -193,6 +203,7 @@ impl AgentRunner {
             active: Arc::new(Mutex::new(HashMap::new())),
             agy_prompt_dirty: Arc::new(Mutex::new(HashSet::new())),
             summary_filters: Arc::new(Mutex::new(HashMap::new())),
+            done_filters: Arc::new(Mutex::new(HashMap::new())),
             shutting_down: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -458,6 +469,10 @@ impl AgentRunner {
             .lock()
             .unwrap()
             .remove(&turn.assistant_msg_id);
+        self.done_filters
+            .lock()
+            .unwrap()
+            .remove(&turn.assistant_msg_id);
         turn.interrupted = true;
         turn.cancel_escalation();
         turn.send_signal(libc::SIGKILL);
@@ -575,16 +590,22 @@ impl AgentRunner {
             .unwrap_or("")
             .to_string();
 
-        let cli_prompt =
-            if matches!(agent.as_str(), "agy" | "claude" | "codex") && is_first_task_prompt {
-                self.summary_filters
-                    .lock()
-                    .unwrap()
-                    .insert(msg_id.clone(), TaskSummaryStreamFilter::new());
-                pad_first_prompt_for_task_summary(prompt_text)
-            } else {
-                prompt_text.to_string()
-            };
+        let is_coding_agent = matches!(agent.as_str(), "agy" | "claude" | "codex");
+        if is_coding_agent {
+            self.done_filters
+                .lock()
+                .unwrap()
+                .insert(msg_id.clone(), WorkDoneStreamFilter::new());
+        }
+        let cli_prompt = if is_coding_agent && is_first_task_prompt {
+            self.summary_filters
+                .lock()
+                .unwrap()
+                .insert(msg_id.clone(), TaskSummaryStreamFilter::new());
+            pad_first_prompt_for_task_summary(prompt_text)
+        } else {
+            prompt_text.to_string()
+        };
 
         log_info(&format!(
             "Turn started tab={tab_id} msg={msg_id} agent={agent} model={:?} cwd={run_cwd}",
@@ -721,7 +742,7 @@ impl AgentRunner {
         msg_arc: &Arc<Mutex<Value>>,
         text_delta: Option<String>,
         thinking_delta: Option<String>,
-        bypass_summary_filter: bool,
+        bypass_filters: bool,
     ) {
         let msg_id = {
             let m = msg_arc.lock().unwrap();
@@ -732,7 +753,7 @@ impl AgentRunner {
         };
 
         let mut final_text = text_delta;
-        if !bypass_summary_filter {
+        if !bypass_filters {
             if let Some(raw_td) = final_text.as_deref() {
                 if !raw_td.is_empty() {
                     let filtered = {
@@ -749,6 +770,17 @@ impl AgentRunner {
                                 );
                             }
                         }
+                        final_text = if vis.is_empty() { None } else { Some(vis) };
+                    }
+                }
+            }
+            if let Some(after_summary) = final_text.as_deref() {
+                if !after_summary.is_empty() {
+                    let done_filtered = {
+                        let mut filters = self.done_filters.lock().unwrap();
+                        filters.get_mut(&msg_id).map(|f| f.feed(after_summary))
+                    };
+                    if let Some(vis) = done_filtered {
                         final_text = if vis.is_empty() { None } else { Some(vis) };
                     }
                 }
@@ -929,6 +961,7 @@ impl AgentRunner {
             (msg_id, m.clone())
         };
         self.summary_filters.lock().unwrap().remove(&msg_id);
+        self.done_filters.lock().unwrap().remove(&msg_id);
         log_error(&format!(
             "Turn error tab={tab_id} msg={msg_id}: {error_text}"
         ));
@@ -984,19 +1017,60 @@ impl AgentRunner {
                 .unwrap_or("")
                 .to_string()
         };
-        let leftover = self
+        let summary_leftover = self
             .summary_filters
             .lock()
             .unwrap()
             .remove(&msg_id)
             .map(|mut f| f.flush())
             .unwrap_or_default();
+        let (leftover, work_done_detected) = {
+            let done_filter = self.done_filters.lock().unwrap().remove(&msg_id);
+            if let Some(mut f) = done_filter {
+                let mut out = String::new();
+                if !summary_leftover.is_empty() {
+                    out.push_str(&f.feed(&summary_leftover));
+                }
+                out.push_str(&f.flush());
+                (out, f.detected())
+            } else {
+                (summary_leftover, false)
+            }
+        };
 
         let Some(tab) = self.store.get_tab(tab_id) else {
             return;
         };
         if !leftover.is_empty() {
             self.emit_delta(tab_id, msg_arc, Some(leftover), None, true);
+        }
+        if work_done_detected {
+            let mut m = msg_arc.lock().unwrap();
+            if let Some(obj) = m.as_object_mut() {
+                if let Some(trimmed) = obj
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(|s| s.trim_end().to_string())
+                {
+                    obj.insert("text".into(), json!(trimmed));
+                }
+                if let Some(segments) = obj.get_mut("segments").and_then(Value::as_array_mut) {
+                    if let Some(last) = segments.last_mut() {
+                        if last.get("type").and_then(Value::as_str) == Some("text") {
+                            let trimmed = last
+                                .get("text")
+                                .and_then(Value::as_str)
+                                .map(|s| s.trim_end().to_string())
+                                .unwrap_or_default();
+                            if trimmed.is_empty() {
+                                segments.pop();
+                            } else if let Some(lo) = last.as_object_mut() {
+                                lo.insert("text".into(), json!(trimmed));
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         let final_usage = if let Some(mut u) = usage {
@@ -1072,7 +1146,7 @@ impl AgentRunner {
             ));
         } else if !failed
             && tab.get("agent").and_then(Value::as_str) != Some("shell")
-            && is_task_finished_response(Some(&msg_text))
+            && (work_done_detected || is_task_finished_response(Some(&msg_text)))
         {
             tab_status = "done";
             status_detail = Some("Task finished".to_string());
@@ -1613,13 +1687,12 @@ impl AgentRunner {
             args.push("--model".to_string());
             args.push(model.to_string());
         }
-        let system_prompt = tab_system_prompt(&tab);
+        let system_prompt = effective_system_prompt(&tab);
         let prompt_dirty = self.agy_prompt_dirty.lock().unwrap().remove(&tab_id);
-        let effective_prompt = match system_prompt {
-            Some(sp) if !is_resume || prompt_dirty => {
-                format!("<system_instructions>\n{sp}\n</system_instructions>\n\n{prompt}")
-            }
-            _ => prompt,
+        let effective_prompt = if !is_resume || prompt_dirty {
+            format!("<system_instructions>\n{system_prompt}\n</system_instructions>\n\n{prompt}")
+        } else {
+            prompt
         };
         args.push(format!("--print={effective_prompt}"));
 
@@ -2520,10 +2593,8 @@ impl AgentRunner {
             args.push("--model".to_string());
             args.push(model.to_string());
         }
-        if let Some(sp) = tab_system_prompt(&tab) {
-            args.push("--append-system-prompt".to_string());
-            args.push(sp);
-        }
+        args.push("--append-system-prompt".to_string());
+        args.push(effective_system_prompt(&tab));
 
         self.set_status_detail(&tab_id, "Claude is thinking…");
 
@@ -2863,10 +2934,11 @@ impl AgentRunner {
             args.push("-m".to_string());
             args.push(model.to_string());
         }
-        if let Some(sp) = tab_system_prompt(&tab) {
-            args.push("-c".to_string());
-            args.push(format!("developer_instructions={}", toml_basic_string(&sp)));
-        }
+        args.push("-c".to_string());
+        args.push(format!(
+            "developer_instructions={}",
+            toml_basic_string(&effective_system_prompt(&tab))
+        ));
         if let Some(ref tid) = resume_id {
             args.push(tid.clone());
             args.push(prompt);

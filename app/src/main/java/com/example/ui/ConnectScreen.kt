@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,16 +44,12 @@ import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.Warning
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -72,6 +69,7 @@ import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalAutofillManager
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -106,10 +104,21 @@ import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkOnSurface
 import com.example.ui.theme.HerdrBlue
 import com.example.ui.theme.HerdrEmerald
+import com.example.ui.theme.LunaHillBackdrop
 import com.example.ui.theme.MonoFontFamily
+import com.example.ui.theme.ThemedButton
+import com.example.ui.theme.ThemedFilterChip
+import com.example.ui.theme.ThemedOutlinedButton
+import com.example.ui.theme.ThemedTextButton
+import com.example.ui.theme.ThemedTextField
 import com.example.ui.theme.TitleBarBackground
+import com.example.ui.theme.TitleBarIconButton
+import com.example.ui.theme.isLunaControls
+import com.example.ui.theme.lunaTab
+import com.example.ui.theme.lunaTabBaseline
 import com.example.ui.theme.themedCorner
 import com.example.ui.theme.titleBarColors
+import com.example.ui.theme.titleBarTitleStyle
 import kotlinx.coroutines.delay
 import java.util.Locale
 
@@ -285,7 +294,7 @@ fun ConnectScreen(
                     colors = titleBarColors(),
                     navigationIcon = {
                         if (canCancel) {
-                            IconButton(
+                            TitleBarIconButton(
                                 onClick = onCancel,
                                 modifier = Modifier.testTag("connect_back_button"),
                             ) {
@@ -299,12 +308,11 @@ fun ConnectScreen(
                     title = {
                         Text(
                             text = stringResource(R.string.app_name),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.SemiBold,
+                            style = titleBarTitleStyle(MaterialTheme.typography.titleLarge),
                         )
                     },
                     actions = {
-                        IconButton(
+                        TitleBarIconButton(
                             onClick = onOpenAppSettings,
                             modifier = Modifier.testTag("connect_settings_button"),
                         ) {
@@ -344,25 +352,30 @@ fun ConnectScreen(
                         .height(156.dp),
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        Image(
-                            painter = painterResource(id = R.drawable.img_herdr_hero_1795442350136),
-                            contentDescription = stringResource(R.string.connect_title),
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.horizontalGradient(
-                                        colors = listOf(
-                                            DarkBackground.copy(alpha = 0.92f),
-                                            DarkBackground.copy(alpha = 0.65f),
-                                            Color.Transparent,
+                        if (isLunaControls) {
+                            // The XP look swaps the dark photo for a blue sky over a green hill.
+                            LunaHillBackdrop(modifier = Modifier.fillMaxSize())
+                        } else {
+                            Image(
+                                painter = painterResource(id = R.drawable.img_herdr_hero_1795442350136),
+                                contentDescription = stringResource(R.string.connect_title),
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            colors = listOf(
+                                                DarkBackground.copy(alpha = 0.92f),
+                                                DarkBackground.copy(alpha = 0.65f),
+                                                Color.Transparent,
+                                            ),
                                         ),
                                     ),
-                                ),
-                        )
+                            )
+                        }
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -414,17 +427,21 @@ fun ConnectScreen(
                 tailscaleStatus?.let { TailscaleStatusHint(it) }
 
                 // Mode switcher: SSH + agy Auto-Setup vs Direct / Pairing URI
+                // In the XP look the two modes are tabs standing on a line; elsewhere, a segmented box.
+                val lunaTabs = isLunaControls
                 Surface(
-                    shape = themedCorner(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier.fillMaxWidth(),
+                    shape = if (lunaTabs) RectangleShape else themedCorner(16.dp),
+                    color = if (lunaTabs) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
+                    border = if (lunaTabs) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (lunaTabs) Modifier.lunaTabBaseline() else Modifier),
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            .padding(if (lunaTabs) PaddingValues(horizontal = 4.dp) else PaddingValues(4.dp)),
+                        horizontalArrangement = Arrangement.spacedBy(if (lunaTabs) 2.dp else 4.dp),
                     ) {
                         ModeTabButton(
                             selected = mode == ConnectMode.SSH_BOOTSTRAP,
@@ -498,7 +515,7 @@ fun ConnectScreen(
                                     )
                                 }
                             }
-                            OutlinedButton(
+                            ThemedOutlinedButton(
                                 enabled = !bootstrapState.isRunning,
                                 onClick = {
                                     val clip = clipboard.getText()?.text.orEmpty()
@@ -544,7 +561,7 @@ fun ConnectScreen(
                         }
                     }
 
-                    OutlinedTextField(
+                    ThemedTextField(
                         value = sshHost,
                         onValueChange = { next ->
                             val isSingleCharEdit = kotlin.math.abs(next.length - sshHost.length) <= 1 &&
@@ -576,7 +593,7 @@ fun ConnectScreen(
                         shape = themedCorner(14.dp),
                     )
 
-                    OutlinedTextField(
+                    ThemedTextField(
                         value = sshUsername,
                         onValueChange = { sshUsername = it },
                         label = { Text(stringResource(R.string.ssh_username_label)) },
@@ -602,7 +619,7 @@ fun ConnectScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        OutlinedTextField(
+                        ThemedTextField(
                             value = sshPortText,
                             onValueChange = { sshPortText = it.filter { ch -> ch.isDigit() }.take(5) },
                             label = { Text(stringResource(R.string.ssh_port_label)) },
@@ -616,7 +633,7 @@ fun ConnectScreen(
                                 .testTag("ssh_port_input"),
                             shape = themedCorner(14.dp),
                         )
-                        OutlinedTextField(
+                        ThemedTextField(
                             value = daemonPortText,
                             onValueChange = { next ->
                                 daemonPortText = next.filter { ch -> ch.isDigit() }.take(5)
@@ -642,7 +659,7 @@ fun ConnectScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
+                            ThemedFilterChip(
                                 selected = sshAuthMethod == SshAuthMethod.TAILSCALE_SSH,
                                 onClick = { if (!bootstrapState.isRunning) sshAuthMethod = SshAuthMethod.TAILSCALE_SSH },
                                 label = { Text(stringResource(R.string.ssh_auth_tailscale)) },
@@ -651,7 +668,7 @@ fun ConnectScreen(
                                 },
                                 modifier = Modifier.testTag("auth_tailscale_ssh"),
                             )
-                            FilterChip(
+                            ThemedFilterChip(
                                 selected = sshAuthMethod == SshAuthMethod.PRIVATE_KEY,
                                 onClick = { if (!bootstrapState.isRunning) sshAuthMethod = SshAuthMethod.PRIVATE_KEY },
                                 label = { Text(stringResource(R.string.ssh_auth_key)) },
@@ -660,7 +677,7 @@ fun ConnectScreen(
                                 },
                                 modifier = Modifier.testTag("auth_private_key"),
                             )
-                            FilterChip(
+                            ThemedFilterChip(
                                 selected = sshAuthMethod == SshAuthMethod.PASSWORD,
                                 onClick = { if (!bootstrapState.isRunning) sshAuthMethod = SshAuthMethod.PASSWORD },
                                 label = { Text(stringResource(R.string.ssh_auth_password)) },
@@ -670,7 +687,7 @@ fun ConnectScreen(
                     }
 
                     if (sshAuthMethod == SshAuthMethod.PASSWORD) {
-                        OutlinedTextField(
+                        ThemedTextField(
                             value = sshPassword,
                             onValueChange = { sshPassword = it },
                             label = { Text(stringResource(R.string.ssh_password_label)) },
@@ -703,7 +720,7 @@ fun ConnectScreen(
                             shape = themedCorner(14.dp),
                         )
                     } else if (sshAuthMethod == SshAuthMethod.PRIVATE_KEY) {
-                        OutlinedTextField(
+                        ThemedTextField(
                             value = sshPrivateKey,
                             onValueChange = { sshPrivateKey = it },
                             label = { Text(stringResource(R.string.ssh_private_key_label)) },
@@ -717,7 +734,7 @@ fun ConnectScreen(
                                 .testTag("ssh_private_key_input"),
                             shape = themedCorner(14.dp),
                         )
-                        OutlinedTextField(
+                        ThemedTextField(
                             value = sshPassphrase,
                             onValueChange = { sshPassphrase = it },
                             label = { Text(stringResource(R.string.ssh_passphrase_label)) },
@@ -751,7 +768,7 @@ fun ConnectScreen(
 
                     // Primary SSH Bootstrap CTA / Cancel button
                     if (bootstrapState.isRunning) {
-                        OutlinedButton(
+                        ThemedOutlinedButton(
                             onClick = onCancelSshBootstrap,
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = AppTheme.colors.danger),
                             border = BorderStroke(1.dp, AppTheme.colors.danger.copy(alpha = 0.6f)),
@@ -775,7 +792,7 @@ fun ConnectScreen(
                             SshAuthMethod.PRIVATE_KEY -> sshPrivateKey.isNotBlank()
                             SshAuthMethod.PASSWORD -> sshPassword.isNotEmpty()
                         }
-                        Button(
+                        ThemedButton(
                             onClick = {
                                 autofillManager?.commit()
                                 onStartSshBootstrap(candidateConfig)
@@ -821,7 +838,7 @@ fun ConnectScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            OutlinedButton(
+                            ThemedOutlinedButton(
                                 onClick = {
                                     val clip = clipboard.getText()?.text.orEmpty()
                                     val parsed = ConnectionConfig.parsePairingUri(clip)
@@ -858,7 +875,7 @@ fun ConnectScreen(
                         }
                     }
 
-                    OutlinedTextField(
+                    ThemedTextField(
                         value = host,
                         onValueChange = { next ->
                             val isSingleCharEdit = kotlin.math.abs(next.length - host.length) <= 1 &&
@@ -891,7 +908,7 @@ fun ConnectScreen(
                         shape = themedCorner(14.dp),
                     )
 
-                    OutlinedTextField(
+                    ThemedTextField(
                         value = portText,
                         onValueChange = { portText = it.filter { ch -> ch.isDigit() }.take(5) },
                         label = { Text(stringResource(R.string.connect_port_label)) },
@@ -905,7 +922,7 @@ fun ConnectScreen(
                         shape = themedCorner(14.dp),
                     )
 
-                    OutlinedTextField(
+                    ThemedTextField(
                         value = token,
                         onValueChange = { token = it },
                         label = { Text(stringResource(R.string.connect_token_label)) },
@@ -960,7 +977,7 @@ fun ConnectScreen(
                         }
                     }
 
-                    Button(
+                    ThemedButton(
                         onClick = {
                             autofillManager?.commit()
                             val port = portText.toIntOrNull()?.takeIf { it in 1..65535 } ?: 7501
@@ -1033,12 +1050,18 @@ private fun ModeTabButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val luna = isLunaControls
+    val contentColor = when {
+        luna -> MaterialTheme.colorScheme.onSurface
+        selected -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Surface(
-        shape = themedCorner(12.dp),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+        shape = if (luna) RectangleShape else themedCorner(12.dp),
+        color = if (selected && !luna) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
         modifier = modifier
             .height(44.dp)
-            .clip(themedCorner(12.dp))
+            .then(if (luna) Modifier.lunaTab(selected) else Modifier.clip(themedCorner(12.dp)))
             .clickable(onClick = onClick),
     ) {
         Row(
@@ -1049,22 +1072,14 @@ private fun ModeTabButton(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (selected) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                tint = contentColor,
                 modifier = Modifier.size(17.dp),
             )
             Spacer(Modifier.width(6.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
-                color = if (selected) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                color = contentColor,
                 maxLines = 1,
             )
         }
@@ -1234,7 +1249,7 @@ private fun BootstrapConsoleCard(
             }
 
             if (state.isHostKeyMismatch) {
-                Button(
+                ThemedButton(
                     onClick = onTrustNewKeyAndRetry,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = AppTheme.colors.warning,

@@ -10,6 +10,7 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
 import com.example.data.AppThemeId
@@ -40,13 +41,29 @@ data class BarStyle(
     val content: Color,
     val mutedContent: Color,
     val semantic: SemanticColors,
+    /** Drawn instead of [background] where the bar is painted full size. See [BandedGradient]. */
+    val bands: BandedGradient? = null,
+    /** A drop shadow under the bar's title, for themes whose title bars have one. */
+    val titleShadow: Shadow? = null,
 )
+
+/** How a theme draws its buttons, check boxes and other controls. See Controls.kt. */
+enum class ControlStyle {
+    /** Material 3 components, as they come. */
+    MATERIAL,
+
+    /** Windows XP: bevelled push buttons, check boxes instead of switches, tabs with orange caps. */
+    LUNA,
+}
 
 /** The parts of a theme's look that go beyond colors and type. */
 @Immutable
 data class ChromeStyle(
     /** Top app bars. Drawn behind the status bar too. */
     val titleBar: BarStyle,
+    val controls: ControlStyle,
+    /** The highlight behind the selected row of a list, or null to leave that to each list. */
+    val selectedRow: BarStyle?,
     /** The header card of the tab drawer and sidebar. */
     val panelHeader: BarStyle,
     /** The main call to action, "New tab". */

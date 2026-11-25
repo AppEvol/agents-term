@@ -3,7 +3,8 @@
 #
 # Usage:
 #   e2e/docker-vm/start_vm.sh [--name agentsterm-e2e-vm] [--ssh-port 2222] [--daemon-port 7591]
-#       [--pubkey /path/to/id.pub] [--target vm-minimal|vm-legacy-python]
+#       [--pubkey /path/to/id.pub]
+#       [--target vm-minimal|vm-ubuntu-2404|vm-ubuntu-2204|vm-debian-12|vm-almalinux-9|vm-fedora-41|vm-amazonlinux-2023|vm-alpine-321]
 #       [--binary /path/to/agentsterm-daemon]
 set -euo pipefail
 
@@ -67,27 +68,6 @@ DOCKER_ARGS=(
   -p "127.0.0.1:${DAEMON_PORT}:17591"
   -v "${SNAPSHOT_DIR}/release:/mnt/release:ro"
 )
-
-if [ "$TARGET" = "vm-legacy-python" ]; then
-  mkdir -p "$SNAPSHOT_DIR/repo"
-  (
-    cd "$REPO_ROOT"
-    git archive HEAD | tar -x -C "$SNAPSHOT_DIR/repo"
-    for dir in daemon app_state_cli docs; do
-      if [ -d "$REPO_ROOT/$dir" ]; then
-        rm -rf "$SNAPSHOT_DIR/repo/$dir"
-        cp -a "$REPO_ROOT/$dir" "$SNAPSHOT_DIR/repo/$dir"
-      fi
-    done
-    rm -rf "$SNAPSHOT_DIR/repo/daemon/tests"
-    find "$SNAPSHOT_DIR/repo/daemon" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-  )
-  git -C "$SNAPSHOT_DIR/repo" init -q -b main
-  git -C "$SNAPSHOT_DIR/repo" -c user.name="E2E Test" -c user.email="e2e@example.invalid" add -A
-  git -C "$SNAPSHOT_DIR/repo" -c user.name="E2E Test" -c user.email="e2e@example.invalid" \
-    -c commit.gpgsign=false commit -q -m "E2E legacy snapshot"
-  DOCKER_ARGS+=(-v "${SNAPSHOT_DIR}/repo:/mnt/repo:ro")
-fi
 
 if [ -n "$PUBKEY" ]; then
   DOCKER_ARGS+=(-v "${PUBKEY}:/mnt/ssh-pubkey:ro")

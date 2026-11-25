@@ -1,6 +1,5 @@
 package com.example.ui.theme
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,7 +48,7 @@ fun HerdrTheme(
 /** Paints the theme's title bar behind a top app bar that uses [titleBarColors]. */
 @Composable
 fun TitleBarBackground(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Box(modifier = modifier.background(AppTheme.chrome.titleBar.background)) { content() }
+    Box(modifier = modifier.barBackground(AppTheme.chrome.titleBar)) { content() }
 }
 
 /** Top app bar colors for a bar wrapped in [TitleBarBackground]. */
