@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DAEMON_PORT="${DAEMON_PORT:-7591}"
+BRIDGE_PORT="${BRIDGE_PORT:-17591}"
+
+# Ensure SSH host keys exist.
+ssh-keygen -A >/dev/null 2>&1
+
+# Optional SSH public key mounted by the test runner for passwordless key auth.
+if [ -f /mnt/ssh-pubkey ]; then
+  install -d -m 700 -o vmuser -g vmuser /home/vmuser/.ssh
+  install -m 600 -o vmuser -g vmuser /mnt/ssh-pubkey /home/vmuser/.ssh/authorized_keys
+fi
+
+# Create a local bare git remote from /mnt/repo so `git clone https://github.com/nedn/agents-term.git`
+# transparently clones the exact PR commit under test with zero app changes.
+git config --system --add safe.directory '*'
+if [ -d /mnt/repo ]; then
+  rm -rf /opt/agentsterm-repo
+  git clone --bare /mnt/repo /opt/agentsterm-repo >/dev/null
+  chown -R vmuser:vmuser /opt/agentsterm-repo
+  git config --system url."file:///opt/agentsterm-repo".insteadOf "https://github.com/nedn/agents-term.git"
+fi
+
+# Seed realistic model configs for claude, codex, and agy discovery tests.
+install -d -o vmuser -g vmuser \
+  /home/vmuser/.claude \
+  /home/vmuser/.codex \
+  /home/vmuser/.gemini/antigravity-cli
+
+cat > /home/vmuser/.claude/settings.json <<'EOF'
+{"model": "sonnet"}
+EOF
+
+cat > /home/vmuser/.codex/config.toml <<'EOF'
+model = "gpt-5.3-codex"
+EOF
+
+cat > /home/vmuser/.codex/models_cache.json <<'EOF'
+{
+  "models": [
+    {"slug": "gpt-5.3-codex", "display_name": "GPT-5.3 Codex", "priority": 1},
+    {"slug": "o4-mini", "display_name": "o4-mini", "priority": 2}
+  ]
+}
+EOF
+
+cat > /home/vmuser/.gemini/antigravity-cli/settings.json <<'EOF'
+{"model": "gemini-4-pro"}
+EOF
+
+chown -R vmuser:vmuser /home/vmuser/.claude /home/vmuser/.codex /home/vmuser/.gemini
+
+# Start cron so @reboot crontab persistence works inside the container.
+cron
+
+# Bridge external container traffic (mapped to host loopback) to 127.0.0.1:${DAEMON_PORT}
+# where the daemon binds using the fake Tailscale IP (127.0.0.1).
+socat "TCP-LISTEN:${BRIDGE_PORT},bind=0.0.0.0,fork,reuseaddr" "TCP:127.0.0.1:${DAEMON_PORT}" &
+
+exec /usr/sbin/sshd -D -e

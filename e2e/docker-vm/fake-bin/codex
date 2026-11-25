@@ -1,0 +1,80 @@
+#!/usr/bin/env sh
+# Deterministic POSIX sh fake for `codex` CLI used inside Docker E2E VMs.
+set -eu
+
+is_resume=0
+thread_id=""
+model="default"
+prompt=""
+
+# Skip leading `exec`
+if [ "${1:-}" = "exec" ]; then
+  shift
+fi
+if [ "${1:-}" = "resume" ]; then
+  is_resume=1
+  shift
+fi
+
+pos1=""
+pos2=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json|--skip-git-repo-check|--dangerously-bypass-approvals-and-sandbox)
+      shift
+      ;;
+    -C|-s|-c)
+      shift 2
+      ;;
+    -m)
+      model="${2:-}"
+      shift 2
+      ;;
+    *)
+      if [ -z "$pos1" ]; then
+        pos1="$1"
+      else
+        pos2="$1"
+      fi
+      shift
+      ;;
+  esac
+done
+
+resumed="no"
+if [ "$is_resume" -eq 1 ]; then
+  thread_id="$pos1"
+  prompt="$pos2"
+  resumed="yes"
+else
+  thread_id="codex-thread-e2e-1"
+  prompt="$pos1"
+fi
+
+printf '{"type":"thread.started","thread_id":"%s"}\n' "$thread_id"
+
+case "$prompt" in
+  *SLOW_TURN*)
+    printf '{"type":"item.started","item":{"id":"cmd_slow","type":"command_execution","command":"sleep 10"}}\n'
+    sleep 10
+    printf '{"type":"item.completed","item":{"id":"cmd_slow","type":"command_execution","command":"sleep 10","exit_code":0,"aggregated_output":"done"}}\n'
+    printf '{"type":"item.completed","item":{"id":"msg_slow","type":"agent_message","text":"Codex slow done."}}\n'
+    printf '{"type":"turn.completed","usage":{"input_tokens":8,"output_tokens":10}}\n'
+    exit 0
+    ;;
+esac
+
+printf '{"type":"item.completed","item":{"id":"reason_1","type":"reasoning","text":"Checking workspace"}}\n'
+printf '{"type":"item.started","item":{"id":"cmd_1","type":"command_execution","command":"ls -la"}}\n'
+printf '{"type":"item.completed","item":{"id":"cmd_1","type":"command_execution","command":"ls -la","exit_code":0,"aggregated_output":"ok"}}\n'
+
+summary_prefix=""
+case "$prompt" in
+  *tab_task_summary*)
+    summary_prefix="<tab_task_summary>Docker E2E Codex Task</tab_task_summary>\n"
+    ;;
+esac
+
+printf '{"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"%sCodex reply [thread=%s resumed=%s model=%s]."}}\n' \
+  "$summary_prefix" "$thread_id" "$resumed" "$model"
+printf '{"type":"turn.completed","usage":{"input_tokens":14,"output_tokens":22}}\n'
