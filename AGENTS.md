@@ -11,10 +11,10 @@
 
 ## Workflow
 
-- Always do your work in your own git worktree. Multiple agents may work in this repository on the same machine at the same time, and separate worktrees keep their changes from conflicting.
-- For simple changes, commit in your worktree and push directly to `origin/main` when done.
-- For non-trivial work, push your work branch to the remote and keep working on it until the work is done, then merge the work branch into `main` and push `main`.
-- After the remote branch is merged into `main` (or pushed directly to `origin/main`) and the work is finished, clean up your local worktree and delete the merged local branch (e.g., `git worktree remove <worktree-path>` and `git branch -d <branch>`) so stale worktrees do not pile up.
+- Always do your work in your own git worktree on a dedicated work branch. Multiple agents may work in this repository on the same machine at the same time, and separate worktrees keep their changes from conflicting.
+- `main` is protected and requires a pull request and passing required CI checks (including for simple changes). Do not push directly to `origin/main` or merge locally into `main` and push `main`.
+- Push your work branch to `origin`, open a pull request targeting `main`, keep the branch up to date with `main` if needed, and merge the pull request once all required CI checks pass.
+- After the pull request is merged into `main` and the work is finished, clean up your local worktree and delete the merged local branch (e.g., `git worktree remove <worktree-path>` and `git branch -d <branch>`) so stale worktrees do not pile up.
 
 ## Testing & CI
 
