@@ -21,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,7 +35,9 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.AppThemeId
 import com.example.ui.theme.AppThemeSpec
+import com.example.ui.theme.ThemedRadioIndicator
 import com.example.ui.theme.appThemeSpec
+import com.example.ui.theme.sectionTitleColor
 import com.example.ui.theme.themedCorner
 
 @StringRes
@@ -84,6 +85,7 @@ fun ThemePickerCard(
                     text = stringResource(R.string.settings_appearance_section_title),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    color = sectionTitleColor,
                 )
             }
             Column(modifier = Modifier.padding(top = 8.dp).selectableGroup()) {
@@ -124,7 +126,7 @@ private fun ThemeOptionRow(theme: AppThemeId, selected: Boolean, onSelect: () ->
             )
         }
         // The row is the click target, so the radio button only shows the state.
-        RadioButton(selected = selected, onClick = null)
+        ThemedRadioIndicator(selected = selected)
     }
 }
 
