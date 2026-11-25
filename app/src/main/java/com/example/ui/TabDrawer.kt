@@ -55,6 +55,7 @@ import com.example.data.ConnectionState
 import com.example.data.TabActivity
 import com.example.data.TabRecord
 import com.example.data.WorkspaceState
+import com.example.data.stripWorkDoneToken
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.statusColor
@@ -495,7 +496,7 @@ private fun DrawerTabRow(
                     )
                 }
                 val summaryText = tab.taskSummary?.trim()?.takeIf { it.isNotEmpty() }
-                    ?: tab.lastMessagePreview?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: tab.lastMessagePreview?.let(::stripWorkDoneToken)?.trim()?.takeIf { it.isNotEmpty() }
                 if (summaryText != null) {
                     Text(
                         text = summaryText,

@@ -338,3 +338,122 @@ sleep 10
 
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn work_done_padding_instruction_is_non_modifiable_and_token_marks_tab_done() {
+    let home = make_temp_dir("agentsterm-rs-work-done");
+    let fake_bin = home.join("fake-bin");
+    let args_log = home.join("claude-args.log");
+    fs::create_dir_all(&fake_bin).unwrap();
+    write_exec(
+        &fake_bin.join("claude"),
+        &format!(
+            r#"#!/usr/bin/env sh
+printf '%s\n---\n' "$*" >> "{}"
+case "$*" in
+  *"TURN_PROSE"*)
+    printf '{{"type":"stream_event","session_id":"sess-wd","event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"All done. You can close this tab now."}}}}}}\n'
+    ;;
+  *"TURN_TOKEN"*)
+    printf '{{"type":"stream_event","session_id":"sess-wd","event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"Shipped cleanly!\\n\\n<this-work-is-"}}}}}}\n'
+    printf '{{"type":"stream_event","session_id":"sess-wd","event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"done-172728>\\n"}}}}}}\n'
+    ;;
+  *"TURN_CODE"*)
+    printf '{{"type":"stream_event","session_id":"sess-wd","event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"Example:\\n```rust\\nconst T = \\"<this-work-is-done-172728>\\";\\n```\\nStill working."}}}}}}\n'
+    ;;
+esac
+"#,
+            args_log.display()
+        ),
+    );
+
+    let daemon = TestDaemon::start(&home, Some(&fake_bin));
+    let (st, created) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({ "agent": "claude", "cwd": home.to_string_lossy(), "systemPrompt": "" })),
+    );
+    assert_eq!(st, 200);
+    let tab_id = created["tab"]["id"].as_str().unwrap().to_string();
+    assert!(created["tab"]["systemPrompt"].is_null());
+
+    let wait_settled = |expected_msg_count: usize| -> Value {
+        let deadline = Instant::now() + Duration::from_secs(6);
+        loop {
+            let (_, resp) = daemon.api("GET", &format!("/api/tabs/{tab_id}/messages"), None);
+            let msgs = resp["messages"].as_array().unwrap();
+            let status = resp["tab"]["status"].as_str().unwrap_or("");
+            if msgs.len() >= expected_msg_count && status != "working" {
+                return resp;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Tab did not settle: status={status} msgs={}",
+                msgs.len()
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    // 1) Empty user systemPrompt still injects padding instruction; prose without token stays idle.
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{tab_id}/messages"),
+        Some(json!({ "text": "TURN_PROSE" })),
+    );
+    assert_eq!(st, 200);
+    let resp1 = wait_settled(2);
+    assert_eq!(resp1["tab"]["status"].as_str(), Some("idle"));
+    assert!(resp1["tab"]["systemPrompt"].is_null());
+    let log1 = fs::read_to_string(&args_log).unwrap();
+    assert!(
+        log1.contains("<this-work-is-done-172728>"),
+        "Expected non-modifiable padding instruction even when user systemPrompt is empty: {log1}"
+    );
+
+    // 2) Custom systemPrompt preserves user prompt + padding instruction; split token marks done & strips cleanly.
+    let (st, patched) = daemon.api(
+        "PATCH",
+        &format!("/api/tabs/{tab_id}"),
+        Some(json!({ "systemPrompt": "Be concise." })),
+    );
+    assert_eq!(st, 200);
+    assert_eq!(patched["tab"]["systemPrompt"].as_str(), Some("Be concise."));
+
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{tab_id}/messages"),
+        Some(json!({ "text": "TURN_TOKEN" })),
+    );
+    assert_eq!(st, 200);
+    let resp2 = wait_settled(4);
+    assert_eq!(resp2["tab"]["status"].as_str(), Some("done"));
+    assert_eq!(resp2["tab"]["statusDetail"].as_str(), Some("Task finished"));
+    assert_eq!(
+        resp2["tab"]["lastMessagePreview"].as_str(),
+        Some("Shipped cleanly!")
+    );
+    let msg2 = resp2["messages"].as_array().unwrap().last().unwrap();
+    assert_eq!(msg2["text"].as_str(), Some("Shipped cleanly!"));
+    let log2 = fs::read_to_string(&args_log).unwrap();
+    assert!(log2.contains("Be concise."));
+    assert!(log2.contains("<this-work-is-done-172728>"));
+
+    // 3) Token inside fenced code block is preserved verbatim and does not mark tab done.
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{tab_id}/messages"),
+        Some(json!({ "text": "TURN_CODE" })),
+    );
+    assert_eq!(st, 200);
+    let resp3 = wait_settled(6);
+    assert_eq!(resp3["tab"]["status"].as_str(), Some("idle"));
+    let msg3 = resp3["messages"].as_array().unwrap().last().unwrap();
+    let msg3_text = msg3["text"].as_str().unwrap_or("");
+    assert!(
+        msg3_text.contains("<this-work-is-done-172728>"),
+        "Expected token inside code block to be preserved: {msg3_text}"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}
