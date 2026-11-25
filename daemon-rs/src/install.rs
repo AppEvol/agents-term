@@ -1,7 +1,6 @@
 //! Native lifecycle management subcommands: `install` and `ensure-running`.
 //!
-//! Replaces the ~400-line Python-heavy `daemon/install.sh` and generated `start-daemon.sh`
-//! with deterministic Rust logic that works with zero runtime dependencies (no Python, no git).
+//! Installs the user service or a detached daemon with an `@reboot` crontab entry.
 
 use serde_json::Value;
 use std::env;

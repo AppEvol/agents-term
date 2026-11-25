@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""Cross-boundary Docker VM end-to-end test suite for the static Rust daemon (#63).
+"""Exercise the static Rust daemon over SSH, HTTP and WebSocket in a minimal Linux VM.
 
-Tests TWO real Linux Docker container topologies:
-1. `MinimalContainerRustDaemonE2ETest` (`vm-minimal` target — ZERO `git` and ZERO `python3`!):
-   Verifies zero-dependency POSIX SSH bootstrap, SHA-256 verification, idempotency,
-   `@reboot` crontab (`ensure-running`), native `app_state_cli` symlink, Shell + #52
-   child-process-group cleanup, `agy`/`claude`/`codex` runners, `/api/fs`, `/api/debug/dumps`,
-   and #61/#62 mid-turn `sessionRef` persistence + explicit restart interruption reason + timestamps.
-2. `PythonToRustLiveUpgradeE2ETest` (`vm-legacy-python` target):
-   Boots the legacy Python daemon with existing `config.json`, bearer token, tabs, messages,
-   and `@reboot` crontab, then runs the new Rust SSH bootstrap in place and verifies seamless
-   migration with zero data/token loss.
+Covers bootstrap, reboot setup, agent turns, interruption and restart, the filesystem
+and debug endpoints, and the native app_state_cli.
 """
 
 from __future__ import annotations
@@ -668,74 +660,6 @@ class MinimalContainerRustDaemonE2ETest(BaseDockerVmTest):
         # Verify daemon.log has ISO-8601 UTC timestamps (#61).
         daemon_log = self.docker_exec("cat ~/.config/herdr-mobile/daemon.log").stdout
         self.assertRegex(daemon_log, ISO_TS_RE, f"Expected ISO-8601 timestamps in daemon.log:\n{daemon_log}")
-
-
-class PythonToRustLiveUpgradeE2ETest(BaseDockerVmTest):
-    """Verifies seamless in-place upgrade from the legacy Python daemon to the static Rust daemon."""
-
-    docker_target = "vm-legacy-python"
-
-    def test_live_python_to_rust_upgrade_preserves_token_tabs_and_migrates_cron(self) -> None:
-        # 1. Start the legacy Python daemon directly inside the container and create a tab + message.
-        py_start = self.docker_exec(
-            f"mkdir -p ~/.config/herdr-mobile; "
-            f"git clone -q /opt/agentsterm-repo ~/.local/share/agentsterm/agents-term; "
-            f"nohup python3 ~/.local/share/agentsterm/agents-term/daemon/agentsterm-daemon "
-            f"serve --host 127.0.0.1 --port {self.daemon_port} "
-            f">> ~/.config/herdr-mobile/daemon.log 2>&1 < /dev/null & "
-            f"echo $! > ~/.config/herdr-mobile/daemon.pid; "
-            f"(crontab -l 2>/dev/null; echo '@reboot /home/vmuser/.config/herdr-mobile/start-daemon.sh') | crontab -"
-        )
-        self.assertEqual(py_start.returncode, 0, py_start.stdout + py_start.stderr)
-
-        # Wait for Python daemon to create config.json and start listening.
-        deadline = time.time() + 10
-        legacy_token = ""
-        while time.time() < deadline:
-            cfg_out = self.docker_exec("cat ~/.config/herdr-mobile/config.json 2>/dev/null || true").stdout
-            if cfg_out.strip():
-                legacy_token = json.loads(cfg_out)["token"]
-                st, info = self.api("GET", "/api/info", token=legacy_token)
-                if st == 200 and info.get("runtime") != "rust":
-                    break
-            time.sleep(0.2)
-        self.assertTrue(len(legacy_token) >= 16, "Legacy Python daemon did not start")
-        type(self).token = legacy_token
-
-        # Create a tab and run a shell turn on the legacy Python daemon.
-        st, created = self.api(
-            "POST",
-            "/api/tabs",
-            {"agent": "shell", "title": "Legacy Python Tab", "cwd": "/home/vmuser"},
-        )
-        self.assertEqual(st, 200)
-        legacy_tab_id = created["tab"]["id"]
-        self.assertEqual(
-            self.api("POST", f"/api/tabs/{legacy_tab_id}/messages", {"text": "echo FROM_PYTHON_DAEMON"})[0], 200
-        )
-        self.wait_for_tab_idle(legacy_tab_id)
-
-        # 2. Run the new static Rust SSH bootstrap command in place over real SSH!
-        upgrade_res = self.ssh_exec(build_rust_bootstrap_command(self.daemon_port))
-        self.assertEqual(upgrade_res.returncode, 0, upgrade_res.stdout + upgrade_res.stderr)
-
-        # 3. Verify the Rust daemon took over cleanly using the EXACT same token & tabs.
-        st, info = self.api("GET", "/api/info", token=legacy_token)
-        self.assertEqual(st, 200, "Legacy bearer token should remain valid after Python -> Rust upgrade")
-        self.assertEqual(info.get("runtime"), "rust")
-        self.assertEqual(info.get("buildHash"), self.binary_hash)
-
-        st, msgs_resp = self.api("GET", f"/api/tabs/{legacy_tab_id}/messages", token=legacy_token)
-        self.assertEqual(st, 200)
-        self.assertEqual(msgs_resp["tab"]["title"], "Legacy Python Tab")
-        self.assertTrue(any("FROM_PYTHON_DAEMON" in m.get("text", "") for m in msgs_resp["messages"]))
-
-        # Verify legacy Python process is gone and crontab migrated to `ensure-running`.
-        ps_out = self.docker_exec("ps aux").stdout
-        self.assertNotIn("python3", ps_out, f"Legacy Python daemon still running:\n{ps_out}")
-        cron_out = self.docker_exec("crontab -l").stdout
-        self.assertNotIn("start-daemon.sh", cron_out)
-        self.assertIn("ensure-running", cron_out)
 
 
 if __name__ == "__main__":

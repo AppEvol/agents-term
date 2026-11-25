@@ -1,13 +1,9 @@
-# Static-check configuration for the Python code (VM daemon and app_state_cli).
-# This is tool config only, not a package definition; the code stays
-# standard-library only. Run everything via scripts/static-checks.sh.
+# Static checks for the Python CLI and test tools. Run via scripts/static-checks.sh.
 
 [tool.ruff]
-# Lowest supported interpreter (app_state_cli: 3.8+, daemon: 3.9+), so ruff
-# never suggests syntax that would break on it.
+# app_state_cli supports Python 3.8+.
 target-version = "py38"
 line-length = 120
-extend-include = ["daemon/agentsterm-daemon"]
 
 [tool.ruff.lint]
 select = [
@@ -28,7 +24,6 @@ select = [
 ]
 ignore = [
   "B904",     # error translation at API boundaries deliberately drops the cause
-  "SIM102",   # nested ifs mirror the stream-event structure in runner.py
   "PERF203",  # try/except in loops is free on 3.11+
   "PERF401",
   "SIM105",   # contextlib.suppress is slower and no clearer than try/except/pass
@@ -43,15 +38,12 @@ ignore = [
 # Tests: http.server handler signatures, long literal fixtures, subprocess
 # calls whose return code is asserted on, shared mutable handler state.
 "**/test_*.py" = ["ARG002", "E501", "PLW1510", "RUF012"]
-"daemon/tests/*" = ["ARG002", "E501", "PLW1510", "RUF012"]
 
 # Dead code detection.
 [tool.vulture]
-paths = ["daemon", "app_state_cli"]
+paths = ["daemon-rs/tests", "app_state_cli"]
 min_confidence = 60
 ignore_names = [
   # http.server / argparse hooks called by the standard library
   "do_GET", "do_POST", "log_message", "required",
-  # WebSocket state kept for protocol completeness and debugging
-  "CONNECTING", "close_reason",
 ]
