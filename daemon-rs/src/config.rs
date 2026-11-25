@@ -25,6 +25,13 @@ pub const FULL_ACCESS_COMPLETION_INSTRUCTION: &str =
     "When the user asks you to accomplish a task in this tab, once the task is complete \
 clearly let them know it is finished and that they can close this tab.";
 
+pub const WORK_DONE_SYSTEM_INSTRUCTION: &str =
+    "When the user's requested task in this tab is completely finished and no further action is \
+needed from you, output the exact token <this-work-is-done-172728> on its own line at the very \
+end of your final response. Only output this token when the task is truly complete (do not output \
+it if you are asking a clarifying question, waiting for input, blocked, or still have remaining \
+work), and never mention or explain this token to the user.";
+
 pub fn daemon_commit() -> String {
     if let Ok(v) = env::var("AGENTSTERM_DAEMON_COMMIT") {
         let trimmed = v.trim();

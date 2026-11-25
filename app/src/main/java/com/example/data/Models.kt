@@ -425,33 +425,217 @@ data class CreateTabRequest(
     val systemPrompt: String? = null,
 )
 
-private val fencedCodeBlockRegex = Regex("```[\\s\\S]*?```")
-private val negatedCloseTabRegex = Regex(
-    "\\b(?:do\\s+not|don't|cannot|can't|avoid|never|wait\\s+before)\\b[^\\n.!?]{0,40}\\bclose\\s+(?:this|the)\\s+tab\\b",
-    RegexOption.IGNORE_CASE,
-)
-private val closeTabCueRegex = Regex(
-    "(?:\\b(?:you\\s+(?:can|may)|feel\\s+free\\s+to|(?:it(?:'s|\\s+is)\\s+)?safe\\s+to|safely|good\\s+to|ready\\s+to)\\s+" +
-        "(?:now\\s+)?(?:safely\\s+)?close\\s+(?:this|the)\\s+tab\\b|" +
-        "\\bclose\\s+(?:this|the)\\s+tab\\s+(?:now|whenever|if\\s+you(?:'d|\\s+would)?\\s+like)\\b)",
-    RegexOption.IGNORE_CASE,
-)
-private val paragraphSplitRegex = Regex("\\n\\s*\\n")
+const val WORK_DONE_TOKEN = "<this-work-is-done-172728>"
+
+private class WorkDoneTokenScanner(private val text: String) {
+    private val out = StringBuilder(text.length)
+    private val len = text.length
+    private var pos = 0
+    private var detected = false
+    private var atLineStart = true
+    private var fenceChar: Char? = null
+    private var fenceLen = 0
+    private var inFenceHeader = false
+    private var inlineTicks = 0
+    private var inlineBlankLinePending = false
+
+    fun scan(): Pair<Boolean, String> {
+        while (pos < len) {
+            when {
+                fenceChar != null -> stepFencedCode()
+                inlineTicks > 0 -> stepInlineCode()
+                else -> stepProse()
+            }
+        }
+        val cleaned = if (detected) out.toString().trimEnd() else text
+        return detected to cleaned
+    }
+
+    private fun stepFencedCode() {
+        if (inFenceHeader) {
+            emitUntilNewline()
+            inFenceHeader = false
+            return
+        }
+        if (atLineStart && tryCloseFence()) {
+            return
+        }
+        atLineStart = false
+        emitUntilNewline()
+    }
+
+    private fun emitUntilNewline() {
+        val nl = text.indexOf('\n', pos)
+        if (nl >= 0) {
+            out.append(text, pos, nl + 1)
+            pos = nl + 1
+            atLineStart = true
+        } else {
+            out.append(text, pos, len)
+            pos = len
+        }
+    }
+
+    private fun tryCloseFence(): Boolean {
+        val fc = fenceChar ?: return false
+        var p = skipLeadingSpaces(pos)
+        if (p >= len || text[p] != fc) return false
+        val start = p
+        while (p < len && text[p] == fc) p++
+        if (p - start < fenceLen) return false
+        while (p < len && (text[p] == ' ' || text[p] == '\t')) p++
+        val end = consumeLineEndingOrEof(p) ?: return false
+        out.append(text, pos, end)
+        pos = end
+        fenceChar = null
+        fenceLen = 0
+        atLineStart = true
+        return true
+    }
+
+    private fun consumeLineEndingOrEof(p: Int): Int? {
+        if (p == len) return p
+        return when (text[p]) {
+            '\n' -> p + 1
+            '\r' -> if (p + 1 < len && text[p + 1] == '\n') p + 2 else p + 1
+            else -> null
+        }
+    }
+
+    private fun stepInlineCode() {
+        if (text[pos] == '`') {
+            val start = pos
+            while (pos < len && text[pos] == '`') pos++
+            out.append(text, start, pos)
+            inlineBlankLinePending = false
+            atLineStart = false
+            if (pos - start == inlineTicks) inlineTicks = 0
+            return
+        }
+        val ch = text[pos++]
+        out.append(ch)
+        if (ch == '\n') {
+            if (inlineBlankLinePending) {
+                inlineTicks = 0
+                inlineBlankLinePending = false
+            } else {
+                inlineBlankLinePending = true
+            }
+            atLineStart = true
+        } else if (ch != '\r' && ch != ' ' && ch != '\t') {
+            inlineBlankLinePending = false
+            atLineStart = false
+        }
+    }
+
+    private fun stepProse() {
+        if (atLineStart && tryHandleLineStart()) return
+        if (text[pos] == '`') {
+            val start = pos
+            while (pos < len && text[pos] == '`') pos++
+            out.append(text, start, pos)
+            inlineTicks = pos - start
+            inlineBlankLinePending = false
+            atLineStart = false
+            return
+        }
+        if (tryConsumeDoneToken()) return
+        val ch = text[pos++]
+        out.append(ch)
+        atLineStart = ch == '\n'
+    }
+
+    private fun tryHandleLineStart(): Boolean {
+        val afterSpaces = skipLeadingSpaces(pos)
+        if (afterSpaces < len && (text[afterSpaces] == '`' || text[afterSpaces] == '~')) {
+            openFenceOrInline(afterSpaces)
+            return true
+        }
+        if (afterSpaces > pos) {
+            out.append(text, pos, afterSpaces)
+            pos = afterSpaces
+            atLineStart = false
+            return true
+        }
+        return false
+    }
+
+    private fun openFenceOrInline(fenceStart: Int) {
+        val fc = text[fenceStart]
+        var p = fenceStart
+        while (p < len && text[p] == fc) p++
+        val count = p - fenceStart
+        out.append(text, pos, p)
+        pos = p
+        atLineStart = false
+        if (count >= 3 && !isSingleLineBacktickSpan(fc, p)) {
+            fenceChar = fc
+            fenceLen = count
+            inFenceHeader = true
+        } else if (fc == '`') {
+            inlineTicks = count
+            inlineBlankLinePending = false
+        }
+    }
+
+    private fun isSingleLineBacktickSpan(fc: Char, afterFence: Int): Boolean {
+        if (fc != '`') return false
+        val nl = text.indexOf('\n', afterFence)
+        val tick = text.indexOf('`', afterFence)
+        return tick >= 0 && (nl < 0 || tick < nl)
+    }
+
+    private fun tryConsumeDoneToken(): Boolean {
+        if (text[pos] != '<' ||
+            !text.regionMatches(pos, WORK_DONE_TOKEN, 0, WORK_DONE_TOKEN.length, ignoreCase = true)
+        ) {
+            return false
+        }
+        detected = true
+        pos += WORK_DONE_TOKEN.length
+        while (pos < len && (text[pos] == ' ' || text[pos] == '\t')) pos++
+        if (pos < len && text[pos] == '\r') {
+            pos += if (pos + 1 < len && text[pos + 1] == '\n') 2 else 1
+            atLineStart = true
+        } else if (pos < len && text[pos] == '\n') {
+            pos++
+            atLineStart = true
+        }
+        return true
+    }
+
+    private fun skipLeadingSpaces(start: Int): Int {
+        var p = start
+        var spaces = 0
+        while (p < len && text[p] == ' ' && spaces < 3) {
+            p++
+            spaces++
+        }
+        return p
+    }
+}
+
+private fun scanWorkDoneToken(text: String): Pair<Boolean, String> {
+    if (text.isEmpty() || !text.contains(WORK_DONE_TOKEN, ignoreCase = true)) {
+        return false to text
+    }
+    return WorkDoneTokenScanner(text).scan()
+}
 
 /**
- * Returns true when an assistant message closes by telling the user their task is finished and they
- * can close the tab. Used as a client-side fallback when connected to daemons predating explicit
- * `status = "done"` detection.
+ * Returns true when an assistant message includes [WORK_DONE_TOKEN] outside Markdown code blocks
+ * and inline code spans.
  */
 fun isTaskFinishedText(text: String?): Boolean {
     if (text.isNullOrBlank()) return false
-    val withoutCode = fencedCodeBlockRegex.replace(text, "").trim()
-    if (withoutCode.isEmpty()) return false
-    val paragraphs = paragraphSplitRegex.split(withoutCode).map { it.trim() }.filter { it.isNotEmpty() }
-    val tail = (paragraphs.lastOrNull() ?: withoutCode).takeLast(320)
-    if (negatedCloseTabRegex.containsMatchIn(tail)) return false
-    return closeTabCueRegex.containsMatchIn(tail)
+    return scanWorkDoneToken(text).first
 }
+
+/**
+ * Strips [WORK_DONE_TOKEN] outside Markdown code blocks and inline code spans so raw completion
+ * markers are never shown in chat bubbles or previews.
+ */
+fun stripWorkDoneToken(text: String): String = scanWorkDoneToken(text).second
 
 fun isTabTaskFinished(
     tab: TabRecord,

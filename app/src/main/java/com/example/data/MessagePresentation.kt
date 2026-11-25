@@ -97,13 +97,14 @@ fun formatToolRunSummary(toolCalls: List<ToolCallItem>): String {
 }
 
 fun buildAssistantDisplayBlocks(message: ChatMessage): List<AssistantDisplayBlock> {
+    val cleanMessageText = stripWorkDoneToken(message.text)
     if (message.segments.isEmpty()) {
         val blocks = mutableListOf<AssistantDisplayBlock>()
         if (message.toolCalls.isNotEmpty()) {
             blocks.add(AssistantDisplayBlock.ToolRunBlock(message.toolCalls))
         }
-        if (message.text.isNotBlank()) {
-            blocks.add(AssistantDisplayBlock.TextBlock(message.text))
+        if (cleanMessageText.isNotBlank()) {
+            blocks.add(AssistantDisplayBlock.TextBlock(cleanMessageText))
         }
         return blocks
     }
@@ -144,7 +145,7 @@ fun buildAssistantDisplayBlocks(message: ChatMessage): List<AssistantDisplayBloc
             }
 
             "text" -> {
-                val text = seg.text.orEmpty()
+                val text = stripWorkDoneToken(seg.text.orEmpty())
                 if (text.isNotBlank()) {
                     flushTools()
                     addText(text)
@@ -160,8 +161,8 @@ fun buildAssistantDisplayBlocks(message: ChatMessage): List<AssistantDisplayBloc
     }
     flushTools()
 
-    if (blocks.none { it is AssistantDisplayBlock.TextBlock } && message.text.isNotBlank()) {
-        addText(message.text)
+    if (blocks.none { it is AssistantDisplayBlock.TextBlock } && cleanMessageText.isNotBlank()) {
+        addText(cleanMessageText)
     }
     return blocks
 }
@@ -235,7 +236,7 @@ fun resolveTabTaskSummary(tab: TabRecord, messages: List<ChatMessage>): String? 
         if (trimmed.isEmpty() || MODEL_SLASH_RE.containsMatchIn(trimmed)) continue
         summarizeTaskPromptForDisplay(trimmed)?.let { return it }
     }
-    return tab.lastMessagePreview?.trim()?.takeIf { it.isNotEmpty() }
+    return tab.lastMessagePreview?.let(::stripWorkDoneToken)?.trim()?.takeIf { it.isNotEmpty() }
 }
 
 fun resolveTabLatestDetail(tab: TabRecord, taskSummary: String?): String? {
@@ -247,7 +248,7 @@ fun resolveTabLatestDetail(tab: TabRecord, taskSummary: String?): String? {
 
         "error" -> tab.statusDetail?.trim()?.takeIf { it.isNotEmpty() } ?: "Last turn failed"
 
-        else -> tab.lastMessagePreview?.trim()?.takeIf {
+        else -> tab.lastMessagePreview?.let(::stripWorkDoneToken)?.trim()?.takeIf {
             it.isNotEmpty() && !it.equals(normalizedSummary, ignoreCase = true)
         }
     }
