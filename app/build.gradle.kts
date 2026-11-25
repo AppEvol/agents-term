@@ -15,6 +15,9 @@ val ciVersionName = providers.gradleProperty("appVersionName").orNull?.takeIf { 
     ?: providers.environmentVariable("APP_VERSION_NAME").orNull?.takeIf { it.isNotBlank() }
     ?: "0.3"
 
+// "record" rewrites the golden images of the screenshot tests; anything else verifies them.
+val goldensMode = providers.gradleProperty("goldens").orNull
+
 android {
     namespace = "com.example"
     compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -70,7 +73,20 @@ android {
         compose = true
         buildConfig = true
     }
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all { test ->
+                // Golden image tests (MarkdownGoldenTest) compare against src/test/snapshots.
+                // `-Pgoldens=record` writes new golden images instead of comparing.
+                val record = goldensMode == "record"
+                test.systemProperty("roborazzi.test.record", record)
+                test.systemProperty("roborazzi.test.verify", !record)
+                test.inputs.dir("src/test/snapshots").withPathSensitivity(PathSensitivity.RELATIVE)
+                if (record) test.outputs.upToDateWhen { false }
+            }
+        }
+    }
     lint {
         // Android Lint is part of CI (`gradle :app:lintDebug`): any warning fails the build.
         warningsAsErrors = true
@@ -131,6 +147,11 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.commonmark)
+    implementation(libs.commonmark.ext.autolink)
+    implementation(libs.commonmark.ext.gfm.strikethrough)
+    implementation(libs.commonmark.ext.gfm.tables)
+    implementation(libs.commonmark.ext.task.list.items)
     // implementation(libs.androidx.navigation.compose)
     // implementation(libs.androidx.room.ktx)
     // implementation(libs.androidx.room.runtime)
@@ -162,6 +183,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

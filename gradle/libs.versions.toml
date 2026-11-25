@@ -43,6 +43,8 @@ googleid = "1.1.1"
 mwiedeJsch = "0.2.24"
 apacheSshd = "2.14.0"
 slf4j = "2.0.16"
+commonmark = "0.33.0"
+roborazzi = "1.79.0"
 
 
 [libraries]
@@ -102,6 +104,12 @@ mwiede-jsch = { group = "com.github.mwiede", name = "jsch", version.ref = "mwied
 sshd-core = { group = "org.apache.sshd", name = "sshd-core", version.ref = "apacheSshd" }
 sshd-common = { group = "org.apache.sshd", name = "sshd-common", version.ref = "apacheSshd" }
 slf4j-simple = { group = "org.slf4j", name = "slf4j-simple", version.ref = "slf4j" }
+commonmark = { group = "org.commonmark", name = "commonmark", version.ref = "commonmark" }
+commonmark-ext-autolink = { group = "org.commonmark", name = "commonmark-ext-autolink", version.ref = "commonmark" }
+commonmark-ext-gfm-strikethrough = { group = "org.commonmark", name = "commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
+commonmark-ext-gfm-tables = { group = "org.commonmark", name = "commonmark-ext-gfm-tables", version.ref = "commonmark" }
+commonmark-ext-task-list-items = { group = "org.commonmark", name = "commonmark-ext-task-list-items", version.ref = "commonmark" }
+roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
 
 
 [plugins]

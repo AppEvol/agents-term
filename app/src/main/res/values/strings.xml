@@ -76,6 +76,8 @@
     <string name="tool_output_label">Output</string>
     <string name="status_interrupted">Interrupted by user</string>
     <string name="markdown_path_copied">Copied VM path: %1$s</string>
+    <string name="markdown_task_done">Done</string>
+    <string name="markdown_task_open">Not done</string>
     <string name="tab_unread">Unread</string>
     <string name="tab_activity_working">Working</string>
     <string name="tab_activity_waiting">Waiting for instructions</string>

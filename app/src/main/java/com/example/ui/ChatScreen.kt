@@ -116,6 +116,7 @@ import com.example.data.UsageStats
 import com.example.data.buildAssistantDisplayBlocks
 import com.example.data.formatToolCallSummary
 import com.example.data.formatToolRunSummary
+import com.example.ui.markdown.MarkdownText
 import com.example.ui.theme.HerdrAmber
 import com.example.ui.theme.HerdrBlue
 import com.example.ui.theme.HerdrEmerald

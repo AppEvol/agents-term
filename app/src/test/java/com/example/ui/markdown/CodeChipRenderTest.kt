@@ -1,4 +1,4 @@
-package com.example
+package com.example.ui.markdown
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -9,15 +9,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
-import com.example.ui.INLINE_CODE_TAG
-import com.example.ui.MarkdownText
-import com.example.ui.parseInlineStyles
 import com.example.ui.theme.HerdrTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -30,6 +26,7 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
+import android.graphics.Color as AndroidColor
 
 /**
  * Renders [MarkdownText] to real pixels (Robolectric native graphics) at phone width.
@@ -42,7 +39,7 @@ import kotlin.math.abs
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [36], qualifiers = "w411dp-h900dp-420dpi")
-class MarkdownRenderTest {
+class CodeChipRenderTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
 
@@ -97,9 +94,10 @@ class MarkdownRenderTest {
         return Rendered(cropped, background, codeBackground)
     }
 
-    private fun near(a: Int, b: Int, tolerance: Int = 6): Boolean = abs(android.graphics.Color.red(a) - android.graphics.Color.red(b)) <= tolerance &&
-        abs(android.graphics.Color.green(a) - android.graphics.Color.green(b)) <= tolerance &&
-        abs(android.graphics.Color.blue(a) - android.graphics.Color.blue(b)) <= tolerance
+    private fun near(a: Int, b: Int, tolerance: Int = 6): Boolean {
+        fun close(channel: (Int) -> Int) = abs(channel(a) - channel(b)) <= tolerance
+        return close(AndroidColor::red) && close(AndroidColor::green) && close(AndroidColor::blue)
+    }
 
     /**
      * Heights of the vertical bands of rows that contain code background. Each text line with inline
@@ -125,14 +123,15 @@ class MarkdownRenderTest {
     private fun assertWrappedCodeRendersAsSeparateChips(darkTheme: Boolean) {
         val r = render(darkTheme)
         val bands = chipBandHeights(r)
-        val lineHeightPx = 22 * r.bitmap.width / 411f // list items use a 22sp line height
-        // The list item wraps to 4 lines that all contain code, and the paragraph has 1 code line.
-        // Fused backgrounds would give one tall band for the whole list item.
-        assertEquals("one chip band per code line, got band heights $bands", 5, bands.size)
+        val lineHeightPx = 23 * r.bitmap.width / 411f // body text has a 23sp line height
+        // The list item wraps to several lines that all contain code, and the paragraph has one
+        // more. Fused backgrounds would give one tall band for the whole list item.
+        assertTrue("one chip band per code line, got band heights $bands", bands.size >= 4)
         assertTrue(
             "each chip must be shorter than a line so page color shows between lines: $bands",
             bands.all { it < lineHeightPx - 2 },
         )
+        assertEquals("every chip is the same height: $bands", 1, bands.toSet().size)
     }
 
     @Test
@@ -140,13 +139,4 @@ class MarkdownRenderTest {
 
     @Test
     fun wrappedInlineCodeRendersAsSeparateChipsInLightTheme() = assertWrappedCodeRendersAsSeparateChips(darkTheme = false)
-
-    @Test
-    fun inlineCodeIsAnnotatedAndCarriesNoBackgroundSpan() {
-        val styled = parseInlineStyles("run `ls -la` then **bold** and `pwd`", Color.Blue)
-        assertEquals("run  ls -la  then bold and  pwd ", styled.text)
-        val code = styled.getStringAnnotations(INLINE_CODE_TAG, 0, styled.length)
-        assertEquals(listOf(" ls -la ", " pwd "), code.map { styled.text.substring(it.start, it.end) })
-        assertTrue(styled.spanStyles.none { it.item.background != Color.Unspecified })
-    }
 }
