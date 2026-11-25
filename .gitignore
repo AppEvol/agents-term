@@ -1,21 +1,115 @@
-*.iml
-.gradle
-.kotlin
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
+# =============================================================================
+# AI Agents & Coding Assistants
+# =============================================================================
+# Local agent state, memory, settings, and scratch directories
+.claude/
+CLAUDE.local.md
+.codex/
+.gemini/
+.agy/
+.antigravity/
+.cursor/
+.cursorignore
+.windsurf/
+.aider*
+.opencode/
+.roo/
+.cline/
+.kilocode/
+.copilot/
+.agent/
+.agents/
+.mcp.json
+
+# In-repo worktrees and scratch/debug artifacts
+.worktrees/
+worktrees/
+debug-dumps/
+.tmp/
+/tmp/
+/screenshot*.png
+
+# =============================================================================
+# Secrets, Keystores & Local Environment
+# =============================================================================
 .env
-debug.keystore
-__pycache__/
-daemon-rs/target/
+.env.*
+!.env.example
+local.properties
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+google-services.json
+
+# =============================================================================
+# Android / Gradle / Kotlin / JVM
+# =============================================================================
+.gradle/
+.kotlin/
+build/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+*.hprof
+hs_err_pid*.log
+replay_pid*.log
+
+# =============================================================================
+# Rust (daemon-rs)
+# =============================================================================
+target/
 dist-daemon/
+**/*.rs.bk
+*.pdb
+
+# =============================================================================
+# Python (daemon, app_state_cli, e2e)
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.egg-info/
+.eggs/
+
+# =============================================================================
+# IDEs & Editors
+# =============================================================================
+*.iml
+.idea/
+.vscode/
+.fleet/
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# OS & Temporary Files
+# =============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Desktop.ini
+.Trash-*
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
