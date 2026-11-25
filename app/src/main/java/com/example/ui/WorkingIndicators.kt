@@ -198,12 +198,13 @@ fun SandclockIndicator(
 }
 
 private fun DrawScope.drawSandclock(color: Color, drained: Float) {
-    val stroke = size.minDimension * 0.09f
+    val stroke = size.minDimension * 0.085f
+    val inset = size.minDimension * 0.12f
     val centerX = size.width / 2f
     val centerY = size.height / 2f
-    val halfWidth = size.width * 0.32f
-    val top = stroke / 2f
-    val bottom = size.height - stroke / 2f
+    val halfWidth = size.width * 0.26f
+    val top = inset + stroke / 2f
+    val bottom = size.height - inset - stroke / 2f
     val bulbHeight = centerY - top
 
     // Sand keeps its area: a bulb holding a share of the sand is filled to sqrt(share) of its height.

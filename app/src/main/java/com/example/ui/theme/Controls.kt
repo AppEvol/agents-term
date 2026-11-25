@@ -556,7 +556,10 @@ fun LunaMarquee(phase: Float, modifier: Modifier = Modifier) {
         val block = 5.dp.toPx()
         val gap = 1.5.dp.toPx()
         val train = 3 * block + 2 * gap
-        val start = -train + (size.width + train) * phase
+        // Offset so phase 0 (used when system animations are disabled) centers the blocks inside
+        // the track instead of hiding them off the left edge.
+        val shiftedPhase = (phase + 0.45f) % 1f
+        val start = -train + (size.width + train) * shiftedPhase
         for (i in 0..2) {
             val left = start + i * (block + gap)
             val from = left.coerceAtLeast(inset)

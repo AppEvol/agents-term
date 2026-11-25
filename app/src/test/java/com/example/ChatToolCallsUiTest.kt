@@ -1,5 +1,7 @@
 package com.example
 
+import android.content.Context
+import android.provider.Settings
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -9,16 +11,20 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.height
+import androidx.test.core.app.ApplicationProvider
 import com.example.data.ChatMessage
 import com.example.data.MessageSegment
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
 import com.example.ui.ChatWorkspace
 import com.example.ui.theme.HerdrTheme
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -188,15 +194,166 @@ class ChatToolCallsUiTest {
             }
         }
 
-        // Nothing is running, but the turn is: the last call holds the row the next one will take.
+        // Nothing is running, but the turn is: the last call holds the row the next one will take,
+        // and the header stays in its active state without flashing a checkmark or total duration.
         composeRule.onNodeWithText("2 tool calls · 2 done").assertIsDisplayed()
         composeRule.onNodeWithText("Inspect diff").assertIsDisplayed()
+        composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .assertCountEquals(1)
+        assertTrue(composeRule.onAllNodesWithText("200ms").fetchSemanticsNodes().isEmpty())
         assertTrue(composeRule.onAllNodesWithText("Check git status").fetchSemanticsNodes().isEmpty())
 
         current = message("complete")
         composeRule.waitForIdle()
         composeRule.onNodeWithText("2 tool calls · 2 done").assertIsDisplayed()
+        composeRule.onNodeWithText("200ms").assertIsDisplayed()
+        composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .assertCountEquals(0)
         assertTrue(composeRule.onAllNodesWithText("Inspect diff").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun parallelRunningCallsKeepCollapsedCardHeightConstantAndRevealAllWhenExpanded() {
+        fun tool(id: String, desc: String, status: String, durationMs: Long? = null) = ToolCallItem(
+            id = id,
+            name = "read_file",
+            inputSummary = desc,
+            inputJson = """{"description":"$desc"}""",
+            status = status,
+            durationMs = durationMs,
+        )
+
+        fun msg(calls: List<ToolCallItem>) = ChatMessage(
+            id = "msg_parallel",
+            tabId = "tab_1",
+            role = "assistant",
+            toolCalls = calls,
+            segments = calls.map { MessageSegment("tool", toolCallId = it.id) },
+            status = "streaming",
+        )
+
+        val t1Done = tool("t1", "Read ChatScreen.kt", "done", 90L)
+        val t2Run = tool("t2", "Read WorkingIndicators.kt", "running")
+        val t3Run = tool("t3", "Read Controls.kt", "running")
+        val t4Run = tool("t4", "Read Models.kt", "running")
+
+        var current by mutableStateOf(msg(listOf(t1Done, t2Run)))
+
+        composeRule.setContent {
+            HerdrTheme {
+                ChatWorkspace(
+                    tab = testTab.copy(status = "working"),
+                    messages = listOf(current),
+                    isLoading = false,
+                    isConnected = true,
+                    onSendMessage = {},
+                    onInterrupt = {},
+                    onRetryFullAccess = {},
+                )
+            }
+        }
+
+        val initialHeight = composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height
+        composeRule.onAllNodesWithTag("tool_run_active_call").assertCountEquals(1)
+        composeRule.onNodeWithText("Read WorkingIndicators.kt").assertIsDisplayed()
+
+        // Starting two more calls in parallel keeps the collapsed preview at one row and the exact same height.
+        current = msg(listOf(t1Done, t2Run, t3Run, t4Run))
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("4 tool calls · 1 done · 3 running").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("tool_run_active_call").assertCountEquals(1)
+        composeRule.onNodeWithText("Read Models.kt").assertIsDisplayed()
+        assertEquals(
+            initialHeight,
+            composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height,
+        )
+
+        // Switching to a tool with a blank summary keeps row height identical too.
+        current = msg(
+            listOf(
+                t1Done,
+                t2Run.copy(status = "done", durationMs = 50L),
+                t3Run.copy(status = "done", durationMs = 60L),
+                ToolCallItem(id = "t4", name = "update_steps", inputSummary = "", status = "running"),
+            ),
+        )
+        composeRule.waitForIdle()
+        assertEquals(
+            initialHeight,
+            composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height,
+        )
+
+        // Expanding reveals every call in the run.
+        composeRule.onNodeWithTag("tool_run_header").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Read ChatScreen.kt").assertIsDisplayed()
+        composeRule.onNodeWithText("Read WorkingIndicators.kt").assertIsDisplayed()
+        composeRule.onNodeWithText("Read Controls.kt").assertIsDisplayed()
+        composeRule.onNodeWithText("update_steps").assertIsDisplayed()
+    }
+
+    @Test
+    fun toolCallGroupUpdatesAndExpandsCleanlyWhenAnimationsAreDisabled() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val previousScale = Settings.Global.getFloat(
+            context.contentResolver,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        )
+        Settings.Global.putFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+        try {
+            val t1 = ToolCallItem("t1", "Bash", "git status", output = "clean", status = "done", durationMs = 80L)
+            val t2 = ToolCallItem("t2", "Bash", "git diff", output = "no diff", status = "running")
+            val t3 = ToolCallItem("t3", "Bash", "gradle test", output = "all passed", status = "running")
+
+            fun msg(calls: List<ToolCallItem>) = ChatMessage(
+                id = "msg_no_anim",
+                tabId = "tab_1",
+                role = "assistant",
+                toolCalls = calls,
+                segments = calls.map { MessageSegment("tool", toolCallId = it.id) },
+                status = "streaming",
+            )
+
+            var current by mutableStateOf(msg(listOf(t1)))
+
+            composeRule.setContent {
+                HerdrTheme {
+                    ChatWorkspace(
+                        tab = testTab.copy(status = "working"),
+                        messages = listOf(current),
+                        isLoading = false,
+                        isConnected = true,
+                        onSendMessage = {},
+                        onInterrupt = {},
+                        onRetryFullAccess = {},
+                    )
+                }
+            }
+
+            composeRule.onNodeWithText("git status").assertIsDisplayed()
+
+            current = msg(listOf(t1, t2, t3))
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("3 tool calls · 1 done · 2 running").assertIsDisplayed()
+            composeRule.onNodeWithText("gradle test").assertIsDisplayed()
+
+            composeRule.onNodeWithTag("tool_run_header").performClick()
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("git status").assertIsDisplayed()
+            composeRule.onNodeWithText("git diff").assertIsDisplayed()
+            composeRule.onNodeWithText("gradle test").assertIsDisplayed()
+
+            composeRule.onNodeWithTag("tool_call_card_t1").performClick()
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("clean").assertIsDisplayed()
+        } finally {
+            Settings.Global.putFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                previousScale,
+            )
+        }
     }
 
     @Test
