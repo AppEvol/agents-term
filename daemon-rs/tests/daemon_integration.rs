@@ -558,8 +558,11 @@ fn revive_closed_tab_respects_open_tab_limit_without_losing_closed_tab() {
     fs::write(config.join("state.json"), saved.to_string()).unwrap();
 
     let daemon = TestDaemon::start(&home, None);
-    let (st, err_body) =
-        daemon.api("POST", "/api/tabs/closed/closed_target/revive", Some(json!({})));
+    let (st, err_body) = daemon.api(
+        "POST",
+        "/api/tabs/closed/closed_target/revive",
+        Some(json!({})),
+    );
     assert_eq!(st, 409);
     assert!(err_body["error"].as_str().unwrap().contains("10 open tabs"));
 
@@ -574,8 +577,11 @@ fn revive_closed_tab_respects_open_tab_limit_without_losing_closed_tab() {
 
     // Close one open tab to make room, then revive succeeds.
     assert_eq!(daemon.api("DELETE", "/api/tabs/open_1", None).0, 200);
-    let (st, revived) =
-        daemon.api("POST", "/api/tabs/closed/closed_target/revive", Some(json!({})));
+    let (st, revived) = daemon.api(
+        "POST",
+        "/api/tabs/closed/closed_target/revive",
+        Some(json!({})),
+    );
     assert_eq!(st, 200);
     assert_eq!(revived["tab"]["id"].as_str(), Some("closed_target"));
     assert_eq!(revived["messages"].as_array().unwrap().len(), 1);

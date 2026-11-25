@@ -151,7 +151,10 @@ fn prune_closed_tabs_locked(inner: &mut StoreInner, now: i64) -> bool {
     inner.closed_tabs = kept;
 
     for did in discarded_ids {
-        if !open_ids.contains(&did) && !seen.contains(&did) && inner.messages_by_tab.remove(&did).is_some() {
+        if !open_ids.contains(&did)
+            && !seen.contains(&did)
+            && inner.messages_by_tab.remove(&did).is_some()
+        {
             changed = true;
         }
     }
@@ -690,10 +693,7 @@ impl StateStore {
             }
             inner.tabs.push(tab.clone());
             inner.active_tab_id = Some(tab_id.to_string());
-            inner
-                .messages_by_tab
-                .entry(tab_id.to_string())
-                .or_default();
+            inner.messages_by_tab.entry(tab_id.to_string()).or_default();
             Ok(tab)
         };
         if outcome.is_ok() {
