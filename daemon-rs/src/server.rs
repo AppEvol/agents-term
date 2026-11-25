@@ -28,7 +28,7 @@ use crate::config::{
 use crate::log::{log_info, log_warn};
 use crate::models::{get_agent_models, warm_agent_models_cache};
 use crate::runner::AgentRunner;
-use crate::store::{resolve_abs_path, StateStore, MAX_OPEN_TABS};
+use crate::store::{resolve_abs_path, ReviveTabError, StateStore, MAX_OPEN_TABS};
 use crate::util::{now_ms, rand_hex};
 
 const PING_INTERVAL: Duration = Duration::from_secs(25);
@@ -651,9 +651,75 @@ async fn delete_tab(
         return unauthorized();
     }
     st.runner.kill_if_running(&tab_id);
-    st.store.delete_tab(&tab_id);
-    st.broadcast_raw(json!({ "type": "tab_deleted", "tabId": tab_id }).to_string());
-    json_status(StatusCode::OK, json!({ "ok": true }))
+    let closed_tab = st.store.delete_tab(&tab_id);
+    let closed_tabs = st.store.list_closed_tabs();
+    st.broadcast_raw(
+        json!({
+            "type": "tab_deleted",
+            "tabId": tab_id,
+            "closedTab": closed_tab,
+            "closedTabs": closed_tabs,
+        })
+        .to_string(),
+    );
+    json_status(
+        StatusCode::OK,
+        json!({
+            "ok": true,
+            "closedTab": closed_tab,
+            "closedTabs": closed_tabs,
+        }),
+    )
+}
+
+async fn get_closed_tabs(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    json_status(
+        StatusCode::OK,
+        json!({ "closedTabs": st.store.list_closed_tabs() }),
+    )
+}
+
+async fn post_revive_closed_tab(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(tab_id): AxumPath<String>,
+) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    match st.store.revive_tab(&tab_id) {
+        Ok(tab) => {
+            let messages = st.store.get_messages(&tab_id);
+            let closed_tabs = st.store.list_closed_tabs();
+            st.broadcast_raw(
+                json!({
+                    "type": "tab_created",
+                    "tab": tab,
+                    "closedTabs": closed_tabs,
+                })
+                .to_string(),
+            );
+            json_status(
+                StatusCode::OK,
+                json!({
+                    "tab": tab,
+                    "messages": messages,
+                    "closedTabs": closed_tabs,
+                }),
+            )
+        }
+        Err(ReviveTabError::OpenTabLimitReached) => json_status(
+            StatusCode::CONFLICT,
+            json!({ "error": format!("The limit is {MAX_OPEN_TABS} open tabs. Close a tab to make room.") }),
+        ),
+        Err(ReviveTabError::NotFound) => json_status(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "Closed tab not found or expired" }),
+        ),
+    }
 }
 
 async fn get_tab_messages(
@@ -802,6 +868,7 @@ async fn handle_ws(st: Arc<AppState>, socket: WebSocket) {
         "server": server_info,
         "tabs": listing["tabs"],
         "activeTabId": listing["activeTabId"],
+        "closedTabs": listing["closedTabs"],
         "ts": now_ms(),
     });
     let _ = tx.send(snapshot.to_string());
@@ -900,6 +967,8 @@ pub async fn run_daemon(
         .route("/api/app/status", get(get_app_status))
         .route("/api/app/command", post(post_app_command))
         .route("/api/tabs", get(get_tabs).post(post_tabs))
+        .route("/api/tabs/closed", get(get_closed_tabs))
+        .route("/api/tabs/closed/{id}/revive", post(post_revive_closed_tab))
         .route("/api/tabs/{id}", patch(patch_tab).delete(delete_tab))
         .route(
             "/api/tabs/{id}/messages",
