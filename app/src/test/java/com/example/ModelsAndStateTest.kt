@@ -20,6 +20,7 @@ import com.example.data.ServerInfo
 import com.example.data.SshAuthMethod
 import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
+import com.example.data.TabActivity
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
 import com.example.data.UpdateTabRequest
@@ -345,6 +346,48 @@ class ModelsAndStateTest {
         val ndjsonLines = recorder.toNdjson().trim().lines()
         assertEquals(3, ndjsonLines.size)
         assertTrue(ndjsonLines.first().contains("evt_3"))
+    }
+
+    @Test
+    fun everyTabIsWorkingWaitingOrFinishedAndTheBadgeCountsUnopenedResults() {
+        fun tab(id: String, status: String = "idle", unread: Boolean = false) = TabRecord(
+            id = id,
+            title = id,
+            agent = "claude",
+            cwd = "/home/ned/app",
+            status = status,
+            unread = unread,
+        )
+
+        val state = WorkspaceState(
+            tabs = listOf(
+                tab("t1", unread = true),
+                tab("t2", unread = true),
+                tab("t3", status = "blocked"),
+                tab("t4", status = "error", unread = true),
+                tab("t5", status = "working"),
+                tab("t6", status = "done", unread = true),
+            ),
+            selectedTabId = "t1",
+        )
+        assertEquals(
+            listOf(
+                TabActivity.WAITING,
+                TabActivity.WAITING,
+                TabActivity.WAITING,
+                TabActivity.WAITING,
+                TabActivity.WORKING,
+                TabActivity.FINISHED,
+            ),
+            state.tabs.map { state.activityOf(it) },
+        )
+        // The badge is the unread tabs other than the one on screen, whatever state they are in.
+        assertEquals(listOf("t2", "t4", "t6"), state.tabs.filter { state.isTabUnread(it) }.map { it.id })
+        assertEquals(3, state.attentionCount)
+        assertEquals(4, state.copy(selectedTabId = "t5").attentionCount)
+        // With no explicit selection the first tab is the one shown.
+        assertEquals(3, state.copy(selectedTabId = null).attentionCount)
+        assertEquals(0, WorkspaceState(tabs = listOf(tab("t1", unread = true)), selectedTabId = "t1").attentionCount)
     }
 
     @Test

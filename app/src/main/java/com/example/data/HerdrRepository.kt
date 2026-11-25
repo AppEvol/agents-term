@@ -33,8 +33,22 @@ data class WorkspaceState(
     val activeMessages: List<ChatMessage>
         get() = activeTab?.let { messagesByTab[it.id] }.orEmpty()
 
+    /**
+     * The drawer button's badge: tabs whose latest turn ended without the user opening the result.
+     * The tab on screen never counts, since its result is already in front of the user. Each tab
+     * counted here carries an unread dot in the drawer.
+     */
     val attentionCount: Int
-        get() = tabs.count { it.unread || it.status == "blocked" || it.status == "error" }
+        get() = tabs.count { isTabUnread(it) }
+
+    fun isTabUnread(tab: TabRecord): Boolean = tab.unread && tab.id != activeTab?.id
+
+    /** Every tab is in exactly one of the three [TabActivity] states. */
+    fun activityOf(tab: TabRecord): TabActivity = when {
+        tab.status == "working" -> TabActivity.WORKING
+        isTabFinished(tab) -> TabActivity.FINISHED
+        else -> TabActivity.WAITING
+    }
 
     fun isTabFinished(tab: TabRecord): Boolean = isTabTaskFinished(
         tab = tab,
@@ -437,6 +451,7 @@ class HerdrRepository(
                     return@openWebSocket
                 }
                 var selectedAfter: String? = null
+                var unreadVisibleTabId: String? = null
                 val applied = synchronized(socketLock) {
                     if (generation != socketGeneration || !shouldStayConnected) {
                         false
@@ -444,7 +459,15 @@ class HerdrRepository(
                         _state.update { current ->
                             val next = reduceWorkspaceEvent(current, envelope, preferredTabId = lastSavedTabId)
                             selectedAfter = next.selectedTabId
-                            next
+                            val visibleId = next.activeTab?.takeIf { it.unread }?.id
+                            unreadVisibleTabId = visibleId
+                            if (visibleId == null) {
+                                next
+                            } else {
+                                // Cleared locally too, so later events do not ask again while the
+                                // daemon's own update is still on its way.
+                                next.copy(tabs = next.tabs.map { if (it.id == visibleId) it.copy(unread = false) else it })
+                            }
                         }
                         true
                     }
@@ -456,6 +479,11 @@ class HerdrRepository(
                     selectedAfter?.let { tabId ->
                         refreshTabMessages(tabId)
                     }
+                }
+                if (applied) {
+                    // The daemon flags a tab unread whenever its turn ends, including the tab on
+                    // screen. Clear it here, or it shows up as unread once the user switches away.
+                    unreadVisibleTabId?.let { markTabRead(config, it) }
                 }
             },
             onClosed = { reason ->
@@ -552,11 +580,13 @@ class HerdrRepository(
         settings.saveLastTabId(tabId)
         _state.update { it.copy(selectedTabId = tabId) }
         refreshTabMessages(tabId)
-        val cfg = _state.value.config
-        if (cfg.isValid) {
-            scope.launch {
-                runCatching { api.markRead(cfg, tabId) }
-            }
+        markTabRead(_state.value.config, tabId)
+    }
+
+    private fun markTabRead(cfg: ConnectionConfig, tabId: String) {
+        if (!cfg.isValid) return
+        scope.launch {
+            runCatching { api.markRead(cfg, tabId) }
         }
     }
 

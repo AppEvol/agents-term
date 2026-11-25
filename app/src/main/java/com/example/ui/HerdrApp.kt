@@ -876,7 +876,7 @@ internal fun WorkspaceScaffold(
                                             modifier = Modifier.testTag("topbar_done_badge"),
                                         ) {
                                             Text(
-                                                text = "Done",
+                                                text = statusLabel("done"),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = HerdrEmerald,
@@ -1136,7 +1136,7 @@ private fun TabTaskSummaryCard(
         resolveTabLatestDetail(tab, taskSummary)
     }
     val badgeColor = if (isTaskFinished) HerdrEmerald else statusColor(tab.status)
-    val badgeLabel = if (isTaskFinished) "Done" else statusLabel(tab.status)
+    val badgeLabel = statusLabel(if (isTaskFinished) "done" else tab.status)
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -1311,7 +1311,7 @@ private fun QuickTabStrip(
                         if (finished) {
                             Icon(
                                 imageVector = Icons.Rounded.CheckCircle,
-                                contentDescription = "Done",
+                                contentDescription = statusLabel("done"),
                                 tint = HerdrEmerald,
                                 modifier = Modifier
                                     .size(14.dp)
@@ -1331,6 +1331,9 @@ private fun QuickTabStrip(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.width(105.dp),
                         )
+                        if (tab.unread && !selected) {
+                            UnreadDot(modifier = Modifier.testTag("quick_tab_unread_${tab.id}"))
+                        }
                     }
                 }
             }

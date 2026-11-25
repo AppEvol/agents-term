@@ -101,6 +101,11 @@ class HerdrRepositoryReconnectTest {
     ) : HerdrApiClient() {
         val sockets = mutableListOf<FakeWebSocketHandle>()
         val listDirCalls = mutableListOf<String?>()
+        val markReadCalls = mutableListOf<String>()
+
+        override suspend fun markRead(config: ConnectionConfig, tabId: String) {
+            markReadCalls.add(tabId)
+        }
 
         override fun openWebSocket(
             config: ConnectionConfig,
@@ -484,6 +489,37 @@ class HerdrRepositoryReconnectTest {
             requests.add(Triple(requestId, command, args))
             return """{"type":"app_state_response","requestId":"$requestId","ok":true}"""
         }
+    }
+
+    @Test
+    fun turnFinishingOnTheVisibleTabIsMarkedReadButOtherTabsStayUnread() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val api = FakeApiClient(fireClosedOnCancel = false)
+        val repo = HerdrRepository(
+            api = api,
+            settings = InMemorySettings(connection = testConfig),
+            ioDispatcher = dispatcher,
+        )
+        val visible = TabRecord(id = "t1", title = "Visible", agent = "claude", cwd = "/home/test", status = "working")
+        val other = TabRecord(id = "t2", title = "Other", agent = "claude", cwd = "/home/test", status = "working")
+
+        repo.connect(testConfig)
+        val socket = api.sockets[0]
+        socket.emitOpen()
+        socket.emitEvent(WsServerEnvelope(type = "snapshot", tabs = listOf(visible, other), activeTabId = "t1"))
+        runCurrent()
+        assertEquals(emptyList<String>(), api.markReadCalls)
+
+        // The daemon flags every finished turn unread, including the tab on screen.
+        socket.emitEvent(WsServerEnvelope(type = "tab_updated", tab = visible.copy(status = "done", unread = true)))
+        runCurrent()
+        assertEquals(listOf("t1"), api.markReadCalls)
+        assertEquals(0, repo.state.value.attentionCount)
+
+        socket.emitEvent(WsServerEnvelope(type = "tab_updated", tab = other.copy(status = "done", unread = true)))
+        runCurrent()
+        assertEquals(listOf("t1"), api.markReadCalls)
+        assertEquals(1, repo.state.value.attentionCount)
     }
 
     @Test

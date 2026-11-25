@@ -1,6 +1,7 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -71,6 +72,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -462,15 +464,12 @@ private fun AssistantMessageItem(
                     }
 
                     is AssistantDisplayBlock.ToolRunBlock -> {
-                        if (block.toolCalls.size == 1) {
-                            ToolCallCard(
-                                toolCall = block.toolCalls.first(),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        } else {
-                            ToolCallRunGroupCard(
-                                groupKey = "${message.id}:${block.toolCalls.first().id}",
+                        // One composable for a run of any length, keyed by its first call, so the
+                        // card grows in place when a second call joins instead of being swapped.
+                        key(block.toolCalls.first().id) {
+                            ToolCallRunCard(
                                 toolCalls = block.toolCalls,
+                                isLive = message.status == "streaming" && block === displayBlocks.last(),
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -649,13 +648,22 @@ private fun ThinkingAccordionCard(
     }
 }
 
+/**
+ * A run of consecutive tool calls. A single call is just its row; two or more get a summary header
+ * that expands to the full list.
+ *
+ * While collapsed, the header is followed by the calls in flight. A live run (the last block of a
+ * turn that is still streaming) keeps showing its most recent call in the gap before the next one
+ * starts, so the card does not shrink and grow again between back-to-back calls.
+ */
 @Composable
-private fun ToolCallRunGroupCard(
-    groupKey: String,
+private fun ToolCallRunCard(
     toolCalls: List<ToolCallItem>,
+    isLive: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember(groupKey) { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
+    val isGroup = toolCalls.size > 1
     val runningCalls = remember(toolCalls) { toolCalls.filter { it.status == "running" } }
     val hasRunning = runningCalls.isNotEmpty()
     val hasError = remember(toolCalls) { toolCalls.any { it.status == "error" } }
@@ -663,6 +671,12 @@ private fun ToolCallRunGroupCard(
     val summaryText = remember(toolCalls) { formatToolRunSummary(toolCalls) }
     val totalDurationMs = remember(toolCalls) {
         toolCalls.mapNotNull { it.durationMs }.filter { it > 0L }.sum().takeIf { it > 0L }
+    }
+    val collapsedCalls = when {
+        !isGroup -> toolCalls
+        hasRunning -> runningCalls
+        isLive -> toolCalls.takeLast(1)
+        else -> emptyList()
     }
 
     val containerColor = when {
@@ -681,103 +695,34 @@ private fun ToolCallRunGroupCard(
         shape = RoundedCornerShape(12.dp),
         color = containerColor,
         border = BorderStroke(1.dp, borderColor),
-        modifier = modifier.testTag("tool_run_group"),
+        modifier = if (isGroup) modifier.testTag("tool_run_group") else modifier,
     ) {
-        Column {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded }
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .testTag("tool_run_header"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                when {
-                    hasRunning -> CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 1.8.dp,
-                        color = HerdrBlue,
-                    )
-
-                    hasError -> Icon(
-                        imageVector = Icons.Rounded.ErrorOutline,
-                        contentDescription = null,
-                        tint = HerdrRed,
-                        modifier = Modifier.size(15.dp),
-                    )
-
-                    hasDenied -> Icon(
-                        imageVector = Icons.Rounded.Shield,
-                        contentDescription = null,
-                        tint = HerdrAmber,
-                        modifier = Modifier.size(15.dp),
-                    )
-
-                    else -> Icon(
-                        imageVector = Icons.Rounded.CheckCircle,
-                        contentDescription = null,
-                        tint = HerdrEmerald.copy(alpha = 0.78f),
-                        modifier = Modifier.size(15.dp),
-                    )
-                }
-
-                Text(
-                    text = summaryText,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (hasRunning) FontWeight.SemiBold else FontWeight.Medium,
-                    color = if (hasRunning) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-
-                if (!hasRunning && totalDurationMs != null) {
-                    Text(
-                        text = formatDuration(totalDurationMs),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = MonoFontFamily,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                    )
-                }
-
-                Icon(
-                    imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                    modifier = Modifier.size(18.dp),
+        Column(modifier = Modifier.animateContentSize()) {
+            if (isGroup) {
+                ToolCallRunHeader(
+                    summaryText = summaryText,
+                    totalDurationMs = totalDurationMs,
+                    hasRunning = hasRunning,
+                    hasError = hasError,
+                    hasDenied = hasDenied,
+                    expanded = expanded,
+                    onToggle = { expanded = !expanded },
                 )
             }
-
-            if (!expanded && hasRunning) {
-                for (tc in runningCalls) {
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                    )
-                    ToolCallRow(
-                        toolCall = tc,
-                        emphasized = true,
-                        modifier = Modifier.testTag("tool_run_active_call"),
-                    )
-                }
-            }
-
-            AnimatedVisibility(visible = expanded) {
-                Column {
-                    for (tc in toolCalls) {
+            val visibleCalls = if (expanded) toolCalls else collapsedCalls
+            for (tc in visibleCalls) {
+                // Keyed by call so a row keeps its own expanded state as the list around it changes.
+                key(tc.id) {
+                    if (isGroup) {
                         HorizontalDivider(
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
                         )
-                        val emphasized = tc.status == "running" || tc.status == "error" || tc.status == "denied"
-                        ToolCallRow(
-                            toolCall = tc,
-                            emphasized = emphasized,
-                        )
                     }
+                    ToolCallRow(
+                        toolCall = tc,
+                        emphasized = tc.status == "running" || tc.status == "error" || tc.status == "denied",
+                        modifier = if (isGroup && !expanded) Modifier.testTag("tool_run_active_call") else Modifier,
+                    )
                 }
             }
         }
@@ -785,36 +730,81 @@ private fun ToolCallRunGroupCard(
 }
 
 @Composable
-private fun ToolCallCard(
-    toolCall: ToolCallItem,
-    modifier: Modifier = Modifier,
+private fun ToolCallRunHeader(
+    summaryText: String,
+    totalDurationMs: Long?,
+    hasRunning: Boolean,
+    hasError: Boolean,
+    hasDenied: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
 ) {
-    val isRunning = toolCall.status == "running"
-    val isError = toolCall.status == "error"
-    val isDenied = toolCall.status == "denied"
-    val emphasized = isRunning || isError || isDenied
-
-    val containerColor = when {
-        isRunning -> MaterialTheme.colorScheme.surfaceContainer
-        isError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
-        else -> MaterialTheme.colorScheme.surfaceContainerLow
-    }
-    val borderColor = when {
-        isRunning -> HerdrBlue.copy(alpha = 0.45f)
-        isError -> HerdrRed.copy(alpha = 0.4f)
-        isDenied -> HerdrAmber.copy(alpha = 0.45f)
-        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
-    }
-
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = containerColor,
-        border = BorderStroke(1.dp, borderColor),
-        modifier = modifier,
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("tool_run_header"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        ToolCallRow(
-            toolCall = toolCall,
-            emphasized = emphasized,
+        // Same box for the spinner and the icons, so the label does not shift when they swap.
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(15.dp)) {
+            when {
+                hasRunning -> CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 1.8.dp,
+                    color = HerdrBlue,
+                )
+
+                hasError -> Icon(
+                    imageVector = Icons.Rounded.ErrorOutline,
+                    contentDescription = null,
+                    tint = HerdrRed,
+                )
+
+                hasDenied -> Icon(
+                    imageVector = Icons.Rounded.Shield,
+                    contentDescription = null,
+                    tint = HerdrAmber,
+                )
+
+                else -> Icon(
+                    imageVector = Icons.Rounded.CheckCircle,
+                    contentDescription = null,
+                    tint = HerdrEmerald.copy(alpha = 0.78f),
+                )
+            }
+        }
+
+        Text(
+            text = summaryText,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = if (hasRunning) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+
+        if (!hasRunning && totalDurationMs != null) {
+            Text(
+                text = formatDuration(totalDurationMs),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = MonoFontFamily,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+            )
+        }
+
+        Icon(
+            imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+            modifier = Modifier.size(18.dp),
         )
     }
 }
@@ -835,45 +825,43 @@ private fun ToolCallRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable { expanded = !expanded }
-                .padding(horizontal = 12.dp, vertical = if (emphasized) 9.dp else 7.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
                 .testTag("tool_call_card_${toolCall.id}"),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            when (toolCall.status) {
-                "running" -> CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    strokeWidth = 1.8.dp,
-                    color = HerdrBlue,
-                )
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(15.dp)) {
+                when (toolCall.status) {
+                    "running" -> CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 1.8.dp,
+                        color = HerdrBlue,
+                    )
 
-                "done" -> Icon(
-                    imageVector = Icons.Rounded.CheckCircle,
-                    contentDescription = null,
-                    tint = HerdrEmerald.copy(alpha = if (emphasized) 1f else 0.72f),
-                    modifier = Modifier.size(15.dp),
-                )
+                    "done" -> Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = null,
+                        tint = HerdrEmerald.copy(alpha = if (emphasized) 1f else 0.72f),
+                    )
 
-                "denied" -> Icon(
-                    imageVector = Icons.Rounded.Shield,
-                    contentDescription = null,
-                    tint = HerdrAmber,
-                    modifier = Modifier.size(15.dp),
-                )
+                    "denied" -> Icon(
+                        imageVector = Icons.Rounded.Shield,
+                        contentDescription = null,
+                        tint = HerdrAmber,
+                    )
 
-                "error" -> Icon(
-                    imageVector = Icons.Rounded.ErrorOutline,
-                    contentDescription = null,
-                    tint = HerdrRed,
-                    modifier = Modifier.size(15.dp),
-                )
+                    "error" -> Icon(
+                        imageVector = Icons.Rounded.ErrorOutline,
+                        contentDescription = null,
+                        tint = HerdrRed,
+                    )
 
-                else -> Icon(
-                    imageVector = Icons.Rounded.Build,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(15.dp),
-                )
+                    else -> Icon(
+                        imageVector = Icons.Rounded.Build,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Column(modifier = Modifier.weight(1f)) {

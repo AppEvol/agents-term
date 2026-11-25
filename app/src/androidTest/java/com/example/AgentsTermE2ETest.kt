@@ -1204,7 +1204,7 @@ class AgentsTermE2ETest {
     private fun verifyAndCloseFinishedTabInDrawer(finishedTabId: String, activeTabId: String) {
         composeRule.onNodeWithTag("open_drawer_button").performClick()
         waitForTag("drawer_finished_count_badge")
-        composeRule.onNodeWithTag("drawer_finished_count_badge").assertTextContains("1 done")
+        composeRule.onNodeWithTag("drawer_finished_count_badge").assertTextContains("1 finished")
         composeRule.onNodeWithTag("drawer_tab_done_icon_$finishedTabId", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("drawer_tab_done_badge_$finishedTabId", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("drawer_tab_done_hint_$finishedTabId", useUnmergedTree = true)

@@ -214,7 +214,7 @@ open class HerdrApiClient(
         return executeJson<QueueActionResponse>(req).tab
     }
 
-    suspend fun markRead(config: ConnectionConfig, tabId: String) = withContext(Dispatchers.IO) {
+    open suspend fun markRead(config: ConnectionConfig, tabId: String) = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs/$tabId/read")
             .withAuth(config)
