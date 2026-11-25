@@ -144,7 +144,8 @@ class RealVmDockerE2ETest {
         Espresso.closeSoftKeyboard()
 
         composeRule.onNodeWithTag("ssh_bootstrap_button").performScrollTo().performClick()
-        waitForText("Connected to docker-e2e-vm", timeoutMs = 60_000L)
+        // Wait until ConnectScreen closes and the workspace top bar appears (works with 0 or >0 tabs).
+        waitForTag("top_new_tab_button", timeoutMs = 60_000L)
     }
 
     private fun createTab(agentType: String, name: String) {
