@@ -57,6 +57,7 @@ import com.example.data.WorkspaceState
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.PrimaryActionButton
+import com.example.ui.theme.barBackground
 import com.example.ui.theme.isLunaControls
 import com.example.ui.theme.statusColor
 import com.example.ui.theme.statusLabel
@@ -127,7 +128,7 @@ fun TabSidebarBody(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(themedCorner(16.dp))
-                .background(header.background),
+                .barBackground(header),
         ) {
             Row(
                 modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
@@ -391,7 +392,7 @@ private fun DrawerTabRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(themedCorner(14.dp))
-            .then(if (selection != null) Modifier.background(selection.background) else Modifier)
+            .then(if (selection != null) Modifier.barBackground(selection) else Modifier)
             .clickable(onClick = onClick)
             .testTag("drawer_tab_${tab.id}"),
     ) {

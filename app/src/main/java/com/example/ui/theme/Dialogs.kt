@@ -78,7 +78,7 @@ fun ThemedAlertDialog(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(titleBar.background)
+                    .barBackground(titleBar)
                     .padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

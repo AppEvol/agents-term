@@ -171,7 +171,7 @@ fun ThemedFilterChip(
             .padding(vertical = 4.dp)
             .defaultMinSize(minHeight = 34.dp)
             .clip(LunaButtonShape)
-            .background(if (selected) SolidColor(LunaSelectionSoft) else LunaButtonFaceBrush)
+            .then(if (selected) Modifier.background(LunaSelectionSoft) else Modifier.background(LunaButtonFaceBands))
             .border(1.dp, if (selected) LunaSelection else LunaButtonBorder, LunaButtonShape)
             .selectable(
                 selected = selected,
@@ -226,7 +226,7 @@ fun PrimaryActionButton(
     Row(
         modifier = modifier
             .clip(shape)
-            .background(LunaStartBrush)
+            .background(LunaStartBands)
             .drawBehind { if (pressed) drawRect(Color.Black.copy(alpha = 0.18f)) }
             .border(1.dp, LunaStartBorder, shape)
             .clickable(interaction, indication = null, role = Role.Button, onClick = onClick)
@@ -259,8 +259,8 @@ private fun LunaPushButton(
             .drawBehind {
                 when {
                     !enabled -> drawRect(LunaButtonFaceDisabled)
-                    pressed -> drawRect(LunaButtonPressedBrush)
-                    else -> drawRect(LunaButtonFaceBrush)
+                    pressed -> LunaButtonPressedBands.draw(this)
+                    else -> LunaButtonFaceBands.draw(this)
                 }
                 if (enabled && isDefault && !pressed) drawDefaultRing()
             }
@@ -513,7 +513,7 @@ private val LunaTabShape = RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)
 /** Draws an XP tab behind the content. The selected tab is paler and wears an orange cap. */
 fun Modifier.lunaTab(selected: Boolean): Modifier = this
     .clip(LunaTabShape)
-    .background(if (selected) SolidColor(LunaTabPage) else LunaTabFaceBrush)
+    .then(if (selected) Modifier.background(LunaTabPage) else Modifier.background(LunaTabFaceBands))
     .border(1.dp, if (selected) LunaTabPageBorder else LunaTabBorder, LunaTabShape)
     .drawWithContent {
         drawContent()
@@ -552,7 +552,7 @@ fun LunaMarquee(phase: Float, modifier: Modifier = Modifier) {
             val left = start + i * (block + gap)
             val from = left.coerceAtLeast(inset)
             val to = (left + block).coerceAtMost(size.width - inset)
-            if (to > from) drawRect(LunaProgressBrush, topLeft = Offset(from, inset), size = Size(to - from, size.height - 2 * inset))
+            if (to > from) LunaProgressBands.draw(this, Offset(from, inset), Size(to - from, size.height - 2 * inset))
         }
     }
 }

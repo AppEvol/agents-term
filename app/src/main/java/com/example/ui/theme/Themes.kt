@@ -187,7 +187,8 @@ private fun flatChrome(scheme: ColorScheme, semantic: SemanticColors, isDark: Bo
 )
 
 private val LunaBar = BarStyle(
-    background = LunaTitleBarBrush,
+    background = Brush.verticalGradient(LunaTitleBarFallbackColors),
+    bands = LunaTitleBarBands,
     content = Color.White,
     mutedContent = LunaOnTitleBarMuted,
     semantic = LunaTitleBarSemantic,

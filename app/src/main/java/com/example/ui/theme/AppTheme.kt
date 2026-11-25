@@ -41,6 +41,8 @@ data class BarStyle(
     val content: Color,
     val mutedContent: Color,
     val semantic: SemanticColors,
+    /** Drawn instead of [background] where the bar is painted full size. See [BandedGradient]. */
+    val bands: BandedGradient? = null,
     /** A drop shadow under the bar's title, for themes whose title bars have one. */
     val titleShadow: Shadow? = null,
 )

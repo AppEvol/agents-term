@@ -1,6 +1,5 @@
 package com.example.ui.theme
 
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 
 // Herdr Obsidian-Slate + Electric Cobalt & Emerald Palette
@@ -84,7 +83,7 @@ val LunaTooltip = Color(0xFFFFFFE1)
 
 // The Luna title bar: a bright highlight along the top edge, a long mid-blue body, and a dark lip
 // along the bottom edge.
-val LunaTitleBarBrush = Brush.verticalGradient(
+val LunaTitleBarBands = BandedGradient(
     0.00f to Color(0xFF0997FF),
     0.08f to Color(0xFF0053EE),
     0.40f to Color(0xFF0050EE),
@@ -94,6 +93,9 @@ val LunaTitleBarBrush = Brush.verticalGradient(
     0.96f to Color(0xFF003DD7),
     1.00f to Color(0xFF003DD7),
 )
+
+// For thumbnails too small to show the bands.
+val LunaTitleBarFallbackColors = listOf(Color(0xFF0053EE), Color(0xFF0066FF))
 val LunaTitleTextShadow = Color(0xFF0F1089)
 val LunaOnTitleBarMuted = Color(0xFFD6E4FF)
 
@@ -108,8 +110,8 @@ val LunaWindowFrameEdge = Color(0xFF001EA0)
 // Push buttons: a white-to-warm-grey face inside a navy border.
 val LunaButtonBorder = Color(0xFF003C74)
 val LunaButtonBorderDisabled = Color(0xFFC9C7BA)
-val LunaButtonFaceBrush = Brush.verticalGradient(0.00f to Color.White, 0.86f to Color(0xFFECEBE5), 1.00f to Color(0xFFD8D0C4))
-val LunaButtonPressedBrush = Brush.verticalGradient(
+val LunaButtonFaceBands = BandedGradient(0.00f to Color.White, 0.86f to Color(0xFFECEBE5), 1.00f to Color(0xFFD8D0C4))
+val LunaButtonPressedBands = BandedGradient(
     0.00f to Color(0xFFCDCAC3),
     0.08f to Color(0xFFE3E3DB),
     0.94f to Color(0xFFE5E5DE),
@@ -128,7 +130,7 @@ val LunaCheckMark = Color(0xFF21A121)
 
 // The Start button.
 val LunaStartGreen = Color(0xFF3C923A)
-val LunaStartBrush = Brush.verticalGradient(
+val LunaStartBands = BandedGradient(
     0.00f to Color(0xFF7CC576),
     0.08f to Color(0xFF47A341),
     0.50f to Color(0xFF3C923A),
@@ -142,7 +144,7 @@ val LunaStartTextShadow = Color(0xFF1B4D16)
 val LunaTabBorder = Color(0xFF91A7B4)
 val LunaTabPageBorder = Color(0xFF919B9C)
 val LunaTabPage = Color(0xFFFCFCFE)
-val LunaTabFaceBrush = Brush.verticalGradient(
+val LunaTabFaceBands = BandedGradient(
     0.00f to Color.White,
     0.26f to Color(0xFFFAFAF9),
     0.95f to Color(0xFFF0F0EA),
@@ -171,7 +173,7 @@ val LunaNearHillColors = listOf(Color(0xFF8ED04B), Color(0xFF4C9F22))
 
 // The marquee progress bar's green blocks.
 val LunaProgressBorder = Color(0xFF686868)
-val LunaProgressBrush = Brush.verticalGradient(
+val LunaProgressBands = BandedGradient(
     0.00f to Color(0xFFACEDAD),
     0.14f to Color(0xFF7BE47D),
     0.28f to Color(0xFF4CDA50),
