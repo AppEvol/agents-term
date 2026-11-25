@@ -957,6 +957,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
                 )
                 tab2, msgs2 = self.wait_for_tab_idle(tab_id, allowed_statuses=("done",), min_messages=12)
                 self.assertEqual(tab2["status"], "done")
+                self.assertNotIn("<this-work-is-done-172728>", msgs2[-1]["text"])
                 self.assertIn("resumed=yes", msgs2[-1]["text"])
                 self.assertIn(f"model={target_model}", msgs2[-1]["text"])
                 self.assertIn("sp=v2", msgs2[-1]["text"])

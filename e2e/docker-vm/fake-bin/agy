@@ -107,7 +107,7 @@ esac
 done_suffix=""
 case "$prompt" in
   *TASK_DONE*)
-    done_suffix=" All finished. You can close this tab now."
+    done_suffix=' All finished.\n<this-work-is-done-172728>'
     ;;
 esac
 
