@@ -98,6 +98,19 @@ class BootstrapScriptE2ETest {
 
         tmp = kotlin.io.path.createTempDirectory("agentsterm-bootstrap-").toFile()
         home = File(tmp, "home").apply { mkdirs() }
+        // Seed standard Ubuntu/Debian ~/.profile (which references unset $BASH_VERSION under dash)
+        // plus a missing sourced file (like a stale `. "$HOME/.cargo/env"`), verifying POSIX
+        // `command .` before `set -eu` never aborts bootstrap with exit 2.
+        File(home, ".profile").writeText(
+            """
+            if [ -n "${'$'}BASH_VERSION" ]; then
+                if [ -f "${'$'}HOME/.bashrc" ]; then
+                    . "${'$'}HOME/.bashrc"
+                fi
+            fi
+            . "${'$'}HOME/.nonexistent-env"
+            """.trimIndent() + "\n",
+        )
         releaseDir = File(tmp, "release").apply { mkdirs() }
         port = ServerSocket(0).use { it.localPort }
 

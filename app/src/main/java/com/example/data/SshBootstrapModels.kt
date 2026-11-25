@@ -175,8 +175,8 @@ fun encodeBase64Utf8(input: String): String {
  *    (avoiding `ETXTBSY` on a running daemon), and executes `agentsterm-daemon install --port <port>`.
  */
 private val daemonBootstrapScriptTemplate = """
+        [ -f "${'$'}HOME/.profile" ] && command . "${'$'}HOME/.profile" >/dev/null 2>&1 || true
         set -eu
-        [ -f "${'$'}HOME/.profile" ] && . "${'$'}HOME/.profile" >/dev/null 2>&1 || true
         export PATH="${'$'}HOME/.local/bin:${'$'}HOME/.npm-global/bin:${'$'}HOME/.cargo/bin:/usr/local/bin:${'$'}PATH"
         export FORCE_COLOR=0
         BASE_URL="${'$'}{AGENTSTERM_RELEASE_BASE_URL:-__RELEASE_BASE_URL__}"

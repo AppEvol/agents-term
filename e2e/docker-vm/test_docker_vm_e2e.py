@@ -152,8 +152,8 @@ def build_rust_bootstrap_command(
     release_base_url: str = "https://github.com/nedn/agents-term/releases/latest/download",
 ) -> str:
     """Matches the production POSIX bootstrap command from SshBootstrapModels.kt."""
-    script = f"""set -eu
-[ -f "$HOME/.profile" ] && . "$HOME/.profile" >/dev/null 2>&1 || true
+    script = f"""[ -f "$HOME/.profile" ] && command . "$HOME/.profile" >/dev/null 2>&1 || true
+set -eu
 export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
 export FORCE_COLOR=0
 BASE_URL="${{AGENTSTERM_RELEASE_BASE_URL:-{release_base_url}}}"

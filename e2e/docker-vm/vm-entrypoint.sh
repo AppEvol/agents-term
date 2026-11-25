@@ -20,7 +20,9 @@ if [ -d /mnt/release ]; then
   cp -a /mnt/release/. /opt/agentsterm-release/
   chown -R vmuser:vmuser /opt/agentsterm-release
   busybox httpd -p "127.0.0.1:${RELEASE_HTTP_PORT}" -h /opt/agentsterm-release
-  cat > /home/vmuser/.profile <<EOF
+  # Append to Ubuntu's default /etc/skel/.profile (which checks $BASH_VERSION) instead of
+  # overwriting it, so bootstrap tests exercise real login-profile sourcing under dash/sh.
+  cat >> /home/vmuser/.profile <<EOF
 export AGENTSTERM_RELEASE_BASE_URL="http://127.0.0.1:${RELEASE_HTTP_PORT}"
 export PATH="\$HOME/.local/bin:\$PATH"
 EOF
