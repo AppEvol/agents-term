@@ -786,6 +786,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
 
         waitForText("SSH Agy Tab")
+        waitForTag("composer_input")
         composeRule.onNodeWithTag("composer_input").performTextInput("Diagnose phone glitch")
         composeRule.onNodeWithTag("send_button").performClick()
 

@@ -18,7 +18,7 @@
 
 ## Testing & CI
 
-- Every test written in this repository must run in CI (`.github/workflows/ci.yml`) and hard-block PR merges into `main` via required status checks.
+- Every test written in this repository must run in CI (`.github/workflows/ci.yml`) and hard-block PR merges into `main` (wire any new CI test job into the `ci-gate` / `All Required CI Checks` job).
 - If a test is not valuable or reliable enough to run in CI and block PR merges, do not add or keep it in the repository.
 
 ## Static Checks
