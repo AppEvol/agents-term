@@ -80,13 +80,7 @@ val LunaIdle = Color(0xFF7A7868)
 val LunaTooltip = Color(0xFFFFFFE1)
 
 // The Luna title bar: a bright highlight at the top edge, falling to a deep blue at the bottom.
-val LunaTitleBarStops = arrayOf(
-    0.00f to Color(0xFF0997FF),
-    0.08f to Color(0xFF0053EE),
-    0.40f to Color(0xFF0050EE),
-    0.88f to Color(0xFF0066FF),
-    1.00f to Color(0xFF003DD7),
-)
+val LunaTitleBarColors = listOf(Color(0xFF2B8CFF), Color(0xFF0054E3), Color(0xFF0046D5))
 val LunaOnTitleBarMuted = Color(0xFFD6E4FF)
 
 // Status colors that stay readable on the blue title bar.
