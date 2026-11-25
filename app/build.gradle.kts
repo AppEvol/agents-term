@@ -14,6 +14,9 @@ val ciVersionCode = providers.gradleProperty("appVersionCode").orNull?.toIntOrNu
 val ciVersionName = providers.gradleProperty("appVersionName").orNull?.takeIf { it.isNotBlank() }
     ?: providers.environmentVariable("APP_VERSION_NAME").orNull?.takeIf { it.isNotBlank() }
     ?: "0.3"
+val daemonReleaseBaseUrl = providers.gradleProperty("daemonReleaseBaseUrl").orNull?.takeIf { it.isNotBlank() }
+    ?: providers.environmentVariable("AGENTSTERM_DAEMON_RELEASE_BASE_URL").orNull?.takeIf { it.isNotBlank() }
+    ?: "https://github.com/nedn/agents-term/releases/latest/download"
 
 // "record" rewrites the golden images of the screenshot tests; anything else verifies them.
 val goldensMode = providers.gradleProperty("goldens").orNull
@@ -28,6 +31,7 @@ android {
         targetSdk = 36
         versionCode = ciVersionCode
         versionName = ciVersionName
+        buildConfigField("String", "DAEMON_RELEASE_BASE_URL", "\"$daemonReleaseBaseUrl\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

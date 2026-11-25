@@ -1,7 +1,6 @@
 package com.example.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -34,8 +33,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
-import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Link
@@ -59,7 +56,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -103,7 +99,6 @@ import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
 import com.example.data.SshSetupAutofill
 import com.example.data.TailscaleStatus
-import com.example.data.defaultAgyBootstrapPrompt
 import com.example.data.parseSshSetupInput
 import com.example.data.tailscaleStatusFlow
 import com.example.ui.theme.AppTheme
@@ -229,10 +224,6 @@ fun ConnectScreen(
     var showSshPassword by remember { mutableStateOf(false) }
     var sshPrivateKey by remember { mutableStateOf("") }
     var sshPassphrase by remember { mutableStateOf("") }
-    var showPromptEditor by remember { mutableStateOf(false) }
-    var bootstrapPrompt by remember {
-        mutableStateOf(defaultAgyBootstrapPrompt(sshProfile.daemonPort))
-    }
     var sshAutofillFeedback by remember { mutableStateOf<String?>(null) }
 
     val pasteSuccessMsg = stringResource(R.string.connect_paste_success)
@@ -249,9 +240,6 @@ fun ConnectScreen(
         autofill.sshPort?.let { sshPortText = it.toString() }
         autofill.daemonPort?.let { dPort ->
             daemonPortText = dPort.toString()
-            if (!showPromptEditor) {
-                bootstrapPrompt = defaultAgyBootstrapPrompt(dPort)
-            }
         }
         autofill.authMethod?.let { sshAuthMethod = it }
     }
@@ -286,7 +274,6 @@ fun ConnectScreen(
             privateKey = sshPrivateKey,
             passphrase = sshPassphrase,
             daemonPort = dPort,
-            prompt = bootstrapPrompt.trim().ifBlank { defaultAgyBootstrapPrompt(dPort) },
         )
     }
 
@@ -632,12 +619,7 @@ fun ConnectScreen(
                         OutlinedTextField(
                             value = daemonPortText,
                             onValueChange = { next ->
-                                val filtered = next.filter { ch -> ch.isDigit() }.take(5)
-                                daemonPortText = filtered
-                                val parsedPort = filtered.toIntOrNull()?.takeIf { it in 1..65535 }
-                                if (parsedPort != null && !showPromptEditor) {
-                                    bootstrapPrompt = defaultAgyBootstrapPrompt(parsedPort)
-                                }
+                                daemonPortText = next.filter { ch -> ch.isDigit() }.take(5)
                             },
                             label = { Text(stringResource(R.string.ssh_daemon_port_label)) },
                             placeholder = { Text("7501") },
@@ -755,83 +737,6 @@ fun ConnectScreen(
                                 .testTag("ssh_passphrase_input"),
                             shape = themedCorner(14.dp),
                         )
-                    }
-
-                    // Expandable agy prompt customization
-                    Surface(
-                        shape = themedCorner(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { showPromptEditor = !showPromptEditor }
-                                    .padding(horizontal = 14.dp, vertical = 12.dp)
-                                    .testTag("toggle_prompt_editor"),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Terminal,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                    Text(
-                                        text = stringResource(R.string.ssh_prompt_customize),
-                                        style = MaterialTheme.typography.labelLarge,
-                                    )
-                                }
-                                Icon(
-                                    imageVector = if (showPromptEditor) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            AnimatedVisibility(visible = showPromptEditor) {
-                                Column(
-                                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    OutlinedTextField(
-                                        value = bootstrapPrompt,
-                                        onValueChange = { bootstrapPrompt = it },
-                                        enabled = !bootstrapState.isRunning,
-                                        minLines = 5,
-                                        maxLines = 10,
-                                        textStyle = MaterialTheme.typography.bodySmall.copy(
-                                            fontFamily = MonoFontFamily,
-                                            lineHeight = 18.sp,
-                                        ),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .testTag("agy_prompt_input"),
-                                        shape = themedCorner(12.dp),
-                                    )
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End,
-                                    ) {
-                                        TextButton(
-                                            enabled = !bootstrapState.isRunning,
-                                            onClick = {
-                                                val dPort = daemonPortText.toIntOrNull()?.takeIf { it in 1..65535 } ?: 7501
-                                                bootstrapPrompt = defaultAgyBootstrapPrompt(dPort)
-                                            },
-                                        ) {
-                                            Text(stringResource(R.string.ssh_prompt_reset))
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
 
                     // Live streaming bootstrap console & status
@@ -1199,7 +1104,7 @@ private fun BootstrapConsoleCard(
 
     val phaseText = when (state.phase) {
         BootstrapPhase.CONNECTING_SSH -> stringResource(R.string.ssh_phase_connecting)
-        BootstrapPhase.RUNNING_AGY -> stringResource(R.string.ssh_phase_running_agy)
+        BootstrapPhase.INSTALLING_DAEMON -> stringResource(R.string.ssh_phase_installing_daemon)
         BootstrapPhase.VERIFYING_DAEMON -> stringResource(R.string.ssh_phase_verifying)
         BootstrapPhase.SUCCEEDED -> stringResource(R.string.ssh_phase_succeeded)
         BootstrapPhase.ERROR -> state.errorMessage ?: "Bootstrap failed"
@@ -1320,8 +1225,6 @@ private fun BootstrapConsoleCard(
                             ),
                             color = when {
                                 line.startsWith("[stderr]") -> AppTheme.colors.warning
-                                line.startsWith("[tool done]") -> AppTheme.colors.success
-                                line.startsWith("[tool]") -> AppTheme.colors.info
                                 line.startsWith(">>>") -> MaterialTheme.colorScheme.primary
                                 else -> MaterialTheme.colorScheme.onSurface
                             },

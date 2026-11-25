@@ -38,10 +38,11 @@
 - These commands are read-only. Screenshots need the app in the foreground and show the user a toast.
 - The same CLI can drive the app to reproduce a bug or QA test a flow: `ui --brief` lists what is on screen, then `tap`, `long-press`, `type`, `scroll`, `swipe`, `key back` and `wait` (see "Driving the app" in `app_state_cli/README.md`). These need a second switch, **Allow VM agents to control the app**; `status` reports `controlReady`, and exit code 3 with `control_disabled` means it is off, so ask the user rather than retrying. Only drive the app when the task calls for it: the user is holding that phone.
 
-## VM Daemon (`daemon/`)
+## VM Daemon (`daemon-rs/` & `daemon/`)
 
-- The VM daemon is Python 3, standard library only. Run its tests with `python3 -m unittest discover -s daemon/tests`.
-- Agent sessions started from the app are child processes of the running daemon. Never restart the daemon or `herdr-mobile.service`, and never run `daemon/install.sh`, from inside such a session: it ends your own session. Test on a scratch port with a temporary `HOME` instead (`python3 daemon/agentsterm-daemon --host 127.0.0.1 --port 7599`).
+- The production VM daemon is a single static Rust binary in `daemon-rs/` (built for `x86_64` and `aarch64` Linux musl). Run its tests with `cargo test` inside `daemon-rs/`. The legacy Python daemon tests and POSIX `daemon/install.sh` tests run with `python3 -m unittest discover -s daemon/tests`.
+- **APK ↔ daemon release sync:** Every official CI release on `main` (`v0.3.<run>-<sha>`) and branch preview pre-release (`v0.3.<run>-<sha>-preview`) pins `BuildConfig.DAEMON_RELEASE_BASE_URL` to its own GitHub Release tag so each released APK bootstraps the exact daemon binary built from the same commit. Unreleased local/PR APK builds default to `releases/latest/download` (override with `-PdaemonReleaseBaseUrl=...` or `AGENTSTERM_DAEMON_RELEASE_BASE_URL` when testing unmerged daemon changes).
+- Agent sessions started from the app are child processes of the running daemon. Never restart the daemon or `herdr-mobile.service`, and never run `agentsterm-daemon install` or `daemon/install.sh` against your real `HOME`, from inside such a session: it ends your own session. Test on a scratch port with a temporary `HOME` instead (`HOME=$(mktemp -d) cargo run --manifest-path daemon-rs/Cargo.toml -- serve --host 127.0.0.1 --port 7599`).
 - Keep the REST/WebSocket contract backward compatible with released app builds.
 
 ## Agent Productivity Bugs (`#agent-productivity`)
