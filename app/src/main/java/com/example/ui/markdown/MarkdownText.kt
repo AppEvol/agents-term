@@ -62,8 +62,7 @@ fun MarkdownText(
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     isStreaming: Boolean = false,
 ) {
-    val parserState = remember { StreamingMarkdownState() }
-    val blocks = remember(markdown, isStreaming) { parserState.update(markdown, isStreaming) }
+    val blocks = rememberParsedMarkdownBlocks(markdown = markdown, isStreaming = isStreaming)
     val style = rememberMarkdownStyle(textColor)
     MarkdownSelectionContainer {
         MarkdownBlocks(blocks = blocks, style = style, modifier = modifier)
@@ -87,7 +86,7 @@ internal data class MarkdownStyle(
 }
 
 @Composable
-private fun rememberMarkdownStyle(textColor: Color): MarkdownStyle {
+internal fun rememberMarkdownStyle(textColor: Color): MarkdownStyle {
     val colors = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     val linkHandler = rememberMarkdownLinkHandler()
@@ -144,6 +143,43 @@ private fun rememberMarkdownLinkHandler(): MarkdownLinkHandler {
 private val BlockSpacing = 10.dp
 private val TightSpacing = 4.dp
 
+/** Stable `LazyColumn` contentType for slot reuse across virtualized Markdown blocks. */
+internal fun MdBlock.contentType(): String = when (this) {
+    is MdBlock.Paragraph -> "md_paragraph"
+    is MdBlock.Heading -> "md_heading"
+    is MdBlock.CodeBlock -> "md_code"
+    is MdBlock.Quote -> "md_quote"
+    is MdBlock.ItemList -> "md_list"
+    is MdBlock.Table -> "md_table"
+    MdBlock.Rule -> "md_rule"
+}
+
+/**
+ * Renders a single top-level [MdBlock] inside a [MarkdownSelectionContainer] so `ChatScreen` can
+ * emit each top-level block as its own virtualized `LazyColumn` item while preserving text
+ * selection and clean copy behavior.
+ */
+@Composable
+internal fun VirtualizedMarkdownBlock(
+    block: MdBlock,
+    isFirst: Boolean,
+    style: MarkdownStyle,
+    modifier: Modifier = Modifier,
+) {
+    if (block is MdBlock.Rule) {
+        HorizontalDivider(
+            color = style.outlineColor,
+            modifier = modifier.padding(vertical = 4.dp),
+        )
+    } else {
+        Box(modifier = modifier) {
+            MarkdownSelectionContainer {
+                MarkdownBlockContent(block = block, isFirst = isFirst, style = style, listDepth = 0)
+            }
+        }
+    }
+}
+
 /** [listDepth] is how many lists these blocks are nested in; it picks the bullet shape. */
 @Composable
 internal fun MarkdownBlocks(
@@ -155,25 +191,40 @@ internal fun MarkdownBlocks(
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(spacing)) {
         blocks.forEachIndexed { index, block ->
-            when (block) {
-                is MdBlock.Paragraph -> MarkdownParagraph(block = block, style = style)
-
-                is MdBlock.Heading -> MarkdownHeading(block = block, isFirst = index == 0, style = style)
-
-                is MdBlock.CodeBlock -> CodeBlockCard(language = block.language, code = block.code)
-
-                is MdBlock.Quote -> MarkdownQuote(block, style, listDepth)
-
-                is MdBlock.ItemList -> MarkdownList(block, style, listDepth)
-
-                is MdBlock.Table -> MarkdownTable(block, style)
-
-                MdBlock.Rule -> HorizontalDivider(
-                    color = style.outlineColor,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-            }
+            MarkdownBlockContent(
+                block = block,
+                isFirst = index == 0,
+                style = style,
+                listDepth = listDepth,
+            )
         }
+    }
+}
+
+@Composable
+private fun MarkdownBlockContent(
+    block: MdBlock,
+    isFirst: Boolean,
+    style: MarkdownStyle,
+    listDepth: Int,
+) {
+    when (block) {
+        is MdBlock.Paragraph -> MarkdownParagraph(block = block, style = style)
+
+        is MdBlock.Heading -> MarkdownHeading(block = block, isFirst = isFirst, style = style)
+
+        is MdBlock.CodeBlock -> CodeBlockCard(language = block.language, code = block.code)
+
+        is MdBlock.Quote -> MarkdownQuote(block, style, listDepth)
+
+        is MdBlock.ItemList -> MarkdownList(block, style, listDepth)
+
+        is MdBlock.Table -> MarkdownTable(block, style)
+
+        MdBlock.Rule -> HorizontalDivider(
+            color = style.outlineColor,
+            modifier = Modifier.padding(vertical = 4.dp),
+        )
     }
 }
 
