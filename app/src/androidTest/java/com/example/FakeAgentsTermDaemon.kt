@@ -610,6 +610,30 @@ class FakeAgentsTermDaemon(
         return jsonResponse(200, encodeHerdrJson(QueueActionResponse(ok = true, tab = updated)))
     }
 
+    private fun emitFinishTaskTurn(tab: TabRecord, assistantMsg: ChatMessage) {
+        val doneText = "All done! This task is finished — you can close this tab whenever you're ready."
+        broadcast(
+            WsServerEnvelope(
+                type = "message_delta",
+                tabId = tab.id,
+                messageId = assistantMsg.id,
+                textDelta = doneText,
+            ),
+        )
+        val completeMsg = assistantMsg.copy(
+            text = doneText,
+            status = "complete",
+            usage = UsageStats(inputTokens = 60, outputTokens = 20, durationMs = 200L),
+            updatedAt = System.currentTimeMillis(),
+        )
+        replaceMessage(tab.id, completeMsg)
+        val doneTab = updateTabState(tab.id, status = "done", statusDetail = "Task finished")
+        broadcast(WsServerEnvelope(type = "message_updated", tabId = tab.id, message = completeMsg))
+        if (doneTab != null) {
+            broadcast(WsServerEnvelope(type = "tab_updated", tab = doneTab))
+        }
+    }
+
     private fun emitTurnEvents(
         tab: TabRecord,
         userMsg: ChatMessage,
@@ -627,27 +651,7 @@ class FakeAgentsTermDaemon(
         }
 
         if (prompt.contains("finish_task")) {
-            val doneText = "All done! This task is finished — you can close this tab whenever you're ready."
-            broadcast(
-                WsServerEnvelope(
-                    type = "message_delta",
-                    tabId = tab.id,
-                    messageId = assistantMsg.id,
-                    textDelta = doneText,
-                ),
-            )
-            val completeMsg = assistantMsg.copy(
-                text = doneText,
-                status = "complete",
-                usage = UsageStats(inputTokens = 60, outputTokens = 20, durationMs = 200L),
-                updatedAt = System.currentTimeMillis(),
-            )
-            replaceMessage(tab.id, completeMsg)
-            val doneTab = updateTabState(tab.id, status = "done", statusDetail = "Task finished")
-            broadcast(WsServerEnvelope(type = "message_updated", tabId = tab.id, message = completeMsg))
-            if (doneTab != null) {
-                broadcast(WsServerEnvelope(type = "tab_updated", tab = doneTab))
-            }
+            emitFinishTaskTurn(tab, assistantMsg)
             return
         }
 

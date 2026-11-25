@@ -1174,26 +1174,8 @@ class AgentsTermE2ETest {
         waitForTag("topbar_done_badge")
         composeRule.onNodeWithTag("topbar_done_badge").assertIsDisplayed()
 
-        // Open Persistent Tabs drawer and verify finished-task UI elements
-        composeRule.onNodeWithTag("open_drawer_button").performClick()
-        waitForTag("drawer_finished_count_badge")
-        composeRule.onNodeWithTag("drawer_finished_count_badge").assertTextContains("1 done")
-        composeRule.onNodeWithTag("drawer_tab_done_icon_tab_done", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("drawer_tab_done_badge_tab_done", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("drawer_tab_done_hint_tab_done", useUnmergedTree = true)
-            .assertIsDisplayed()
-            .assertTextContains("Task finished", substring = true)
-
-        // Tap "Close done" to close all finished tabs while keeping active tabs
-        composeRule.onNodeWithTag("drawer_close_finished_button").performClick()
-        composeRule.waitUntil(timeoutMillis = 10_000L) {
-            composeRule.onAllNodesWithTag("drawer_tab_tab_done").fetchSemanticsNodes().isEmpty() &&
-                composeRule.onAllNodesWithTag("drawer_tab_tab_active").fetchSemanticsNodes().isNotEmpty()
-        }
-        assertTrue(
-            "Finished count badge should disappear after closing finished tabs",
-            composeRule.onAllNodesWithTag("drawer_finished_count_badge").fetchSemanticsNodes().isEmpty(),
-        )
+        // Open Persistent Tabs drawer, verify finished-task UI, and close finished tabs
+        verifyAndCloseFinishedTabInDrawer(finishedTabId = "tab_done", activeTabId = "tab_active")
 
         // Select remaining active tab, trigger a turn that finishes its task, verify Done appears, then mark active
         composeRule.onNodeWithTag("drawer_tab_tab_active").performClick()
@@ -1212,5 +1194,26 @@ class AgentsTermE2ETest {
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             composeRule.onAllNodesWithTag("topbar_done_badge").fetchSemanticsNodes().isEmpty()
         }
+    }
+
+    private fun verifyAndCloseFinishedTabInDrawer(finishedTabId: String, activeTabId: String) {
+        composeRule.onNodeWithTag("open_drawer_button").performClick()
+        waitForTag("drawer_finished_count_badge")
+        composeRule.onNodeWithTag("drawer_finished_count_badge").assertTextContains("1 done")
+        composeRule.onNodeWithTag("drawer_tab_done_icon_$finishedTabId", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_tab_done_badge_$finishedTabId", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer_tab_done_hint_$finishedTabId", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assertTextContains("Task finished", substring = true)
+
+        composeRule.onNodeWithTag("drawer_close_finished_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithTag("drawer_tab_$finishedTabId").fetchSemanticsNodes().isEmpty() &&
+                composeRule.onAllNodesWithTag("drawer_tab_$activeTabId").fetchSemanticsNodes().isNotEmpty()
+        }
+        assertTrue(
+            "Finished count badge should disappear after closing finished tabs",
+            composeRule.onAllNodesWithTag("drawer_finished_count_badge").fetchSemanticsNodes().isEmpty(),
+        )
     }
 }

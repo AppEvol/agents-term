@@ -36,12 +36,11 @@ data class WorkspaceState(
     val attentionCount: Int
         get() = tabs.count { it.unread || it.status == "blocked" || it.status == "error" }
 
-    fun isTabFinished(tab: TabRecord): Boolean =
-        isTabTaskFinished(
-            tab = tab,
-            messages = messagesByTab[tab.id].orEmpty(),
-            manuallyReopened = tab.id in reopenedTabIds,
-        )
+    fun isTabFinished(tab: TabRecord): Boolean = isTabTaskFinished(
+        tab = tab,
+        messages = messagesByTab[tab.id].orEmpty(),
+        manuallyReopened = tab.id in reopenedTabIds,
+    )
 
     val finishedTabIds: Set<String>
         get() = tabs.filter { isTabFinished(it) }.map { it.id }.toSet()
