@@ -35,3 +35,16 @@
 - Agent sessions started from the app are child processes of the running daemon. Never restart the daemon or `herdr-mobile.service`, and never run `daemon/install.sh`, from inside such a session: it ends your own session. Test on a scratch port with a temporary `HOME` instead (`python3 daemon/agentsterm-daemon --host 127.0.0.1 --port 7599`).
 - Keep the REST/WebSocket contract backward compatible with released app builds.
 
+## Agent Productivity Bugs (`#agent-productivity`)
+
+- While executing tasks, if you hit surprises, friction, or gotchas that trip up or slow down execution, file a bug in this repository with the `agent-productivity` label (e.g., `gh issue create --label bug --label agent-productivity ...`) and note the `#agent-productivity` category.
+- Check existing issues first (`gh issue list --label agent-productivity` or `gh issue list --search "..."`) to avoid filing duplicates.
+- If a matching issue already exists, do not open a new one—react to it instead to signal-boost it (e.g., `gh api repos/nedn/agents-term/issues/<number>/reactions -f content=+1`).
+
+## Feature Change Logs (`docs/features_logs/`)
+
+- Record notable feature changes (added, modified, removed) in `docs/features_logs/` so future retrospectives can easily track how the product evolved.
+- Start a new Markdown file each week, named with the first date of the week (Monday, `YYYY-MM-DD.md`, e.g., `docs/features_logs/2026-11-23.md`).
+- Organize each doc with concise bullet points so entries stay brief and scannable.
+- When a feature change is implemented via a branch merge, include a link to the merge commit (e.g., `[<short-sha>](https://github.com/nedn/agents-term/commit/<sha>)`).
+
