@@ -38,6 +38,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
@@ -1444,13 +1445,18 @@ private fun ComposerTextField(
     // outside (cleared after sending, or another tab's draft) and has to be put into the field;
     // one that matches is only the field's own edit coming back and must not undo newer typing.
     var lastReported by remember { mutableStateOf(draft) }
-    LaunchedEffect(fieldState) {
-        snapshotFlow { fieldState.text.toString() }.collect { typed ->
-            if (typed != lastReported) {
-                lastReported = typed
-                currentOnDraftChange(typed)
-            }
+    val report: (String) -> Unit = { typed ->
+        if (typed != lastReported) {
+            lastReported = typed
+            currentOnDraftChange(typed)
         }
+    }
+    // Every edit is reported as it happens, so the send button never acts on an older draft
+    // than what the field shows. This changes nothing in the text; it only observes it.
+    val reportEdits = remember { InputTransformation { report(asCharSequence().toString()) } }
+    // Changes that bypass the input path (such as undo) are picked up here, a moment later.
+    LaunchedEffect(fieldState) {
+        snapshotFlow { fieldState.text.toString() }.collect { typed -> report(typed) }
     }
     LaunchedEffect(draft) {
         if (draft != lastReported) {
@@ -1475,6 +1481,7 @@ private fun ComposerTextField(
     }
     BasicTextField(
         state = fieldState,
+        inputTransformation = reportEdits,
         textStyle = LocalTextStyle.current.merge(color = MaterialTheme.colorScheme.onSurface),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
