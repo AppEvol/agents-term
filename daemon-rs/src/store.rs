@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
 
+use crate::attachments::normalize_attachments;
 use crate::config::{
     ensure_config_dir, ensure_dir_0700, home_dir, tab_dir, tab_messages_path, tabs_index_path,
     tabs_root, workspace_path, write_atomic_file,
@@ -57,19 +58,25 @@ fn normalize_queued_messages(raw: Option<&Value>) -> Vec<Value> {
         let Some(qid) = strip_or_none(obj.get("id")) else {
             continue;
         };
-        let Some(text) = strip_or_none(obj.get("text")) else {
+        let attachments = normalize_attachments(obj.get("attachments"));
+        let text = strip_or_none(obj.get("text")).unwrap_or_default();
+        if text.is_empty() && attachments.is_empty() {
             continue;
-        };
+        }
         let created = obj
             .get("createdAt")
             .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
             .unwrap_or_else(now_ms);
-        out.push(json!({
+        let mut queued = json!({
             "id": qid,
             "text": text,
             "overridePermissionMode": strip_or_none(obj.get("overridePermissionMode")),
             "createdAt": created,
-        }));
+        });
+        if !attachments.is_empty() {
+            queued["attachments"] = Value::Array(attachments);
+        }
+        out.push(queued);
     }
     out
 }
@@ -724,14 +731,18 @@ impl StateStore {
         tab_id: &str,
         text: &str,
         override_permission_mode: Option<&str>,
+        attachments: &[Value],
     ) -> Option<(Value, Value)> {
         let tab = self.get_tab(tab_id)?;
-        let item = json!({
+        let mut item = json!({
             "id": format!("q_{}", rand_hex(6)),
             "text": text,
             "overridePermissionMode": override_permission_mode.map(str::trim).filter(|s| !s.is_empty()),
             "createdAt": now_ms(),
         });
+        if !attachments.is_empty() {
+            item["attachments"] = Value::Array(attachments.to_vec());
+        }
         let mut queued = tab
             .get("queuedMessages")
             .and_then(Value::as_array)

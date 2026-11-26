@@ -9,7 +9,10 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
-use crate::config::{enriched_path, resolve_binary, WORK_DONE_SYSTEM_INSTRUCTION};
+use crate::attachments::{attachments_label, prompt_with_attachments, remove_attachment_files};
+use crate::config::{
+    enriched_path, resolve_binary, tab_attachments_dir, WORK_DONE_SYSTEM_INSTRUCTION,
+};
 use crate::log::{log_error, log_info, log_warn};
 use crate::store::{resolve_abs_path, StateStore, RESTART_INTERRUPTED_REASON};
 use crate::util::{
@@ -32,6 +35,13 @@ fn model_cmd_re() -> &'static Regex {
 fn model_reset_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(?i)^(?:default|reset|auto)$").unwrap())
+}
+
+/// The tab's image attachment folder, once the app has uploaded something into it.
+fn existing_attachments_dir(tab_id: &str) -> Option<String> {
+    tab_attachments_dir(tab_id)
+        .filter(|dir| dir.is_dir())
+        .map(|dir| dir.to_string_lossy().into_owned())
 }
 
 fn tab_system_prompt(tab: &Value) -> Option<String> {
@@ -279,11 +289,12 @@ impl AgentRunner {
         tab: &Value,
         prompt_text: &str,
         override_permission_mode: Option<&str>,
+        attachments: &[Value],
     ) -> Value {
         let tab_id = tab.get("id").and_then(Value::as_str).unwrap_or("");
         if self.is_running(tab_id) {
             return self
-                .enqueue_message(tab_id, prompt_text, override_permission_mode)
+                .enqueue_message(tab_id, prompt_text, override_permission_mode, attachments)
                 .unwrap_or_else(|| json!({ "queued": false }));
         }
         let has_queued = tab
@@ -292,12 +303,12 @@ impl AgentRunner {
             .map(|a| !a.is_empty())
             .unwrap_or(false);
         if has_queued {
-            self.enqueue_message(tab_id, prompt_text, override_permission_mode);
+            self.enqueue_message(tab_id, prompt_text, override_permission_mode, attachments);
             if let Some(res) = self.drain_and_start_queued(tab_id) {
                 return res;
             }
         }
-        self.start_turn(tab, prompt_text, override_permission_mode)
+        self.start_turn(tab, prompt_text, override_permission_mode, attachments)
     }
 
     pub fn enqueue_message(
@@ -305,10 +316,14 @@ impl AgentRunner {
         tab_id: &str,
         prompt_text: &str,
         override_permission_mode: Option<&str>,
+        attachments: &[Value],
     ) -> Option<Value> {
-        let (updated_tab, queued_item) =
-            self.store
-                .enqueue_message(tab_id, prompt_text, override_permission_mode)?;
+        let (updated_tab, queued_item) = self.store.enqueue_message(
+            tab_id,
+            prompt_text,
+            override_permission_mode,
+            attachments,
+        )?;
         (self.broadcast)(json!({ "type": "tab_updated", "tab": updated_tab }));
         Some(json!({
             "queued": true,
@@ -318,12 +333,30 @@ impl AgentRunner {
     }
 
     pub fn remove_queued_message(&self, tab_id: &str, queued_id: &str) -> Option<Value> {
+        // The images of a message that will never be sent are not kept.
+        if let Some(tab) = self.store.get_tab(tab_id) {
+            let removed = tab
+                .get("queuedMessages")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|m| m.get("id").and_then(Value::as_str) == Some(queued_id));
+            if let Some(item) = removed {
+                remove_attachment_files(tab_id, item.get("attachments"));
+            }
+        }
         let updated = self.store.remove_queued_message(tab_id, queued_id)?;
         (self.broadcast)(json!({ "type": "tab_updated", "tab": updated }));
         Some(updated)
     }
 
-    fn combine_queued_messages(items: &[Value]) -> (String, Option<String>) {
+    fn combine_queued_messages(items: &[Value]) -> (String, Option<String>, Vec<Value>) {
+        let attachments: Vec<Value> = items
+            .iter()
+            .filter_map(|m| m.get("attachments").and_then(Value::as_array))
+            .flatten()
+            .cloned()
+            .collect();
         let texts: Vec<&str> = items
             .iter()
             .filter_map(|m| m.get("text").and_then(Value::as_str).map(str::trim))
@@ -343,7 +376,7 @@ impl AgentRunner {
         } else {
             overrides.last().map(|s| (*s).to_string())
         };
-        (texts.join("\n\n"), combined_override)
+        (texts.join("\n\n"), combined_override, attachments)
     }
 
     pub fn drain_and_start_queued(&self, tab_id: &str) -> Option<Value> {
@@ -351,12 +384,18 @@ impl AgentRunner {
         if popped.is_empty() {
             return None;
         }
-        let (combined_text, combined_override) = Self::combine_queued_messages(&popped);
-        if combined_text.is_empty() {
+        let (combined_text, combined_override, attachments) =
+            Self::combine_queued_messages(&popped);
+        if combined_text.is_empty() && attachments.is_empty() {
             (self.broadcast)(json!({ "type": "tab_updated", "tab": updated_tab }));
             return None;
         }
-        Some(self.start_turn(&updated_tab, &combined_text, combined_override.as_deref()))
+        Some(self.start_turn(
+            &updated_tab,
+            &combined_text,
+            combined_override.as_deref(),
+            &attachments,
+        ))
     }
 
     pub fn interrupt(
@@ -365,9 +404,11 @@ impl AgentRunner {
         process_queue: bool,
         text: Option<&str>,
         override_permission_mode: Option<&str>,
+        attachments: &[Value],
     ) -> bool {
-        if let Some(t) = text.map(str::trim).filter(|s| !s.is_empty()) {
-            self.enqueue_message(tab_id, t, override_permission_mode);
+        let text = text.map(str::trim).unwrap_or("");
+        if !text.is_empty() || !attachments.is_empty() {
+            self.enqueue_message(tab_id, text, override_permission_mode, attachments);
         }
 
         let turn_arc = self.active.lock().unwrap().get(tab_id).cloned();
@@ -501,6 +542,7 @@ impl AgentRunner {
         tab: &Value,
         prompt_text: &str,
         override_permission_mode: Option<&str>,
+        attachments: &[Value],
     ) -> Value {
         let tab_id = tab
             .get("id")
@@ -514,17 +556,26 @@ impl AgentRunner {
             .to_string();
 
         let has_prior_task = self.store.get_messages(&tab_id).iter().any(|m| {
-            m.get("role").and_then(Value::as_str) == Some("user")
-                && m.get("text")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .map(|t| !t.is_empty() && !model_cmd_re().is_match(t))
-                    .unwrap_or(false)
+            let has_text = m
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .map(|t| !t.is_empty() && !model_cmd_re().is_match(t))
+                .unwrap_or(false);
+            let has_images = m
+                .get("attachments")
+                .and_then(Value::as_array)
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
+            m.get("role").and_then(Value::as_str) == Some("user") && (has_text || has_images)
         });
         let is_first_task_prompt = !has_prior_task;
 
         let now = now_ms();
-        let user_message = Self::new_message(&tab_id, "user", prompt_text, "complete", now);
+        let mut user_message = Self::new_message(&tab_id, "user", prompt_text, "complete", now);
+        if !attachments.is_empty() {
+            user_message["attachments"] = Value::Array(attachments.to_vec());
+        }
         let assistant_message = Self::new_message(&tab_id, "assistant", "", "streaming", now + 1);
         self.store.add_message(&tab_id, user_message.clone());
         self.store.add_message(&tab_id, assistant_message.clone());
@@ -546,10 +597,12 @@ impl AgentRunner {
         let mut working_patch = Map::new();
         working_patch.insert("status".into(), json!("working"));
         working_patch.insert("statusDetail".into(), json!(format!("Starting {agent}…")));
-        working_patch.insert(
-            "lastMessagePreview".into(),
-            json!(truncate(prompt_text, 120)),
-        );
+        let preview = if prompt_text.trim().is_empty() && !attachments.is_empty() {
+            attachments_label(attachments.len())
+        } else {
+            truncate(prompt_text, 120)
+        };
+        working_patch.insert("lastMessagePreview".into(), json!(preview));
         working_patch.insert("unread".into(), json!(false));
         let has_summary = tab
             .get("taskSummary")
@@ -597,14 +650,16 @@ impl AgentRunner {
                 .unwrap()
                 .insert(msg_id.clone(), WorkDoneStreamFilter::new());
         }
+        // Agents are handed the image file paths in the prompt and open the files themselves.
+        let agent_prompt = prompt_with_attachments(prompt_text, attachments);
         let cli_prompt = if is_coding_agent && is_first_task_prompt {
             self.summary_filters
                 .lock()
                 .unwrap()
                 .insert(msg_id.clone(), TaskSummaryStreamFilter::new());
-            pad_first_prompt_for_task_summary(prompt_text)
+            pad_first_prompt_for_task_summary(&agent_prompt)
         } else {
-            prompt_text.to_string()
+            agent_prompt
         };
 
         log_info(&format!(
@@ -1694,6 +1749,9 @@ impl AgentRunner {
         } else {
             prompt
         };
+        if let Some(dir) = existing_attachments_dir(&tab_id) {
+            args.push(format!("--add-dir={dir}"));
+        }
         args.push(format!("--print={effective_prompt}"));
 
         self.set_status_detail(&tab_id, "Antigravity is thinking…");
@@ -2595,6 +2653,10 @@ impl AgentRunner {
         }
         args.push("--append-system-prompt".to_string());
         args.push(effective_system_prompt(&tab));
+        if let Some(dir) = existing_attachments_dir(&tab_id) {
+            // Lets the agent open attached images when its permission mode limits file access.
+            args.push(format!("--add-dir={dir}"));
+        }
 
         self.set_status_detail(&tab_id, "Claude is thinking…");
 

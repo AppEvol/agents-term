@@ -21,6 +21,10 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 use crate::app_state::{AppStateBroker, DEFAULT_COMMAND_TIMEOUT_MS};
+use crate::attachments::{
+    find_attachment, referenced_attachment_ids, resolve_attachments, stage_attachment,
+    sweep_stale_uploads, StageError, MAX_ATTACHMENT_BYTES,
+};
 use crate::config::{
     build_server_info, daemon_commit, debug_dumps_root, ensure_config_dir, ensure_dir_0700,
     ensure_live_debugging_doc, home_dir, next_atomic_seq, SERVER_VERSION,
@@ -779,15 +783,122 @@ async fn post_tab_messages(
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or("");
-    if text.is_empty() {
+    let attachments = match message_attachments(&tab, parsed.get("attachments")) {
+        Ok(found) => found,
+        Err(reason) => return json_status(StatusCode::BAD_REQUEST, json!({ "error": reason })),
+    };
+    if text.is_empty() && attachments.is_empty() {
         return json_status(
             StatusCode::BAD_REQUEST,
             json!({ "error": "Message text cannot be empty" }),
         );
     }
     let override_mode = parsed.get("overridePermissionMode").and_then(Value::as_str);
-    let result = st.runner.submit_message(&tab, text, override_mode);
+    let result = st
+        .runner
+        .submit_message(&tab, text, override_mode, &attachments);
     json_status(StatusCode::OK, result)
+}
+
+fn is_shell_tab(tab: &Value) -> bool {
+    tab.get("agent").and_then(Value::as_str) == Some("shell")
+}
+
+/// Resolves the attachment ids a message refers to into the images staged for its tab.
+fn message_attachments(tab: &Value, raw: Option<&Value>) -> Result<Vec<Value>, String> {
+    let tab_id = tab.get("id").and_then(Value::as_str).unwrap_or("");
+    let attachments = resolve_attachments(tab_id, raw)?;
+    if !attachments.is_empty() && is_shell_tab(tab) {
+        return Err("Shell tabs cannot receive images".to_string());
+    }
+    Ok(attachments)
+}
+
+async fn post_tab_attachment(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(tab_id): AxumPath<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    let Some(tab) = st.store.get_tab(&tab_id) else {
+        return json_status(StatusCode::NOT_FOUND, json!({ "error": "Tab not found" }));
+    };
+    if is_shell_tab(&tab) {
+        return json_status(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "Shell tabs cannot receive images" }),
+        );
+    }
+    let referenced = referenced_attachment_ids(&tab, &st.store.get_messages(&tab_id));
+    let staged = tokio::task::spawn_blocking(move || {
+        sweep_stale_uploads(&tab_id, &referenced);
+        stage_attachment(&tab_id, &body)
+    })
+    .await
+    .unwrap_or_else(|e| Err(StageError::Io(e.to_string())));
+    match staged {
+        Ok(attachment) => json_status(StatusCode::OK, json!({ "attachment": attachment })),
+        Err(StageError::Empty) => json_status(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "The image is empty" }),
+        ),
+        Err(StageError::TooLarge) => json_status(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            json!({ "error": format!("Images can be at most {} MB", MAX_ATTACHMENT_BYTES / (1024 * 1024)) }),
+        ),
+        Err(StageError::UnsupportedType) => json_status(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            json!({ "error": "Unsupported image format. Use PNG, JPEG, GIF, WebP or BMP." }),
+        ),
+        Err(StageError::Io(reason)) => {
+            log_warn(&format!("Failed to store an image attachment: {reason}"));
+            json_status(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "The VM could not store the image" }),
+            )
+        }
+    }
+}
+
+async fn get_tab_attachment(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath((tab_id, attachment_id)): AxumPath<(String, String)>,
+) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    let loaded = tokio::task::spawn_blocking(move || {
+        let found = find_attachment(&tab_id, &attachment_id)?;
+        let bytes = fs::read(found.get("path")?.as_str()?).ok()?;
+        let mime = found.get("mimeType")?.as_str()?.to_string();
+        Some((mime, bytes))
+    })
+    .await
+    .ok()
+    .flatten();
+    match loaded {
+        Some((mime, bytes)) => (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, mime),
+                // An attachment never changes once stored, so the app may keep it.
+                (
+                    axum::http::header::CACHE_CONTROL,
+                    "private, max-age=31536000, immutable".to_string(),
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => json_status(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "Attachment not found" }),
+        ),
+    }
 }
 
 async fn delete_tab_queue_item(
@@ -814,13 +925,17 @@ async fn post_tab_interrupt(
     if !st.authorized(&headers, None, false) {
         return unauthorized();
     }
-    if st.store.get_tab(&tab_id).is_none() {
+    let Some(tab) = st.store.get_tab(&tab_id) else {
         return json_status(StatusCode::NOT_FOUND, json!({ "error": "Tab not found" }));
-    }
+    };
     let parsed: Map<String, Value> = serde_json::from_slice::<Value>(&body)
         .ok()
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
+    let attachments = match message_attachments(&tab, parsed.get("attachments")) {
+        Ok(found) => found,
+        Err(reason) => return json_status(StatusCode::BAD_REQUEST, json!({ "error": reason })),
+    };
     let process_queue = parsed
         .get("processQueue")
         .and_then(Value::as_bool)
@@ -832,7 +947,7 @@ async fn post_tab_interrupt(
         .filter(|s| !s.is_empty());
     let override_mode = parsed.get("overridePermissionMode").and_then(Value::as_str);
     st.runner
-        .interrupt(&tab_id, process_queue, text, override_mode);
+        .interrupt(&tab_id, process_queue, text, override_mode, &attachments);
     json_status(
         StatusCode::OK,
         json!({ "ok": true, "tab": st.store.get_tab(&tab_id) }),
@@ -993,6 +1108,15 @@ pub async fn run_daemon(
         .route(
             "/api/tabs/{id}/messages",
             get(get_tab_messages).post(post_tab_messages),
+        )
+        .route(
+            "/api/tabs/{id}/attachments",
+            // The limit sits just above the cap so an oversized image gets the JSON error.
+            post(post_tab_attachment).layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES + 1)),
+        )
+        .route(
+            "/api/tabs/{id}/attachments/{attachment}",
+            get(get_tab_attachment),
         )
         .route("/api/tabs/{id}/queue/{item}", delete(delete_tab_queue_item))
         .route("/api/tabs/{id}/interrupt", post(post_tab_interrupt))
