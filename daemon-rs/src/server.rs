@@ -26,8 +26,8 @@ use crate::attachments::{
     sweep_stale_uploads, StageError, MAX_ATTACHMENT_BYTES,
 };
 use crate::config::{
-    build_server_info, daemon_commit, debug_dumps_root, ensure_config_dir, ensure_dir_0700,
-    ensure_live_debugging_doc, home_dir, next_atomic_seq, SERVER_VERSION,
+    build_server_info, daemon_commit, debug_dumps_root, ensure_config_dir, ensure_debugging_docs,
+    ensure_dir_0700, home_dir, next_atomic_seq, SERVER_VERSION,
 };
 use crate::log::{log_info, log_warn};
 use crate::models::{get_agent_models, warm_agent_models_cache};
@@ -1059,7 +1059,7 @@ pub async fn run_daemon(
     token: String,
     no_auth: bool,
 ) -> Result<(), String> {
-    ensure_live_debugging_doc();
+    ensure_debugging_docs();
     warm_agent_models_cache();
 
     let store = StateStore::new();

@@ -18,6 +18,7 @@ STATIC_FILES = (
     "Cargo.lock",
     "build.rs",
     "../docs/live-debugging.md",
+    "../docs/agents_debugging_tips.md",
 )
 
 
