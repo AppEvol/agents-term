@@ -7,6 +7,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -648,19 +649,8 @@ fun ChatWorkspace(
             }
         }
 
-        Text(
-            text = tab.id,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontFamily = MonoFontFamily,
-                fontSize = 10.sp,
-                lineHeight = 12.sp,
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-        )
-
         ChatComposer(
+            tabId = tab.id,
             draft = draft,
             placeholder = when {
                 isWorking && tab.agent == "shell" ->
@@ -1449,50 +1439,56 @@ private fun ComposerTextField(
     onImages: ((List<Uri>) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val colors = TextFieldDefaults.colors(
-        focusedContainerColor = Color.Transparent,
-        unfocusedContainerColor = Color.Transparent,
-        disabledContainerColor = Color.Transparent,
-        focusedIndicatorColor = Color.Transparent,
-        unfocusedIndicatorColor = Color.Transparent,
-    )
-    val currentOnImages by rememberUpdatedState(onImages)
-    val imageModifier = if (onImages != null) {
-        Modifier.receiveImages { uris -> currentOnImages?.invoke(uris) }
-    } else {
-        Modifier
+    // Key the text field on its TextFieldState so switching, creating, or closing a tab disposes
+    // the old IME input session cleanly. Reusing a focused BasicTextField across states while a
+    // bottom sheet or popup holds window focus leaves Compose 1.8's input session bound to the
+    // previous tab's state, causing typed text on the new tab to disappear into the old draft.
+    key(draft) {
+        val interactionSource = remember { MutableInteractionSource() }
+        val colors = TextFieldDefaults.colors(
+            focusedContainerColor = Color.Transparent,
+            unfocusedContainerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent,
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+        )
+        val currentOnImages by rememberUpdatedState(onImages)
+        val imageModifier = if (onImages != null) {
+            Modifier.receiveImages { uris -> currentOnImages?.invoke(uris) }
+        } else {
+            Modifier
+        }
+        BasicTextField(
+            state = draft,
+            textStyle = LocalTextStyle.current.merge(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+            interactionSource = interactionSource,
+            decorator = { innerTextField ->
+                TextFieldDefaults.DecorationBox(
+                    value = draft.text.toString(),
+                    innerTextField = innerTextField,
+                    enabled = true,
+                    singleLine = false,
+                    visualTransformation = VisualTransformation.None,
+                    interactionSource = interactionSource,
+                    placeholder = {
+                        Text(
+                            text = placeholder,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    colors = colors,
+                )
+            },
+            modifier = modifier
+                .defaultMinSize(minHeight = TextFieldDefaults.MinHeight)
+                .then(imageModifier)
+                .testTag("composer_input"),
+        )
     }
-    BasicTextField(
-        state = draft,
-        textStyle = LocalTextStyle.current.merge(color = MaterialTheme.colorScheme.onSurface),
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
-        interactionSource = interactionSource,
-        decorator = { innerTextField ->
-            TextFieldDefaults.DecorationBox(
-                value = draft.text.toString(),
-                innerTextField = innerTextField,
-                enabled = true,
-                singleLine = false,
-                visualTransformation = VisualTransformation.None,
-                interactionSource = interactionSource,
-                placeholder = {
-                    Text(
-                        text = placeholder,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-                colors = colors,
-            )
-        },
-        modifier = modifier
-            .defaultMinSize(minHeight = TextFieldDefaults.MinHeight)
-            .then(imageModifier)
-            .testTag("composer_input"),
-    )
 }
 
 /** What the queue shows for a message: its text, with the number of images it carries. */
@@ -1614,6 +1610,7 @@ private fun QueuedMessagesTray(
 
 @Composable
 private fun ChatComposer(
+    tabId: String,
     draft: TextFieldState,
     placeholder: String,
     isWorking: Boolean,
@@ -1661,6 +1658,20 @@ private fun ChatComposer(
     val currentOnSend by rememberUpdatedState(onSend)
     val currentOnForceInterrupt by rememberUpdatedState(onForceInterrupt)
     val currentOnShowHoldHint by rememberUpdatedState({ holdHintCounter++ })
+    val clipboard = LocalClipboardManager.current
+    var tabIdCopied by remember(tabId) { mutableStateOf(false) }
+
+    LaunchedEffect(tabIdCopied) {
+        if (tabIdCopied) {
+            delay(1800)
+            tabIdCopied = false
+        }
+    }
+
+    val copyTabId = {
+        clipboard.setText(AnnotatedString(tabId))
+        tabIdCopied = true
+    }
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -1671,7 +1682,7 @@ private fun ChatComposer(
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Column(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                modifier = Modifier.padding(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 if (queuedMessages.isNotEmpty()) {
@@ -2028,6 +2039,25 @@ private fun ChatComposer(
                     }
                 }
             }
+            Text(
+                text = if (tabIdCopied) stringResource(R.string.tab_id_copied) else tabId,
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .combinedClickable(
+                        onClick = copyTabId,
+                        onLongClick = copyTabId,
+                        onLongClickLabel = stringResource(R.string.action_copy_tab_id),
+                    )
+                    .padding(horizontal = 16.dp, vertical = 7.dp)
+                    .testTag("chat_tab_id"),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = MonoFontFamily,
+                    fontSize = 10.sp,
+                    lineHeight = 12.sp,
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
         }
     }
 }

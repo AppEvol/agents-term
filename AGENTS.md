@@ -27,6 +27,7 @@
 
 - Every test written in this repository must run in CI (`.github/workflows/ci.yml`) and hard-block PR merges into `main` (wire any new CI test job into the `ci-gate` / `All Required CI Checks` job).
 - If a test is not valuable or reliable enough to run in CI and block PR merges, do not add or keep it in the repository.
+- A pull request that only changes documentation (`docs/` and top-level `*.md`, except `docs/live-debugging.md` and `docs/agents_debugging_tips.md`, which are embedded in the daemon binary) skips the Android build, unit test and emulator jobs. Keep documentation changes in their own pull request to get the fast path.
 
 ## Static Checks
 
