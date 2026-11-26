@@ -61,6 +61,7 @@ jobs:
       run_rust_daemon_build: ${{ steps.detect.outputs.run_rust_daemon_build }}
       run_daemon_vm_e2e: ${{ steps.detect.outputs.run_daemon_vm_e2e }}
       run_installer_tests: ${{ steps.detect.outputs.run_installer_tests }}
+      run_android_build: ${{ steps.detect.outputs.run_android_build }}
 
     steps:
       - name: Checkout repository
@@ -119,6 +120,7 @@ jobs:
           DAEMON_RS_TESTS_CHANGED="false"
           DAEMON_E2E_HARNESS_CHANGED="false"
           INSTALLER_TESTS_CHANGED="false"
+          DOCS_ONLY="false"
 
           BASE_SHA=""
           if [ "${EVENT_NAME}" = "pull_request" ] && [ -n "${PR_BASE_SHA}" ]; then
@@ -139,12 +141,29 @@ jobs:
             if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^(daemon-rs/install\.sh$|daemon-rs/tests/.*\.py$)'; then
               INSTALLER_TESTS_CHANGED="true"
             fi
+            # A pull request that only touches documentation cannot change the APK,
+            # so it skips the Android build and emulator jobs. Documentation means
+            # docs/ and top-level Markdown files, except the two docs that
+            # daemon-rs/build.rs embeds in the daemon binary the emulator tests run
+            # against. Pushes to main and manual runs always build: they publish.
+            # Anything that is not plainly documentation leaves NOT_DOCS non-empty,
+            # so a surprise here runs the full suite rather than skipping it.
+            NOT_DOCS="$(grep -vE '^(docs/|[^/]+\.md$)' <<< "${CHANGED_FILES}" || true)"
+            EMBEDDED_DOCS="$(grep -E '^docs/(live-debugging|agents_debugging_tips)\.md$' <<< "${CHANGED_FILES}" || true)"
+            if [ "${EVENT_NAME}" = "pull_request" ] && [ -n "${CHANGED_FILES}" ] \
+              && [ -z "${NOT_DOCS}" ] && [ -z "${EMBEDDED_DOCS}" ]; then
+              DOCS_ONLY="true"
+            fi
           fi
 
           RUN_RUST_DAEMON_BUILD="false"
           RUN_DAEMON_VM_E2E="false"
           RUN_INSTALLER_TESTS="false"
+          RUN_ANDROID_BUILD="true"
 
+          if [ "${DOCS_ONLY}" = "true" ]; then
+            RUN_ANDROID_BUILD="false"
+          fi
           if [ "${BINARY_CHANGED}" = "true" ] || [ "${DAEMON_RS_TESTS_CHANGED}" = "true" ] || [ "${FORCE_DAEMON_TESTS}" = "true" ]; then
             RUN_RUST_DAEMON_BUILD="true"
           fi
@@ -160,6 +179,7 @@ jobs:
             echo "run_rust_daemon_build=${RUN_RUST_DAEMON_BUILD}"
             echo "run_daemon_vm_e2e=${RUN_DAEMON_VM_E2E}"
             echo "run_installer_tests=${RUN_INSTALLER_TESTS}"
+            echo "run_android_build=${RUN_ANDROID_BUILD}"
           } >> "${GITHUB_OUTPUT}"
 
           {
@@ -170,6 +190,8 @@ jobs:
             echo "- Run Rust daemon build & tests: \`${RUN_RUST_DAEMON_BUILD}\`"
             echo "- Run multi-distro Linux VM E2E matrix: \`${RUN_DAEMON_VM_E2E}\`"
             echo "- Run installer tests: \`${RUN_INSTALLER_TESTS}\`"
+            echo "- Documentation-only pull request: \`${DOCS_ONLY}\`"
+            echo "- Run Android build, unit tests & emulator E2E: \`${RUN_ANDROID_BUILD}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload verified cached daemon binaries (when unchanged)
@@ -255,6 +277,8 @@ jobs:
   build-and-unit-test:
     name: Build APK & Unit Tests
     runs-on: ubuntu-latest
+    needs: [daemon-change-check]
+    if: needs.daemon-change-check.outputs.run_android_build == 'true'
     timeout-minutes: 20
 
     steps:
@@ -578,6 +602,7 @@ jobs:
           INSTALLER_TESTS: ${{ needs.installer-tests.result }}
           DOCKER_VM_E2E: ${{ needs.docker-vm-e2e.result }}
           E2E_TESTS: ${{ needs.e2e-tests.result }}
+          RUN_ANDROID_BUILD: ${{ needs.daemon-change-check.outputs.run_android_build }}
         run: |
           set -euo pipefail
           fail=0
@@ -595,8 +620,15 @@ jobs:
           }
           require_success "static-checks" "$STATIC_CHECKS"
           require_success "daemon-change-check" "$DAEMON_CHANGE_CHECK"
-          require_success "build-and-unit-test" "$BUILD_AND_UNIT_TEST"
-          require_success "e2e-tests" "$E2E_TESTS"
+          # The Android jobs may only be skipped when the change check decided
+          # the pull request is documentation-only.
+          if [ "$RUN_ANDROID_BUILD" = "false" ]; then
+            require_success_or_skipped "build-and-unit-test" "$BUILD_AND_UNIT_TEST"
+            require_success_or_skipped "e2e-tests" "$E2E_TESTS"
+          else
+            require_success "build-and-unit-test" "$BUILD_AND_UNIT_TEST"
+            require_success "e2e-tests" "$E2E_TESTS"
+          fi
           require_success_or_skipped "rust-daemon-build-and-test" "$RUST_DAEMON"
           require_success_or_skipped "installer-tests" "$INSTALLER_TESTS"
           require_success_or_skipped "docker-vm-e2e" "$DOCKER_VM_E2E"
