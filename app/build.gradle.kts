@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.io.File
 
 plugins {
     alias(libs.plugins.android.application)
@@ -20,6 +21,36 @@ val daemonReleaseBaseUrl = providers.gradleProperty("daemonReleaseBaseUrl").orNu
 
 // "record" rewrites the golden images of the screenshot tests; anything else verifies them.
 val goldensMode = providers.gradleProperty("goldens").orNull
+
+// If this checkout is a linked git worktree, resolve the main checkout directory from `.git`.
+fun resolveMainWorktreeDir(projectRoot: File): File? {
+    val dotGit = projectRoot.resolve(".git")
+    if (!dotGit.isFile) return null
+    val gitDirPath = dotGit.readLines()
+        .firstOrNull { it.startsWith("gitdir:") }
+        ?.removePrefix("gitdir:")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: return null
+    val gitDir = projectRoot.resolve(gitDirPath).normalize()
+    val commonDirFile = gitDir.resolve("commondir")
+    val commonGitDir = if (commonDirFile.isFile) {
+        val commonDirPath = commonDirFile.readText().trim()
+        if (commonDirPath.isEmpty()) return null
+        gitDir.resolve(commonDirPath).normalize()
+    } else {
+        gitDir
+    }
+    return commonGitDir.parentFile?.takeIf { it.isDirectory }
+}
+
+// Prefer `$rootDir/debug.keystore` (CI decodes DEBUG_KEYSTORE_BASE64 here), then the main
+// worktree's `debug.keystore` for linked git worktrees; if neither exists, fall back to AGP's
+// built-in `debug` signing config (`~/.android/debug.keystore`, auto-created if missing).
+val resolvedDebugKeystore = listOfNotNull(
+    rootProject.file("debug.keystore"),
+    resolveMainWorktreeDir(rootDir)?.resolve("debug.keystore"),
+).firstOrNull { it.isFile }
 
 android {
     namespace = "com.example"
@@ -47,7 +78,7 @@ android {
             keyPassword = System.getenv("KEY_PASSWORD")
         }
         create("debugConfig") {
-            storeFile = file("$rootDir/debug.keystore")
+            storeFile = resolvedDebugKeystore ?: file("$rootDir/debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
@@ -64,9 +95,14 @@ android {
             signingConfig = signingConfigs.getByName("release")
         }
         debug {
-            // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-            // AI Studio.
-            signingConfig = signingConfigs.getByName("debugConfig")
+            // Use debugConfig when a repo/main-worktree debug.keystore is available; otherwise
+            // fall back to AGP's default debug signing config so fresh clones/worktrees build
+            // without manual keystore setup.
+            signingConfig = if (resolvedDebugKeystore != null) {
+                signingConfigs.getByName("debugConfig")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {
