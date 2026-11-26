@@ -89,6 +89,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.AgentUsageUiState
 import com.example.data.ChatMessage
 import com.example.data.ConnectionState
 import com.example.data.ModelSlashCommand
@@ -141,6 +142,7 @@ fun HerdrApp(viewModel: MainViewModel) {
     val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
     val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsStateWithLifecycle()
+    val usageByAgent by viewModel.usageController.usageByAgent.collectAsStateWithLifecycle()
     val isRefreshingClosedTabs by viewModel.isRefreshingClosedTabs.collectAsStateWithLifecycle()
     val revivingTabId by viewModel.revivingTabId.collectAsStateWithLifecycle()
 
@@ -516,6 +518,8 @@ fun HerdrApp(viewModel: MainViewModel) {
             defaultModel = defaultModel,
             models = models,
             isRefreshing = isRefreshingModels,
+            usageState = usageByAgent[current.agent] ?: AgentUsageUiState(),
+            onCheckUsage = { viewModel.usageController.checkUsage(current.agent) },
             onRefresh = { viewModel.refreshModelsForAgent(current.agent, forceRefresh = true) },
             onSelectModel = { chosenModel ->
                 showModelPicker = false

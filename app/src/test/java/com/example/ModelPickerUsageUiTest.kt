@@ -1,0 +1,125 @@
+package com.example
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import com.example.data.AgentModelOption
+import com.example.data.AgentUsageItem
+import com.example.data.AgentUsageResponse
+import com.example.data.AgentUsageUiState
+import com.example.ui.ModelPickerSheetContent
+import com.example.ui.theme.HerdrTheme
+import org.junit.Assert.assertEquals
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36], qualifiers = "w411dp-h915dp")
+class ModelPickerUsageUiTest {
+
+    @get:Rule
+    val composeRule = createComposeRule()
+
+    private val sampleModels = listOf(
+        AgentModelOption("gemini-4-neon-high", "Gemini 4 Neon (High)"),
+        AgentModelOption("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
+    )
+
+    private fun sampleUsageResponse(nowMs: Long) = AgentUsageResponse(
+        agent = "agy",
+        fetchedAt = nowMs,
+        plan = "pro",
+        items = listOf(
+            AgentUsageItem(
+                id = "gemini-3-flash",
+                label = "Gemini Models",
+                remainingPercent = 76.0,
+                usedPercent = 24.0,
+                resetsAtMs = nowMs + (2L * 3_600_000L) + (35L * 60_000L),
+                modelPrefixes = listOf("gemini-"),
+            ),
+            AgentUsageItem(
+                id = "claude-opus-5-5-high",
+                label = "Claude Opus 5.5",
+                remainingPercent = 100.0,
+                usedPercent = 0.0,
+                resetsAtMs = nowMs + (5L * 3_600_000L),
+                modelIds = listOf("claude-opus-5-5-high"),
+            ),
+        ),
+    )
+
+    @Test
+    fun clickingUsageButtonGeneratesUsageLeftAndResetTime() {
+        val nowMs = 1_700_000_000_000L
+        var checkClicks = 0
+        var usageState by mutableStateOf(AgentUsageUiState())
+
+        composeRule.setContent {
+            HerdrTheme {
+                ModelPickerSheetContent(
+                    agentLabel = "Antigravity",
+                    currentModel = "gemini-4-neon-high",
+                    defaultModel = "gemini-4-neon-high",
+                    models = sampleModels,
+                    isRefreshing = false,
+                    usageState = usageState,
+                    onCheckUsage = {
+                        checkClicks += 1
+                        usageState = AgentUsageUiState(response = sampleUsageResponse(nowMs))
+                    },
+                    onRefresh = {},
+                    onSelectModel = {},
+                    nowMs = nowMs,
+                )
+            }
+        }
+
+        assertEquals(0, composeRule.onAllNodesWithTag("model_picker_usage_panel").fetchSemanticsNodes().size)
+
+        composeRule.onNodeWithTag("model_picker_usage_button").assertIsDisplayed().performClick()
+        assertEquals(1, checkClicks)
+
+        composeRule.onNodeWithTag("model_picker_usage_panel").assertIsDisplayed()
+        composeRule.onNodeWithText("PRO").assertIsDisplayed()
+        composeRule.onNodeWithText("Gemini Models").assertIsDisplayed()
+        composeRule.onNodeWithText("76% left").assertIsDisplayed()
+        composeRule.onNodeWithText("Resets in 2h 35m").assertIsDisplayed()
+        composeRule.onNodeWithText("Claude Opus 5.5").assertIsDisplayed()
+        composeRule.onNodeWithText("100% left").assertIsDisplayed()
+        composeRule.onNodeWithText("Resets in 5h").assertIsDisplayed()
+        composeRule.onNodeWithText("100% left · Resets in 5h").assertIsDisplayed()
+    }
+
+    @Test
+    fun usageErrorIsDisplayedInPanel() {
+        composeRule.setContent {
+            HerdrTheme {
+                ModelPickerSheetContent(
+                    agentLabel = "Claude",
+                    currentModel = null,
+                    defaultModel = "opus",
+                    models = listOf(AgentModelOption("opus", "Opus")),
+                    isRefreshing = false,
+                    usageState = AgentUsageUiState(error = "Claude OAuth token expired"),
+                    onCheckUsage = {},
+                    onRefresh = {},
+                    onSelectModel = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("model_picker_usage_panel").assertIsDisplayed()
+        composeRule.onNodeWithTag("model_picker_usage_error").assertIsDisplayed()
+        composeRule.onNodeWithText("Claude OAuth token expired").assertIsDisplayed()
+    }
+}
