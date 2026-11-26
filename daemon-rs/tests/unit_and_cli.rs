@@ -1,5 +1,6 @@
 use serde_json::Value;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -46,31 +47,80 @@ fn cli_version_pairing_and_rotate_token() {
     let p1 = Command::new(bin_path())
         .args(["pairing", "--host", "100.64.1.2", "--port", "7512"])
         .env("HOME", &home)
+        .env_remove("AGENTSTERM_HOME")
         .output()
         .unwrap();
     assert!(p1.status.success());
     let out1 = String::from_utf8_lossy(&p1.stdout);
     assert!(out1.contains("herdr://connect?host=100.64.1.2&port=7512&token="));
 
-    let cfg1: Value = serde_json::from_str(
-        &fs::read_to_string(home.join(".config/herdr-mobile/config.json")).unwrap(),
-    )
-    .unwrap();
+    let cfg_dir = home.join(".agents-term");
+    let cfg_path = cfg_dir.join("config.json");
+    assert_eq!(
+        fs::metadata(&cfg_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&cfg_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let cfg1: Value = serde_json::from_str(&fs::read_to_string(&cfg_path).unwrap()).unwrap();
     let tok1 = cfg1["token"].as_str().unwrap().to_string();
     assert_eq!(tok1.len(), 32);
 
     let rot = Command::new(bin_path())
         .args(["rotate-token", "--host", "100.64.1.2", "--port", "7512"])
         .env("HOME", &home)
+        .env_remove("AGENTSTERM_HOME")
         .output()
         .unwrap();
     assert!(rot.status.success());
-    let cfg2: Value = serde_json::from_str(
-        &fs::read_to_string(home.join(".config/herdr-mobile/config.json")).unwrap(),
-    )
-    .unwrap();
+    let cfg2: Value = serde_json::from_str(&fs::read_to_string(&cfg_path).unwrap()).unwrap();
     let tok2 = cfg2["token"].as_str().unwrap().to_string();
     assert_ne!(tok1, tok2);
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn agents_term_home_env_isolates_config_without_touching_home_dot_dir() {
+    let home = make_temp_dir("agentsterm-override-home");
+    let custom = make_temp_dir("agentsterm-custom-root").join("state");
+
+    let p = Command::new(bin_path())
+        .args(["pairing", "--host", "127.0.0.1", "--port", "7599"])
+        .env("HOME", &home)
+        .env("AGENTSTERM_HOME", &custom)
+        .output()
+        .unwrap();
+    assert!(p.status.success());
+    assert!(custom.join("config.json").is_file());
+    assert!(!home.join(".agents-term").exists());
+
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(custom.parent().unwrap());
+}
+
+#[test]
+fn app_cli_does_not_create_config_or_state_dir() {
+    let home = make_temp_dir("agentsterm-cli-readonly");
+    let custom = home.join("custom-root");
+
+    let res = Command::new(bin_path())
+        .args(["app", "status", "--host", "127.0.0.1", "--port", "1"])
+        .env("HOME", &home)
+        .env("AGENTSTERM_HOME", &custom)
+        .output()
+        .unwrap();
+    assert_eq!(res.status.code(), Some(2));
+    assert!(
+        !custom.exists(),
+        "app CLI must stay read-only and never create AGENTSTERM_HOME"
+    );
+    assert!(
+        !home.join(".agents-term").exists(),
+        "app CLI must never create ~/.agents-term"
+    );
 
     let _ = fs::remove_dir_all(&home);
 }

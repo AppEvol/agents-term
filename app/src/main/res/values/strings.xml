@@ -148,7 +148,7 @@
     <string name="app_state_control_toast">VM agent is controlling the app</string>
     <string name="settings_debug_autoupload_subtitle">Automatically send a dump to the VM when HTTP or WebSocket errors occur (max once per minute).</string>
     <string name="settings_debug_vm_path_label">VM debug storage folder</string>
-    <string name="settings_debug_vm_path_default">~/.config/herdr-mobile/debug-dumps/latest</string>
+    <string name="settings_debug_vm_path_default">~/.agents-term/debug-dumps/latest</string>
     <string name="settings_debug_note_label">Bug note (optional)</string>
     <string name="settings_debug_note_placeholder">Describe what glitched (e.g., agent message froze)…</string>
     <string name="settings_debug_upload_button">Upload Debug Dump to VM</string>
@@ -165,7 +165,7 @@
     <string name="settings_debug_disconnected_hint">Connect to your VM to upload directly, or use Export / Share to save to Google Drive or Files.</string>
     <string name="action_quick_debug_dump">Send debug dump to VM</string>
     <string name="dialog_debug_dump_title">Send Debug Dump to VM</string>
-    <string name="dialog_debug_dump_body">Uploads sanitized client events, workspace state, and optional screenshot/logcat to ~/.config/herdr-mobile/debug-dumps/latest on your VM.</string>
+    <string name="dialog_debug_dump_body">Uploads sanitized client events, workspace state, and optional screenshot/logcat to ~/.agents-term/debug-dumps/latest on your VM.</string>
     <string name="dialog_debug_dump_upload">Upload to VM</string>
     <string name="dialog_debug_dump_share">Share ZIP</string>
     <string name="action_change_model">Change model</string>

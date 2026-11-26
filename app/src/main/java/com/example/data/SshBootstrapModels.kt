@@ -169,18 +169,19 @@ fun encodeBase64Utf8(input: String): String {
  * Requires only POSIX `sh` + `curl` or `wget` + `sha256sum` or `shasum` on the VM (zero `git`,
  * `python3`, `bash`, or `agy` dependencies):
  * 1. Detects `Linux` + `x86_64` / `aarch64`.
- * 2. Downloads the release `.sha256` file and compares it against `~/.local/bin/agentsterm-daemon`
+ * 2. Downloads the release `.sha256` file and compares it against `~/.agents-term/bin/agentsterm-daemon`
  *    (skipping the binary download if already current).
- * 3. Downloads and verifies the static binary, atomically replaces `~/.local/bin/agentsterm-daemon`
+ * 3. Downloads and verifies the static binary, atomically replaces `~/.agents-term/bin/agentsterm-daemon`
  *    (avoiding `ETXTBSY` on a running daemon), and executes `agentsterm-daemon install --port <port>`.
  */
 private val daemonBootstrapScriptTemplate = """
         [ -f "${'$'}HOME/.profile" ] && command . "${'$'}HOME/.profile" >/dev/null 2>&1 || true
         set -eu
-        export PATH="${'$'}HOME/.local/bin:${'$'}HOME/.npm-global/bin:${'$'}HOME/.cargo/bin:/usr/local/bin:${'$'}PATH"
+        APP_HOME="${'$'}{AGENTSTERM_HOME:-${'$'}HOME/.agents-term}"
+        export PATH="${'$'}APP_HOME/bin:${'$'}HOME/.local/bin:${'$'}HOME/.npm-global/bin:${'$'}HOME/.cargo/bin:/usr/local/bin:${'$'}PATH"
         export FORCE_COLOR=0
         BASE_URL="${'$'}{AGENTSTERM_RELEASE_BASE_URL:-__RELEASE_BASE_URL__}"
-        BIN_DIR="${'$'}{AGENTSTERM_BIN_DIR:-${'$'}HOME/.local/bin}"
+        BIN_DIR="${'$'}{AGENTSTERM_BIN_DIR:-${'$'}APP_HOME/bin}"
         BIN_PATH="${'$'}BIN_DIR/agentsterm-daemon"
         die() { code="${'$'}1"; shift; printf 'ERROR: %s\n' "${'$'}*" >&2; exit "${'$'}code"; }
         OS=${'$'}(uname -s)
@@ -212,8 +213,9 @@ private val daemonBootstrapScriptTemplate = """
             die 3 "Neither 'sha256sum' nor 'shasum' is installed on this VM."
           fi
         }
-        mkdir -p "${'$'}BIN_DIR"
-        TMP_DIR=${'$'}(mktemp -d "${'$'}{TMPDIR:-/tmp}/agentsterm-dl.XXXXXX")
+        mkdir -p "${'$'}APP_HOME" "${'$'}APP_HOME/tmp" "${'$'}BIN_DIR"
+        chmod 700 "${'$'}APP_HOME" "${'$'}APP_HOME/tmp" 2>/dev/null || true
+        TMP_DIR=${'$'}(mktemp -d "${'$'}APP_HOME/tmp/agentsterm-dl.XXXXXX")
         trap 'rm -rf "${'$'}TMP_DIR"' EXIT INT TERM
         printf '>>> Checking latest AgentsTerm daemon (%s)...\n' "${'$'}ASSET"
         fetch "${'$'}SHA_URL" "${'$'}TMP_DIR/checksum.sha256" || die 3 "Failed to download checksum from ${'$'}SHA_URL"

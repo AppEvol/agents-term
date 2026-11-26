@@ -353,7 +353,8 @@ class ModelsAndStateTest {
         assertEquals("agy agent mode glitched", decoded.note)
 
         val resp = decodeHerdrJson<DebugDumpUploadResponse>(
-            """{"ok":true,"dumpId":"abcd1234","remoteDir":"/home/ned/.config/herdr-mobile/debug-dumps/latest","latestSymlink":"/home/ned/.config/herdr-mobile/debug-dumps/latest","files":["summary.md","events.ndjson"]}""",
+            """{"ok":true,"dumpId":"abcd1234","remoteDir":"/home/ned/.agents-term/debug-dumps/latest",""" +
+                """"latestSymlink":"/home/ned/.agents-term/debug-dumps/latest","files":["summary.md","events.ndjson"]}""",
         )
         assertTrue(resp.ok)
         assertEquals("abcd1234", resp.dumpId)
@@ -726,7 +727,8 @@ class ModelsAndStateTest {
     fun systemPromptDefaultsResolutionAndSerializationWork() {
         assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("mobile", ignoreCase = true))
         assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("agents_term_app_cli"))
-        assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("docs/live-debugging.md"))
+        assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains(".agents-term/live-debugging.md"))
+        assertTrue(DEFAULT_AGENT_SYSTEM_PROMPT.contains("read-only"))
         assertFalse(DEFAULT_AGENT_SYSTEM_PROMPT.contains("close this tab", ignoreCase = true))
         assertTrue(DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT.contains("close this tab", ignoreCase = true))
 

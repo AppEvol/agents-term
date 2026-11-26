@@ -524,6 +524,32 @@ fn screenshot_writes_png_and_omits_base64() {
 }
 
 #[test]
+fn screenshot_without_output_flag_writes_under_agents_term_tmp() {
+    let h = CliHarness::new();
+    let custom_home = h.tmp.join("isolated-agents-term");
+    let custom_home_str = custom_home.to_string_lossy().to_string();
+
+    let out = h.run_with_env(&["screenshot"], &[("AGENTSTERM_HOME", &custom_home_str)]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let result = &parse_json(&out.stdout)["result"];
+    let saved_path = PathBuf::from(result["path"].as_str().unwrap());
+    let expected_tmp = fs::canonicalize(custom_home.join("tmp")).unwrap();
+    assert!(
+        saved_path.starts_with(&expected_tmp),
+        "Expected default screenshot inside {}, got {}",
+        expected_tmp.display(),
+        saved_path.display()
+    );
+    assert_eq!(fs::read(&saved_path).unwrap(), PNG_BYTES);
+    assert!(!custom_home.join("config.json").exists());
+}
+
+#[test]
 fn not_ready_and_app_errors_map_to_exit_codes() {
     let h = CliHarness::new();
 

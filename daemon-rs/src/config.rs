@@ -5,11 +5,13 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::env;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -20,6 +22,11 @@ pub const BUILD_HASH: &str = env!("AGENTSTERM_BUILD_HASH");
 pub const EMBEDDED_LIVE_DEBUGGING_MD: &str = include_str!("../../docs/live-debugging.md");
 
 const TAILSCALE_CACHE_TTL: Duration = Duration::from_secs(30);
+static ATOMIC_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+pub fn next_atomic_seq() -> u64 {
+    ATOMIC_WRITE_SEQ.fetch_add(1, Ordering::Relaxed)
+}
 
 pub const FULL_ACCESS_COMPLETION_INSTRUCTION: &str =
     "When the user asks you to accomplish a task in this tab, once the task is complete \
@@ -51,31 +58,124 @@ pub fn home_dir() -> PathBuf {
     PathBuf::from("/")
 }
 
+pub fn agents_term_home() -> PathBuf {
+    if let Ok(override_dir) = env::var("AGENTSTERM_HOME") {
+        let trimmed = override_dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    home_dir().join(".agents-term")
+}
+
 pub fn config_dir() -> PathBuf {
-    home_dir().join(".config").join("herdr-mobile")
+    agents_term_home()
+}
+
+pub fn bin_dir() -> PathBuf {
+    agents_term_home().join("bin")
 }
 
 pub fn config_path() -> PathBuf {
-    config_dir().join("config.json")
+    agents_term_home().join("config.json")
 }
 
-pub fn state_path() -> PathBuf {
-    config_dir().join("state.json")
+pub fn daemon_lock_path() -> PathBuf {
+    agents_term_home().join("daemon.lock")
+}
+
+pub fn daemon_pid_path() -> PathBuf {
+    agents_term_home().join("daemon.pid")
+}
+
+pub fn daemon_log_path() -> PathBuf {
+    agents_term_home().join("daemon.log")
 }
 
 pub fn debug_dumps_root() -> PathBuf {
-    config_dir().join("debug-dumps")
+    agents_term_home().join("debug-dumps")
+}
+
+pub fn tmp_dir() -> PathBuf {
+    agents_term_home().join("tmp")
+}
+
+pub fn tabs_root() -> PathBuf {
+    agents_term_home().join("agents_tabs")
+}
+
+pub fn workspace_path() -> PathBuf {
+    tabs_root().join("workspace.json")
+}
+
+pub fn tabs_index_path() -> PathBuf {
+    tabs_root().join("tabs.jsonl")
+}
+
+pub fn is_safe_tab_id(tab_id: &str) -> bool {
+    !tab_id.is_empty()
+        && tab_id != "."
+        && tab_id != ".."
+        && !tab_id.contains('/')
+        && !tab_id.contains('\\')
+        && !tab_id.contains('\0')
+}
+
+pub fn tab_dir(tab_id: &str) -> Option<PathBuf> {
+    if is_safe_tab_id(tab_id) {
+        Some(tabs_root().join(tab_id))
+    } else {
+        None
+    }
+}
+
+pub fn tab_messages_path(tab_id: &str) -> Option<PathBuf> {
+    tab_dir(tab_id).map(|d| d.join("messages.json"))
 }
 
 pub fn live_debugging_doc_path() -> PathBuf {
-    config_dir().join("live-debugging.md")
+    agents_term_home().join("live-debugging.md")
+}
+
+pub fn ensure_dir_0700(dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+    Ok(())
 }
 
 pub fn ensure_config_dir() -> std::io::Result<()> {
-    let dir = config_dir();
-    fs::create_dir_all(&dir)?;
-    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
-    Ok(())
+    ensure_dir_0700(&agents_term_home())
+}
+
+pub struct DaemonLock {
+    _file: File,
+}
+
+pub fn acquire_daemon_lock() -> Result<DaemonLock, String> {
+    ensure_config_dir().map_err(|e| format!("Failed to create {}: {e}", config_dir().display()))?;
+    let path = daemon_lock_path();
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
+    let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(format!(
+            "Another agentsterm-daemon instance already holds {} ({err})",
+            path.display()
+        ));
+    }
+    let _ = file.set_len(0);
+    let mut f_ref = &file;
+    let _ = writeln!(f_ref, "{}", std::process::id());
+    let _ = f_ref.sync_all();
+    Ok(DaemonLock { _file: file })
 }
 
 pub fn write_atomic_file(path: &Path, content: &[u8], mode: u32) -> std::io::Result<()> {
@@ -83,22 +183,30 @@ pub fn write_atomic_file(path: &Path, content: &[u8], mode: u32) -> std::io::Res
         fs::create_dir_all(parent)?;
     }
     let tmp_name = format!(
-        "{}.tmp.{}",
+        ".{}.tmp.{}.{}",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
-        std::process::id()
+        std::process::id(),
+        next_atomic_seq()
     );
     let tmp_path = path.with_file_name(tmp_name);
-    {
+    let write_res = (|| -> std::io::Result<()> {
         let mut f = OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(mode)
             .open(&tmp_path)?;
         f.write_all(content)?;
         f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(err) = write_res {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err);
     }
-    fs::rename(&tmp_path, path)?;
+    if let Err(err) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err);
+    }
     Ok(())
 }
 
@@ -112,15 +220,21 @@ pub fn ensure_live_debugging_doc() {
 }
 
 pub fn default_system_prompt(permission_mode: Option<&str>) -> String {
+    let root = agents_term_home();
     let doc_path = live_debugging_doc_path();
+    let dumps_latest = debug_dumps_root().join("latest");
     let base = format!(
         "You are responding inside AgentsTerm, a mobile app terminal/chat view on a phone or tablet. \
 Keep formatting mobile-friendly (concise paragraphs, short lists, avoid overly wide tables or ASCII art).\n\n\
 Live app debugging: when troubleshooting AgentsTerm itself, you can inspect or drive the live phone app \
 (state, logs, logcat, crash traces, screenshots, UI tree/control) via `agents_term_app_cli` \
 (run `agents_term_app_cli --help` for usage, or `agentsterm-daemon app`) or check uploaded dumps in \
-`~/.config/herdr-mobile/debug-dumps/latest/`. For commands, prerequisites, and rules, read `{}`.",
-        doc_path.display()
+`{}/`. For commands, prerequisites, and rules, read `{}`.\n\n\
+VM state rule: treat `{}/` as read-only — never create, edit, or delete files inside it directly; \
+only `agentsterm-daemon` manages files in that directory.",
+        dumps_latest.display(),
+        doc_path.display(),
+        root.display(),
     );
     if permission_mode == Some("full-access") {
         format!("{base}\n\n{FULL_ACCESS_COMPLETION_INSTRUCTION}")
@@ -297,6 +411,7 @@ fn detect_tailscale_ip_uncached() -> Option<String> {
 pub fn enriched_path() -> String {
     let home = home_dir();
     let extra = [
+        bin_dir().to_string_lossy().to_string(),
         home.join(".local/bin").to_string_lossy().to_string(),
         home.join(".npm-global/bin").to_string_lossy().to_string(),
         home.join(".cargo/bin").to_string_lossy().to_string(),

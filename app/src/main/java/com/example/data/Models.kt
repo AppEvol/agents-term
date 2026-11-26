@@ -248,7 +248,7 @@ fun formatModelChipLabel(
 }
 
 const val DEFAULT_LIVE_DEBUGGING_DOC_PATH =
-    "~/.local/share/agentsterm/agents-term/docs/live-debugging.md"
+    "~/.agents-term/live-debugging.md"
 
 const val FULL_ACCESS_SYSTEM_PROMPT_ADDENDUM =
     "When the user asks you to accomplish a task in this tab, once the task is complete " +
@@ -259,8 +259,10 @@ const val DEFAULT_AGENT_SYSTEM_PROMPT =
         "Keep formatting mobile-friendly (concise paragraphs, short lists, avoid overly wide tables or ASCII art).\n\n" +
         "Live app debugging: when troubleshooting AgentsTerm itself, you can inspect the live phone app " +
         "(state, logs, logcat, crash traces, screenshots) via `agents_term_app_cli` or check uploaded dumps in " +
-        "`~/.config/herdr-mobile/debug-dumps/latest/`. For commands, prerequisites, and rules, read " +
-        "`$DEFAULT_LIVE_DEBUGGING_DOC_PATH`."
+        "`~/.agents-term/debug-dumps/latest/`. For commands, prerequisites, and rules, read " +
+        "`$DEFAULT_LIVE_DEBUGGING_DOC_PATH`.\n\n" +
+        "VM state rule: treat `~/.agents-term/` as read-only — never create, edit, or delete files inside it " +
+        "directly; only `agentsterm-daemon` manages files in that directory."
 
 const val DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT =
     "$DEFAULT_AGENT_SYSTEM_PROMPT\n\n$FULL_ACCESS_SYSTEM_PROMPT_ADDENDUM"

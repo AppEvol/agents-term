@@ -17,11 +17,12 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{config_path, home_dir};
+use crate::config::{agents_term_home, config_path, home_dir, tmp_dir};
 use crate::http_client::http_request;
 
 const EXIT_USAGE: i32 = 1;
@@ -127,7 +128,7 @@ impl Client {
 
         if resp.status == 401 {
             return Err(CliErr::new(
-                format!("{message} (check the token in ~/.config/herdr-mobile/config.json)"),
+                format!("{message} (check the token in {})", config_path().display()),
                 EXIT_DAEMON,
                 Some("unauthorized"),
             ));
@@ -224,10 +225,27 @@ fn save_screenshot(
 
     let out_path = match output {
         Some(p) => expand_tilde(p),
-        None => PathBuf::from(format!(
-            "/tmp/agentsterm-screenshot-{}.png",
-            Local::now().format("%Y%m%d-%H%M%S")
-        )),
+        None => {
+            let root = agents_term_home();
+            let root_existed = root.exists();
+            let dir = tmp_dir();
+            if let Err(e) = fs::create_dir_all(&dir) {
+                return Err(CliErr::new(
+                    format!("Failed to create {}: {e}", dir.display()),
+                    EXIT_USAGE,
+                    Some("io_error"),
+                ));
+            }
+            if !root_existed {
+                let _ = fs::set_permissions(&root, fs::Permissions::from_mode(0o700));
+            }
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+            dir.join(format!(
+                "agentsterm-screenshot-{}-{}.png",
+                Local::now().format("%Y%m%d-%H%M%S"),
+                std::process::id()
+            ))
+        }
     };
     if let Some(parent) = out_path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -457,7 +475,7 @@ RECOMMENDED AGENT WORKFLOW
   4. Verify & collect evidence:
      - Check `state`, `logs --category error`, `logcat --raw`, `crash --raw`.
      - Capture a full sanitized bundle with `{prog} dump --note \"context\"`
-       (saved to ~/.config/herdr-mobile/debug-dumps/latest/).
+       (saved to ~/.agents-term/debug-dumps/latest/).
 
 USAGE
   {prog} [GLOBAL FLAGS] <COMMAND> [COMMAND OPTIONS]
@@ -468,7 +486,7 @@ GLOBAL FLAGS (accepted before or after COMMAND)
   --host HOST        Daemon host (default: config.json / AGENTS_TERM_HOST / 127.0.0.1)
   --port PORT        Daemon port (default: config.json / AGENTS_TERM_PORT / 7501)
   --token TOKEN      Bearer token (default: config.json / AGENTS_TERM_TOKEN)
-  --config PATH      Daemon config JSON path (default: ~/.config/herdr-mobile/config.json)
+  --config PATH      Daemon config JSON path (default: ~/.agents-term/config.json)
   --timeout SEC      Seconds to wait for the app to answer (default: 15)
   --pretty           Pretty-print JSON output
 
@@ -482,7 +500,7 @@ INSPECTION COMMANDS (read-only; need remote inspection opt-in)
   screenshot         Capture app window PNG (-o PATH)
   ui                 List on-screen UI elements (--brief, --interactive, --tag, --text, --exact)
   wait               Poll `ui` until a matching element appears or disappears (--gone)
-  dump               Upload full debug bundle to ~/.config/herdr-mobile/debug-dumps/latest/
+  dump               Upload full debug bundle to ~/.agents-term/debug-dumps/latest/
   raw                Send an arbitrary command name with a JSON object of args
 
 UI CONTROL COMMANDS (need remote control opt-in; all accept -s/--screenshot and --settle)
@@ -563,11 +581,11 @@ fn subcommand_help(prog: &str, cmd: &str) -> Option<String> {
              Capture the foreground app window (including open dialogs and menus) to a PNG file.\n\
              Replaces `pngBase64` in the JSON output with `path` and `bytes`.\n\n\
              Options:\n\
-               -o, --output PATH  Output PNG path (default: /tmp/agentsterm-screenshot-<timestamp>.png)\n"
+               -o, --output PATH  Output PNG path (default: ~/.agents-term/tmp/agentsterm-screenshot-<timestamp>-<pid>.png)\n"
         ),
         "dump" => format!(
             "Usage: {prog} dump [--note TEXT] [--no-screenshot]\n\n\
-             Ask the app to upload a full sanitized debug bundle to ~/.config/herdr-mobile/debug-dumps/latest/.\n\
+             Ask the app to upload a full sanitized debug bundle to ~/.agents-term/debug-dumps/latest/.\n\
              Automatically waits at least 60 seconds.\n\n\
              Options:\n\
                --note TEXT        Note included in summary.md\n\

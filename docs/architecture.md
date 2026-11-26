@@ -21,7 +21,7 @@ Android App ──HTTP/WS (Tailscale)──▶ agentsterm-daemon (Rust) ──sp
 
 ## Unified VM Directory (`$HOME/.agents-term/`)
 
-> **Status:** Target layout tracked in [#94](https://github.com/nedn/agents-term/issues/94), replacing the legacy split across `~/.config/herdr-mobile/`, `~/.local/bin/`, `/tmp/`, and monolithic `state.json`.
+> **Status:** Implemented in [#94](https://github.com/nedn/agents-term/issues/94), replacing the legacy split across `~/.config/herdr-mobile/`, `~/.local/bin/`, `/tmp/`, and monolithic `state.json`.
 
 All binaries, configuration, persistent state, logs, debug dumps, and temporary files owned by AgentsTerm on the VM live under a single root directory:
 

@@ -176,14 +176,14 @@ class BootstrapScriptE2ETest {
     fun rejectsChecksumMismatchAndPropagatesUnhealthyDaemonExitCode() {
         publishBinary("good")
         assertEquals(0, bootstrap().exit)
-        val installedBefore = File(home, ".local/bin/agentsterm-daemon").readText()
+        val installedBefore = File(home, ".agents-term/bin/agentsterm-daemon").readText()
 
         publishBinary("corrupt", badChecksum = true)
         val mismatch = bootstrap()
         assertNotEquals("checksum mismatch must fail", 0, mismatch.exit)
         assertTrue(mismatch.output.contains("SHA-256 mismatch"))
         // Existing working binary must not be overwritten on checksum failure.
-        assertEquals(installedBefore, File(home, ".local/bin/agentsterm-daemon").readText())
+        assertEquals(installedBefore, File(home, ".agents-term/bin/agentsterm-daemon").readText())
 
         publishBinary("unhealthy", exitCode = 4)
         val unhealthy = bootstrap()

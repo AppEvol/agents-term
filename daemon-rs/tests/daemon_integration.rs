@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -38,6 +38,45 @@ fn write_exec(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+fn seed_split_workspace(
+    app_home: &Path,
+    active_tab_id: Option<&str>,
+    open_tabs: &[Value],
+    closed_tabs: &[Value],
+    messages_by_tab: &serde_json::Map<String, Value>,
+) {
+    let tabs_root = app_home.join("agents_tabs");
+    fs::create_dir_all(&tabs_root).unwrap();
+    fs::write(
+        tabs_root.join("workspace.json"),
+        json!({ "schemaVersion": 1, "activeTabId": active_tab_id }).to_string(),
+    )
+    .unwrap();
+    let mut lines = String::new();
+    for tab in open_tabs {
+        let mut t = tab.clone();
+        if let Some(obj) = t.as_object_mut() {
+            obj.insert("state".into(), json!("open"));
+        }
+        lines.push_str(&t.to_string());
+        lines.push('\n');
+    }
+    for tab in closed_tabs {
+        let mut t = tab.clone();
+        if let Some(obj) = t.as_object_mut() {
+            obj.insert("state".into(), json!("closed"));
+        }
+        lines.push_str(&t.to_string());
+        lines.push('\n');
+    }
+    fs::write(tabs_root.join("tabs.jsonl"), lines).unwrap();
+    for (tab_id, msgs) in messages_by_tab {
+        let tdir = tabs_root.join(tab_id);
+        fs::create_dir_all(&tdir).unwrap();
+        fs::write(tdir.join("messages.json"), msgs.to_string()).unwrap();
+    }
+}
+
 struct TestDaemon {
     child: Child,
     port: u16,
@@ -46,12 +85,25 @@ struct TestDaemon {
 
 impl TestDaemon {
     fn start(home: &Path, extra_bin: Option<&Path>) -> Self {
+        Self::start_with_app_home(home, None, extra_bin)
+    }
+
+    fn start_with_app_home(
+        home: &Path,
+        app_home_override: Option<&Path>,
+        extra_bin: Option<&Path>,
+    ) -> Self {
         let port = free_port();
         let mut cmd = Command::new(bin_path());
         cmd.args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
             .env("HOME", home)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(app_home) = app_home_override {
+            cmd.env("AGENTSTERM_HOME", app_home);
+        } else {
+            cmd.env_remove("AGENTSTERM_HOME");
+        }
         if let Some(bin) = extra_bin {
             let cur_path = std::env::var("PATH").unwrap_or_default();
             cmd.env("PATH", format!("{}:{cur_path}", bin.display()));
@@ -71,10 +123,12 @@ impl TestDaemon {
             "Missing timestamp: {line}"
         );
 
-        let cfg: Value = serde_json::from_str(
-            &fs::read_to_string(home.join(".config/herdr-mobile/config.json")).unwrap(),
-        )
-        .unwrap();
+        let state_root = app_home_override
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| home.join(".agents-term"));
+        let cfg: Value =
+            serde_json::from_str(&fs::read_to_string(state_root.join("config.json")).unwrap())
+                .unwrap();
         let token = cfg["token"].as_str().unwrap().to_string();
 
         // Drain stdout in background so pipe never blocks.
@@ -147,15 +201,14 @@ impl Drop for TestDaemon {
 #[test]
 fn open_tab_limit_preserves_existing_tabs_and_allows_one_create_in_the_last_slot() {
     let home = make_temp_dir("agentsterm-tab-limit");
-    let config = home.join(".config/herdr-mobile");
-    fs::create_dir_all(&config).unwrap();
+    let app_home = home.join(".agents-term");
     let tabs: Vec<_> = (1..=11)
         .map(|id| json!({ "id": format!("old_{id}"), "agent": "claude", "status": "done" }))
         .collect();
     let history = json!([{ "id": "msg_1", "role": "user", "text": "Saved conversation" }]);
-    let saved =
-        json!({ "tabs": tabs, "activeTabId": "old_11", "messagesByTab": { "old_11": history } });
-    fs::write(config.join("state.json"), saved.to_string()).unwrap();
+    let mut messages_by_tab = serde_json::Map::new();
+    messages_by_tab.insert("old_11".to_string(), history.clone());
+    seed_split_workspace(&app_home, Some("old_11"), &tabs, &[], &messages_by_tab);
 
     let daemon = TestDaemon::start(&home, None);
     let create = || daemon.api("POST", "/api/tabs", Some(json!({ "agent": "shell" })));
@@ -291,28 +344,32 @@ sleep 10
     );
     assert_eq!(st, 200);
 
-    // Wait until sessionRef appears on disk WHILE the turn is still streaming (#62).
-    let state_file = home.join(".config/herdr-mobile/state.json");
+    // Wait until sessionRef appears on disk in tabs.jsonl WHILE the turn is still streaming (#62).
+    let tabs_index = home.join(".agents-term/agents_tabs/tabs.jsonl");
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut found_on_disk = false;
     while Instant::now() < deadline {
-        if let Ok(raw) = fs::read_to_string(&state_file) {
-            if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
-                let sref = parsed["tabs"]
-                    .as_array()
-                    .and_then(|a| a.first())
-                    .and_then(|t| t["sessionRef"]["value"].as_str());
-                if sref == Some("sess-midturn-62") {
-                    found_on_disk = true;
-                    break;
+        if let Ok(raw) = fs::read_to_string(&tabs_index) {
+            for line in raw.lines() {
+                if let Ok(parsed) = serde_json::from_str::<Value>(line) {
+                    if parsed["id"].as_str() == Some(tab_id.as_str())
+                        && parsed["state"].as_str() == Some("open")
+                        && parsed["sessionRef"]["value"].as_str() == Some("sess-midturn-62")
+                    {
+                        found_on_disk = true;
+                        break;
+                    }
                 }
+            }
+            if found_on_disk {
+                break;
             }
         }
         thread::sleep(Duration::from_millis(50));
     }
     assert!(
         found_on_disk,
-        "sessionRef was not persisted to state.json mid-turn (#62)"
+        "sessionRef was not persisted to agents_tabs/tabs.jsonl mid-turn (#62)"
     );
 
     // Hard-kill daemon1 mid-turn and start daemon2 on the same HOME.
@@ -342,33 +399,36 @@ sleep 10
 #[test]
 fn recently_closed_tab_can_be_revived_across_restart_with_history_and_session_ref() {
     let home = make_temp_dir("agentsterm-rs-revive");
-    let config = home.join(".config/herdr-mobile");
-    fs::create_dir_all(&config).unwrap();
+    let app_home = home.join(".agents-term");
     let history = json!([
         { "id": "m1", "tabId": "tab_save", "role": "user", "text": "Fix login bug", "status": "complete" },
         { "id": "m2", "tabId": "tab_save", "role": "assistant", "text": "Fixed login bug.", "status": "complete" }
     ]);
-    let saved = json!({
-        "tabs": [{
-            "id": "tab_save",
-            "title": "Claude · repo",
-            "agent": "claude",
-            "cwd": home.to_string_lossy(),
-            "permissionMode": "full-access",
-            "model": "sonnet",
-            "systemPrompt": "Keep it short",
-            "status": "idle",
-            "sessionRef": { "kind": "claude", "value": "sess-revive-1" },
-            "taskSummary": "Fix login bug",
-            "lastMessagePreview": "Fixed login bug.",
-            "queuedMessages": [],
-            "createdAt": 1000,
-            "updatedAt": 2000
-        }],
-        "activeTabId": "tab_save",
-        "messagesByTab": { "tab_save": history }
-    });
-    fs::write(config.join("state.json"), saved.to_string()).unwrap();
+    let open_tabs = vec![json!({
+        "id": "tab_save",
+        "title": "Claude · repo",
+        "agent": "claude",
+        "cwd": home.to_string_lossy(),
+        "permissionMode": "full-access",
+        "model": "sonnet",
+        "systemPrompt": "Keep it short",
+        "status": "idle",
+        "sessionRef": { "kind": "claude", "value": "sess-revive-1" },
+        "taskSummary": "Fix login bug",
+        "lastMessagePreview": "Fixed login bug.",
+        "queuedMessages": [],
+        "createdAt": 1000,
+        "updatedAt": 2000
+    })];
+    let mut messages_by_tab = serde_json::Map::new();
+    messages_by_tab.insert("tab_save".to_string(), history.clone());
+    seed_split_workspace(
+        &app_home,
+        Some("tab_save"),
+        &open_tabs,
+        &[],
+        &messages_by_tab,
+    );
 
     let daemon1 = TestDaemon::start(&home, None);
     let (st, del_body) = daemon1.api("DELETE", "/api/tabs/tab_save", None);
@@ -416,8 +476,7 @@ fn recently_closed_tab_can_be_revived_across_restart_with_history_and_session_re
 #[test]
 fn closed_tab_retention_discards_after_one_day_and_beyond_last_50() {
     let home = make_temp_dir("agentsterm-rs-retention");
-    let config = home.join(".config/herdr-mobile");
-    fs::create_dir_all(&config).unwrap();
+    let app_home = home.join(".agents-term");
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -464,19 +523,20 @@ fn closed_tab_retention_discards_after_one_day_and_beyond_last_50() {
         );
     }
 
-    let saved = json!({
-        "tabs": [{
-            "id": "open_1",
-            "title": "Open 1",
-            "agent": "shell",
-            "cwd": home.to_string_lossy(),
-            "status": "idle"
-        }],
-        "activeTabId": "open_1",
-        "closedTabs": closed_tabs,
-        "messagesByTab": messages_by_tab,
-    });
-    fs::write(config.join("state.json"), saved.to_string()).unwrap();
+    let open_tabs = vec![json!({
+        "id": "open_1",
+        "title": "Open 1",
+        "agent": "shell",
+        "cwd": home.to_string_lossy(),
+        "status": "idle"
+    })];
+    seed_split_workspace(
+        &app_home,
+        Some("open_1"),
+        &open_tabs,
+        &closed_tabs,
+        &messages_by_tab,
+    );
 
     let daemon = TestDaemon::start(&home, None);
     let (st, closed_resp) = daemon.api("GET", "/api/tabs/closed", None);
@@ -486,7 +546,8 @@ fn closed_tab_retention_discards_after_one_day_and_beyond_last_50() {
     assert_eq!(arr[0]["id"].as_str(), Some("recent_01"));
     assert_eq!(arr[49]["id"].as_str(), Some("recent_50"));
 
-    // Expired and >50 evicted tabs cannot be revived and had their messages purged from disk.
+    // Expired and >50 evicted tabs cannot be revived and had their per-tab folders purged from disk.
+    let tabs_root = app_home.join("agents_tabs");
     for discarded in ["expired_25h", "expired_24h", "recent_51", "recent_55"] {
         let (rev_st, _) = daemon.api(
             "POST",
@@ -494,15 +555,12 @@ fn closed_tab_retention_discards_after_one_day_and_beyond_last_50() {
             Some(json!({})),
         );
         assert_eq!(rev_st, 404, "expected {discarded} to be discarded forever");
+        assert!(
+            !tabs_root.join(discarded).exists(),
+            "expected per-tab folder for {discarded} to be deleted"
+        );
     }
-
-    let persisted: Value =
-        serde_json::from_str(&fs::read_to_string(config.join("state.json")).unwrap()).unwrap();
-    let msgs_map = persisted["messagesByTab"].as_object().unwrap();
-    assert!(!msgs_map.contains_key("expired_25h"));
-    assert!(!msgs_map.contains_key("expired_24h"));
-    assert!(!msgs_map.contains_key("recent_51"));
-    assert!(msgs_map.contains_key("recent_50"));
+    assert!(tabs_root.join("recent_50/messages.json").is_file());
 
     // Closing one more open tab pushes recent_50 out beyond the last 50.
     let (st, del) = daemon.api("DELETE", "/api/tabs/open_1", None);
@@ -515,6 +573,13 @@ fn closed_tab_retention_discards_after_one_day_and_beyond_last_50() {
     let (rev_st, _) = daemon.api("POST", "/api/tabs/closed/recent_50/revive", Some(json!({})));
     assert_eq!(rev_st, 404);
 
+    // Wait for debounced save and confirm recent_50's per-tab directory was removed.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while tabs_root.join("recent_50").exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!tabs_root.join("recent_50").exists());
+
     drop(daemon);
     let _ = fs::remove_dir_all(&home);
 }
@@ -522,8 +587,7 @@ fn closed_tab_retention_discards_after_one_day_and_beyond_last_50() {
 #[test]
 fn revive_closed_tab_respects_open_tab_limit_without_losing_closed_tab() {
     let home = make_temp_dir("agentsterm-rs-revive-limit");
-    let config = home.join(".config/herdr-mobile");
-    fs::create_dir_all(&config).unwrap();
+    let app_home = home.join(".agents-term");
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -540,22 +604,26 @@ fn revive_closed_tab_respects_open_tab_limit_without_losing_closed_tab() {
             })
         })
         .collect();
-    let saved = json!({
-        "tabs": open_tabs,
-        "activeTabId": "open_1",
-        "closedTabs": [{
-            "id": "closed_target",
-            "title": "Accidental Close",
-            "agent": "claude",
-            "cwd": home.to_string_lossy(),
-            "status": "idle",
-            "closedAt": now_ms - 5_000
-        }],
-        "messagesByTab": {
-            "closed_target": [{ "id": "m1", "tabId": "closed_target", "role": "user", "text": "Keep me" }]
-        }
-    });
-    fs::write(config.join("state.json"), saved.to_string()).unwrap();
+    let closed_tabs = vec![json!({
+        "id": "closed_target",
+        "title": "Accidental Close",
+        "agent": "claude",
+        "cwd": home.to_string_lossy(),
+        "status": "idle",
+        "closedAt": now_ms - 5_000
+    })];
+    let mut messages_by_tab = serde_json::Map::new();
+    messages_by_tab.insert(
+        "closed_target".to_string(),
+        json!([{ "id": "m1", "tabId": "closed_target", "role": "user", "text": "Keep me" }]),
+    );
+    seed_split_workspace(
+        &app_home,
+        Some("open_1"),
+        &open_tabs,
+        &closed_tabs,
+        &messages_by_tab,
+    );
 
     let daemon = TestDaemon::start(&home, None);
     let (st, err_body) = daemon.api(
@@ -813,6 +881,244 @@ esac
         .as_str()
         .unwrap_or("")
         .contains("not supported"));
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn daemon_lock_prevents_concurrent_instances_and_releases_on_exit() {
+    let home = make_temp_dir("agentsterm-lock-home");
+    let custom_app_home = home.join("custom-agents-term");
+
+    let daemon1 = TestDaemon::start_with_app_home(&home, Some(&custom_app_home), None);
+    assert!(
+        !home.join(".agents-term").exists(),
+        "AGENTSTERM_HOME override should not touch ~/.agents-term"
+    );
+    let lock_path = custom_app_home.join("daemon.lock");
+    assert!(lock_path.is_file());
+    assert_eq!(
+        fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    // Starting a second daemon on the same AGENTSTERM_HOME must fail fast on daemon.lock.
+    let second_port = free_port();
+    let dup = Command::new(bin_path())
+        .args([
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &second_port.to_string(),
+        ])
+        .env("HOME", &home)
+        .env("AGENTSTERM_HOME", &custom_app_home)
+        .output()
+        .unwrap();
+    assert_eq!(dup.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&dup.stderr);
+    assert!(
+        stderr.contains("daemon.lock"),
+        "Expected daemon.lock error message, got: {stderr}"
+    );
+
+    // Original daemon remains healthy.
+    let (st, _) = daemon1.api("GET", "/api/info", None);
+    assert_eq!(st, 200);
+
+    // Once daemon1 exits, a fresh daemon acquires the lock cleanly.
+    drop(daemon1);
+    let daemon2 = TestDaemon::start_with_app_home(&home, Some(&custom_app_home), None);
+    let (st, _) = daemon2.api("GET", "/api/info", None);
+    assert_eq!(st, 200);
+
+    drop(daemon2);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn split_per_tab_storage_rewrites_only_dirty_tab_and_cleans_orphans() {
+    let home = make_temp_dir("agentsterm-split-store");
+    let custom_app_home = home.join("state-root");
+    let orphan_dir = custom_app_home.join("agents_tabs/orphan_stale_tab");
+    fs::create_dir_all(&orphan_dir).unwrap();
+    fs::write(orphan_dir.join("messages.json"), "[]").unwrap();
+    seed_split_workspace(&custom_app_home, None, &[], &[], &serde_json::Map::new());
+
+    let daemon = TestDaemon::start_with_app_home(&home, Some(&custom_app_home), None);
+
+    // Orphaned per-tab directory should be cleaned up on startup.
+    assert!(
+        !orphan_dir.exists(),
+        "Orphaned tab directory should be pruned during startup recovery"
+    );
+
+    // Verify /api/info system prompt references custom AGENTSTERM_HOME and read-only rule.
+    let (st, info) = daemon.api("GET", "/api/info", None);
+    assert_eq!(st, 200);
+    let sp = info["defaultSystemPrompt"].as_str().unwrap_or("");
+    assert!(sp.contains(
+        &custom_app_home
+            .join("live-debugging.md")
+            .display()
+            .to_string()
+    ));
+    assert!(sp.contains(
+        &custom_app_home
+            .join("debug-dumps/latest")
+            .display()
+            .to_string()
+    ));
+    assert!(sp.contains("read-only"));
+
+    // Create two tabs and run a shell turn in each so both have messages.json on disk.
+    let (st, t1) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({ "agent": "shell", "title": "Tab A" })),
+    );
+    assert_eq!(st, 200);
+    let tab_a = t1["tab"]["id"].as_str().unwrap().to_string();
+    let (st, t2) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({ "agent": "shell", "title": "Tab B" })),
+    );
+    assert_eq!(st, 200);
+    let tab_b = t2["tab"]["id"].as_str().unwrap().to_string();
+
+    for (tid, marker) in [(&tab_a, "ALPHA"), (&tab_b, "BETA")] {
+        assert_eq!(
+            daemon
+                .api(
+                    "POST",
+                    &format!("/api/tabs/{tid}/messages"),
+                    Some(json!({ "text": format!("echo {marker}") }))
+                )
+                .0,
+            200
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (_, resp) = daemon.api("GET", &format!("/api/tabs/{tid}/messages"), None);
+            if resp["tab"]["status"].as_str() == Some("idle")
+                && resp["messages"].as_array().map(|a| a.len()).unwrap_or(0) >= 2
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "Tab {tid} did not settle");
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    let tabs_root = custom_app_home.join("agents_tabs");
+    let tab_a_msgs = tabs_root.join(&tab_a).join("messages.json");
+    let tab_b_msgs = tabs_root.join(&tab_b).join("messages.json");
+    let ws_file = tabs_root.join("workspace.json");
+    let index_file = tabs_root.join("tabs.jsonl");
+    assert!(ws_file.is_file());
+    assert!(index_file.is_file());
+    assert!(tab_a_msgs.is_file());
+    assert!(tab_b_msgs.is_file());
+    assert!(!custom_app_home.join("state.json").exists());
+
+    // Check permissions: 0700 on agents_tabs & <tab_id>, 0600 on workspace.json, tabs.jsonl, messages.json.
+    assert_eq!(
+        fs::metadata(&tabs_root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(tabs_root.join(&tab_a))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&ws_file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(&index_file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(&tab_a_msgs).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let ws_json: Value = serde_json::from_str(&fs::read_to_string(&ws_file).unwrap()).unwrap();
+    assert_eq!(ws_json["schemaVersion"].as_u64(), Some(1));
+    assert_eq!(ws_json["activeTabId"].as_str(), Some(tab_b.as_str()));
+
+    // Updating Tab B must NOT rewrite Tab A's messages.json (atomic rename would change inode).
+    let tab_a_ino_before = fs::metadata(&tab_a_msgs).unwrap().ino();
+    let tab_b_ino_before = fs::metadata(&tab_b_msgs).unwrap().ino();
+
+    assert_eq!(
+        daemon
+            .api(
+                "POST",
+                &format!("/api/tabs/{tab_b}/messages"),
+                Some(json!({ "text": "echo BETA_2" }))
+            )
+            .0,
+        200
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_, resp) = daemon.api("GET", &format!("/api/tabs/{tab_b}/messages"), None);
+        if resp["tab"]["status"].as_str() == Some("idle")
+            && resp["messages"].as_array().map(|a| a.len()).unwrap_or(0) >= 4
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Tab B second turn did not settle"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    assert_eq!(
+        fs::metadata(&tab_a_msgs).unwrap().ino(),
+        tab_a_ino_before,
+        "Streaming updates in Tab B must not rewrite Tab A's messages.json"
+    );
+    assert_ne!(
+        fs::metadata(&tab_b_msgs).unwrap().ino(),
+        tab_b_ino_before,
+        "Tab B's messages.json should have been atomically replaced"
+    );
+
+    // Closing Tab A marks it state=closed in tabs.jsonl while keeping its messages.json for revive.
+    assert_eq!(
+        daemon.api("DELETE", &format!("/api/tabs/{tab_a}"), None).0,
+        200
+    );
+    drop(daemon);
+
+    let lines: Vec<Value> = fs::read_to_string(&index_file)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let rec_a = lines
+        .iter()
+        .find(|v| v["id"].as_str() == Some(&tab_a))
+        .unwrap();
+    let rec_b = lines
+        .iter()
+        .find(|v| v["id"].as_str() == Some(&tab_b))
+        .unwrap();
+    assert_eq!(rec_a["state"].as_str(), Some("closed"));
+    assert!(rec_a["closedAt"].as_i64().unwrap_or(0) > 0);
+    assert_eq!(rec_b["state"].as_str(), Some("open"));
+    assert!(rec_b.get("closedAt").is_none());
+    assert!(tab_a_msgs.is_file());
 
     let _ = fs::remove_dir_all(&home);
 }

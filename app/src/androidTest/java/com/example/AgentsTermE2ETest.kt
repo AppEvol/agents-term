@@ -1109,9 +1109,9 @@ class AgentsTermE2ETest {
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.hasTab("tab_1") }
         val defaultSaved = activeDaemon.tabSystemPrompt("tab_1")
         assertTrue(
-            "Expected default full-access system prompt to mention docs/live-debugging.md and closing the tab, got: $defaultSaved",
+            "Expected default full-access system prompt to mention live-debugging.md and closing the tab, got: $defaultSaved",
             defaultSaved != null &&
-                defaultSaved.contains("docs/live-debugging.md") &&
+                defaultSaved.contains(".agents-term/live-debugging.md") &&
                 defaultSaved.contains("close this tab", ignoreCase = true),
         )
 
@@ -1156,9 +1156,9 @@ class AgentsTermE2ETest {
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.hasTab("tab_2") }
         val planSaved = activeDaemon.tabSystemPrompt("tab_2")
         assertTrue(
-            "Expected plan-mode default prompt to keep docs/live-debugging.md without close-tab notice, got: $planSaved",
+            "Expected plan-mode default prompt to keep live-debugging.md without close-tab notice, got: $planSaved",
             planSaved != null &&
-                planSaved.contains("docs/live-debugging.md") &&
+                planSaved.contains(".agents-term/live-debugging.md") &&
                 !planSaved.contains("close this tab", ignoreCase = true),
         )
 

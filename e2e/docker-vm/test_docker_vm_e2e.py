@@ -202,10 +202,11 @@ def build_rust_bootstrap_command(
             env_exports += f'export {k}="{v}"\n'
     script = f"""[ -f "$HOME/.profile" ] && command . "$HOME/.profile" >/dev/null 2>&1 || true
 set -eu
-{env_exports}export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
+{env_exports}APP_HOME="${{AGENTSTERM_HOME:-$HOME/.agents-term}}"
+export PATH="$APP_HOME/bin:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
 export FORCE_COLOR=0
 BASE_URL="${{AGENTSTERM_RELEASE_BASE_URL:-{release_base_url}}}"
-BIN_DIR="${{AGENTSTERM_BIN_DIR:-$HOME/.local/bin}}"
+BIN_DIR="${{AGENTSTERM_BIN_DIR:-$APP_HOME/bin}}"
 BIN_PATH="$BIN_DIR/agentsterm-daemon"
 die() {{ code="$1"; shift; printf 'ERROR: %s\\n' "$*" >&2; exit "$code"; }}
 OS=$(uname -s)
@@ -237,8 +238,9 @@ sha256_of() {{
     die 3 "Neither sha256sum nor shasum found."
   fi
 }}
-mkdir -p "$BIN_DIR"
-TMP_DIR=$(mktemp -d "${{TMPDIR:-/tmp}}/agentsterm-dl.XXXXXX")
+mkdir -p "$APP_HOME" "$APP_HOME/tmp" "$BIN_DIR"
+chmod 700 "$APP_HOME" "$APP_HOME/tmp" 2>/dev/null || true
+TMP_DIR=$(mktemp -d "$APP_HOME/tmp/agentsterm-dl.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 fetch "$SHA_URL" "$TMP_DIR/checksum.sha256" || die 3 "Failed to download $SHA_URL"
 EXPECTED_SHA=$(awk 'NR==1 {{print $1}}' "$TMP_DIR/checksum.sha256")
@@ -496,16 +498,20 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             self.assertIn(kind, agent_types)
             self.assertTrue(agent_types[kind]["available"], f"Agent {kind} should be available")
 
-        # Verify embedded doc, symlinks, and strict config permissions (0700 dir / 0600 config.json).
-        self.assertEqual(self.docker_exec("test -f ~/.config/herdr-mobile/live-debugging.md").returncode, 0)
-        self.assertEqual(self.docker_exec("test -L ~/.local/bin/agents_term_app_cli").returncode, 0)
-        self.assertEqual(self.docker_exec("test -L ~/.local/bin/app_state_cli").returncode, 0)
+        # Verify unified ~/.agents-term/ layout: embedded doc, bin symlink, lock, and strict permissions.
+        self.assertEqual(self.docker_exec("test -f ~/.agents-term/live-debugging.md").returncode, 0)
+        self.assertEqual(self.docker_exec("test -L ~/.agents-term/bin/agents_term_app_cli").returncode, 0)
+        self.assertEqual(
+            self.docker_exec("readlink ~/.agents-term/bin/agents_term_app_cli").stdout.strip(),
+            "agentsterm-daemon",
+        )
+        self.assertEqual(self.docker_exec("test -f ~/.agents-term/daemon.lock").returncode, 0)
         perms = self.docker_exec(
-            "stat -c '%a' ~/.config/herdr-mobile ~/.config/herdr-mobile/config.json"
+            "stat -c '%a' ~/.agents-term ~/.agents-term/config.json ~/.agents-term/daemon.lock"
         ).stdout.split()
-        self.assertEqual(perms, ["700", "600"])
+        self.assertEqual(perms, ["700", "600", "600"])
 
-        pid_before = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
+        pid_before = self.docker_exec("cat ~/.agents-term/daemon.pid").stdout.strip()
         self.assertTrue(pid_before.isdigit())
 
         # Second SSH bootstrap skips download and preserves live daemon PID.
@@ -513,7 +519,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
         self.assertIn("already matches release SHA-256", res2.stdout)
         self.assertIn("skipping restart to preserve live turns", res2.stdout)
-        pid_after = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
+        pid_after = self.docker_exec("cat ~/.agents-term/daemon.pid").stdout.strip()
         self.assertEqual(pid_before, pid_after)
 
         # Verify reboot persistence handling matches distro capabilities.
@@ -529,7 +535,9 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.ensure_bootstrapped()
 
         # 1. Tampered SHA-256 mirror must fail with exit code 3 and leave installed binary untouched.
-        sha_before = self.docker_exec("sha256sum ~/.local/bin/agentsterm-daemon | awk '{print $1}'").stdout.strip()
+        sha_before = self.docker_exec(
+            "sha256sum ~/.agents-term/bin/agentsterm-daemon | awk '{print $1}'"
+        ).stdout.strip()
         bad_port = 18089
         self.docker_exec(
             "rm -rf /tmp/bad-release && mkdir -p /tmp/bad-release && "
@@ -558,18 +566,20 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         bad_res = self.ssh_exec(bad_cmd)
         self.assertEqual(bad_res.returncode, 3, f"Expected exit 3 on SHA mismatch:\n{bad_res.stdout}\n{bad_res.stderr}")
         self.assertIn("SHA-256 mismatch", bad_res.stderr)
-        sha_after = self.docker_exec("sha256sum ~/.local/bin/agentsterm-daemon | awk '{print $1}'").stdout.strip()
+        sha_after = self.docker_exec("sha256sum ~/.agents-term/bin/agentsterm-daemon | awk '{print $1}'").stdout.strip()
         self.assertEqual(sha_before, sha_after)
 
         # 2. Tailscale down without --host must exit 3; explicit --host must still succeed.
         try:
             self.docker_exec("touch /tmp/tailscale-down", user="root")
-            no_host_res = self.docker_exec(f"$HOME/.local/bin/agentsterm-daemon install --port {self.daemon_port}")
+            no_host_res = self.docker_exec(
+                f"$HOME/.agents-term/bin/agentsterm-daemon install --port {self.daemon_port}"
+            )
             self.assertEqual(no_host_res.returncode, 3, no_host_res.stdout + no_host_res.stderr)
             self.assertIn("Tailscale", no_host_res.stderr)
 
             with_host_res = self.docker_exec(
-                f"$HOME/.local/bin/agentsterm-daemon install --host 127.0.0.1 --port {self.daemon_port}"
+                f"$HOME/.agents-term/bin/agentsterm-daemon install --host 127.0.0.1 --port {self.daemon_port}"
             )
             self.assertEqual(with_host_res.returncode, 0, with_host_res.stdout + with_host_res.stderr)
         finally:
@@ -632,15 +642,15 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.ensure_bootstrapped()
 
         # version & version --hash-only
-        ver = self.docker_exec("$HOME/.local/bin/agentsterm-daemon version")
+        ver = self.docker_exec("$HOME/.agents-term/bin/agentsterm-daemon version")
         self.assertEqual(ver.returncode, 0)
         self.assertIn(self.binary_hash, ver.stdout)
-        hash_only = self.docker_exec("$HOME/.local/bin/agentsterm-daemon version --hash-only")
+        hash_only = self.docker_exec("$HOME/.agents-term/bin/agentsterm-daemon version --hash-only")
         self.assertEqual(hash_only.returncode, 0)
         self.assertEqual(hash_only.stdout.strip(), self.binary_hash)
 
         # pairing prints active host/port/token URI
-        pair = self.docker_exec("$HOME/.local/bin/agentsterm-daemon pairing")
+        pair = self.docker_exec("$HOME/.agents-term/bin/agentsterm-daemon pairing")
         self.assertEqual(pair.returncode, 0)
         self.assertIn(f"token={self.token}", pair.stdout)
 
@@ -654,16 +664,16 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.wait_for_tab_idle(marker_tab_id)
 
         # ensure-running while already running is a no-op (PID unchanged).
-        pid1 = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
+        pid1 = self.docker_exec("cat ~/.agents-term/daemon.pid").stdout.strip()
         er1 = self.docker_exec(
-            f"$HOME/.local/bin/agentsterm-daemon ensure-running --host 127.0.0.1 --port {self.daemon_port}"
+            f"$HOME/.agents-term/bin/agentsterm-daemon ensure-running --host 127.0.0.1 --port {self.daemon_port}"
         )
         self.assertEqual(er1.returncode, 0, er1.stdout + er1.stderr)
-        pid2 = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
+        pid2 = self.docker_exec("cat ~/.agents-term/daemon.pid").stdout.strip()
         self.assertEqual(pid1, pid2)
 
         # Stop daemon via SIGTERM, then use ensure-running to revive it cleanly.
-        self.docker_exec("kill -TERM $(cat ~/.config/herdr-mobile/daemon.pid)")
+        self.docker_exec("kill -TERM $(cat ~/.agents-term/daemon.pid)")
         deadline = time.time() + 6
         while time.time() < deadline:
             if self.docker_exec(f"kill -0 {pid1} 2>/dev/null").returncode != 0:
@@ -672,11 +682,11 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.assertNotEqual(self.docker_exec(f"kill -0 {pid1} 2>/dev/null").returncode, 0)
 
         er2 = self.docker_exec(
-            f"$HOME/.local/bin/agentsterm-daemon ensure-running --host 127.0.0.1 --port {self.daemon_port}"
+            f"$HOME/.agents-term/bin/agentsterm-daemon ensure-running --host 127.0.0.1 --port {self.daemon_port}"
         )
         self.assertEqual(er2.returncode, 0, er2.stdout + er2.stderr)
         self.wait_for_daemon_healthy()
-        pid3 = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
+        pid3 = self.docker_exec("cat ~/.agents-term/daemon.pid").stdout.strip()
         self.assertNotEqual(pid1, pid3)
 
         # Verify marker tab survived stop + ensure-running.
@@ -687,7 +697,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         # Rotate token + restart daemon: old token must fail with 401, new token succeeds.
         old_token = self.token
         rot = self.docker_exec(
-            f"$HOME/.local/bin/agentsterm-daemon rotate-token --host 127.0.0.1 --port {self.daemon_port}"
+            f"$HOME/.agents-term/bin/agentsterm-daemon rotate-token --host 127.0.0.1 --port {self.daemon_port}"
         )
         self.assertEqual(rot.returncode, 0, rot.stdout + rot.stderr)
         rot_match = PAIRING_URI_RE.search(rot.stdout)
@@ -696,7 +706,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.assertNotEqual(old_token, new_token)
 
         restart = self.docker_exec(
-            f"$HOME/.local/bin/agentsterm-daemon install --host 127.0.0.1 --port {self.daemon_port} --force-restart"
+            f"$HOME/.agents-term/bin/agentsterm-daemon install --host 127.0.0.1 --port {self.daemon_port} --force-restart"
         )
         self.assertEqual(restart.returncode, 0, restart.stdout + restart.stderr)
         type(self).token = new_token
@@ -728,7 +738,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             ws1.recv_until(lambda e: e.get("type") == "tab_created" and e["tab"]["id"] == tab_id)
             ws2.recv_until(lambda e: e.get("type") == "tab_created" and e["tab"]["id"] == tab_id)
 
-            # Command stdout + stderr + cwd persistence + enriched PATH (~/.local/bin).
+            # Command stdout + stderr + cwd persistence + enriched PATH (~/.agents-term/bin).
             st, _ = self.api(
                 "POST",
                 f"/api/tabs/{tab_id}/messages",
@@ -739,7 +749,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             self.assertEqual(tab["cwd"], "/tmp")
             self.assertIn("RUST_DOCKER_OK", msgs[-1]["text"])
             self.assertIn("STDERR_LINE", msgs[-1]["text"])
-            self.assertIn(".local/bin/agentsterm-daemon", msgs[-1]["text"])
+            self.assertIn(".agents-term/bin/agentsterm-daemon", msgs[-1]["text"])
             self.assertTrue(tab.get("unread"))
 
             # Mark read clears unread flag.
@@ -1103,7 +1113,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.assertEqual(st, 200)
         self.assertTrue(uploaded.get("ok"))
         self.assertNotIn("/", uploaded["dumpId"])
-        self.assertTrue(uploaded["remoteDir"].startswith("/home/vmuser/.config/herdr-mobile/debug-dumps/"))
+        self.assertTrue(uploaded["remoteDir"].startswith("/home/vmuser/.agents-term/debug-dumps/"))
         expected_files = {
             "meta.json",
             "state.json",
@@ -1116,11 +1126,9 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.assertTrue(expected_files.issubset(set(uploaded["files"])))
 
         # Verify files & symlink exist on disk with 0600 permissions.
-        self.assertEqual(self.docker_exec("test -L ~/.config/herdr-mobile/debug-dumps/latest").returncode, 0)
-        self.assertEqual(
-            self.docker_exec("test -s ~/.config/herdr-mobile/debug-dumps/latest/screenshot.png").returncode, 0
-        )
-        meta_perm = self.docker_exec("stat -c '%a' ~/.config/herdr-mobile/debug-dumps/latest/meta.json").stdout.strip()
+        self.assertEqual(self.docker_exec("test -L ~/.agents-term/debug-dumps/latest").returncode, 0)
+        self.assertEqual(self.docker_exec("test -s ~/.agents-term/debug-dumps/latest/screenshot.png").returncode, 0)
+        meta_perm = self.docker_exec("stat -c '%a' ~/.agents-term/debug-dumps/latest/meta.json").stdout.strip()
         self.assertEqual(meta_perm, "600")
 
         st, listed = self.api("GET", "/api/debug/dumps")
@@ -1136,12 +1144,12 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.assertFalse(status_empty["ready"])
         self.assertEqual(status_empty["reason"], "no_app_connected")
 
-        cli_help = self.docker_exec("$HOME/.local/bin/agents_term_app_cli --help")
+        cli_help = self.docker_exec("$HOME/.agents-term/bin/agents_term_app_cli --help")
         self.assertEqual(cli_help.returncode, 0, cli_help.stdout + cli_help.stderr)
         self.assertIn("agents_term_app_cli", cli_help.stdout)
         self.assertIn("RECOMMENDED AGENT WORKFLOW", cli_help.stdout)
 
-        cli_no_app = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} status")
+        cli_no_app = self.docker_exec(f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} status")
         self.assertEqual(cli_no_app.returncode, 3)
 
         st_cmd, err_no_app = self.api("POST", "/api/app/command", {"command": "state", "args": {}})
@@ -1264,7 +1272,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
                 }
             )
             time.sleep(0.15)
-            dis_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} status")
+            dis_res = self.docker_exec(f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} status")
             self.assertEqual(dis_res.returncode, 3)
             self.assertEqual(json.loads(dis_res.stdout)["reason"], "inspection_disabled")
 
@@ -1285,64 +1293,68 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             threading.Thread(target=responder, daemon=True).start()
             time.sleep(0.15)
 
-            st_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli status --port {self.daemon_port}")
+            st_res = self.docker_exec(f"$HOME/.agents-term/bin/agents_term_app_cli status --port {self.daemon_port}")
             self.assertEqual(st_res.returncode, 0, st_res.stdout + st_res.stderr)
             st_json = json.loads(st_res.stdout)
             self.assertTrue(st_json["ready"])
             self.assertFalse(st_json["controlReady"])
             self.assertEqual(st_json["controlReason"], "control_disabled")
 
-            # Read-only commands via `agents_term_app_cli`, legacy `app_state_cli` alias, and `agentsterm-daemon app`.
-            state_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} state")
+            # Read-only commands via `agents_term_app_cli` and `agentsterm-daemon app`.
+            state_res = self.docker_exec(f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} state")
             self.assertEqual(state_res.returncode, 0)
             self.assertEqual(json.loads(state_res.stdout)["result"]["screen"], "chat")
 
-            ping_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} ping")
+            ping_res = self.docker_exec(f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} ping")
             self.assertEqual(ping_res.returncode, 0)
             self.assertEqual(json.loads(ping_res.stdout)["result"]["echoCommand"], "ping")
 
             logs_res = self.docker_exec(
-                f"$HOME/.local/bin/agentsterm-daemon app logs --limit 5 --category net --grep hi --port {self.daemon_port}"
+                f"$HOME/.agents-term/bin/agentsterm-daemon app logs --limit 5 --category net --grep hi --port {self.daemon_port}"
             )
             self.assertEqual(logs_res.returncode, 0)
             self.assertEqual(json.loads(logs_res.stdout)["result"]["echoArgs"]["contains"], "hi")
 
             logcat_res = self.docker_exec(
-                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} logcat --lines 20 --raw"
+                f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} logcat --lines 20 --raw"
             )
             self.assertEqual(logcat_res.returncode, 0)
             self.assertIn("RAW_LOGCAT_LINE", logcat_res.stdout)
 
-            crash_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} crash --raw")
+            crash_res = self.docker_exec(
+                f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} crash --raw"
+            )
             self.assertEqual(crash_res.returncode, 0)
             self.assertIn("RAW_CRASH_LINE", crash_res.stdout)
 
-            ui_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} ui --brief")
+            ui_res = self.docker_exec(
+                f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} ui --brief"
+            )
             self.assertEqual(ui_res.returncode, 0)
             self.assertIn("1080x2400 screenshot pixels", ui_res.stdout)
             self.assertIn("tag=send_btn", ui_res.stdout)
 
             shot_res = self.docker_exec(
-                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} screenshot -o /tmp/e2e-shot.png"
+                f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} screenshot -o /tmp/e2e-shot.png"
             )
             self.assertEqual(shot_res.returncode, 0, shot_res.stdout + shot_res.stderr)
             self.assertEqual(self.docker_exec("test -s /tmp/e2e-shot.png").returncode, 0)
 
             dump_res = self.docker_exec(
-                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} dump --note e2e --no-screenshot"
+                f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} dump --note e2e --no-screenshot"
             )
             self.assertEqual(dump_res.returncode, 0)
             self.assertFalse(json.loads(dump_res.stdout)["result"]["echoArgs"]["includeScreenshot"])
 
             raw_res = self.docker_exec(
-                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} raw ping --args '{{\"x\":1}}'"
+                f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} raw ping --args '{{\"x\":1}}'"
             )
             self.assertEqual(raw_res.returncode, 0)
             self.assertEqual(json.loads(raw_res.stdout)["result"]["echoArgs"]["x"], 1)
 
             # Control command rejected with exit 3 when controlEnabled=False.
             tap_denied = self.docker_exec(
-                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} tap --tag send_btn"
+                f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} tap --tag send_btn"
             )
             self.assertEqual(tap_denied.returncode, 3)
             self.assertIn("control_disabled", tap_denied.stderr)
@@ -1372,26 +1384,28 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
                 "key back",
                 "wait --tag send_btn --wait-timeout 2",
             ]:
-                c_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} {subcmd}")
+                c_res = self.docker_exec(
+                    f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} {subcmd}"
+                )
                 self.assertEqual(c_res.returncode, 0, f"Command `{subcmd}` failed:\n{c_res.stdout}\n{c_res.stderr}")
 
             # App error response -> exit 4.
             mode_state["behavior"] = "error"
-            err_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} state")
+            err_res = self.docker_exec(f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} state")
             self.assertEqual(err_res.returncode, 4)
             self.assertIn("Simulated app failure", err_res.stderr)
 
             # Timeout -> exit 4 (HTTP 504).
             mode_state["behavior"] = "timeout"
             to_res = self.docker_exec(
-                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} --timeout 1 state"
+                f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} --timeout 1 state"
             )
             self.assertEqual(to_res.returncode, 4)
             self.assertIn("timeout", to_res.stderr)
 
             # App disconnect mid-flight -> exit 3 (HTTP 503).
             mode_state["behavior"] = "disconnect"
-            dc_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} state")
+            dc_res = self.docker_exec(f"$HOME/.agents-term/bin/agents_term_app_cli --port {self.daemon_port} state")
             self.assertEqual(dc_res.returncode, 3)
             self.assertIn("app_disconnected", dc_res.stderr)
         finally:
@@ -1415,19 +1429,27 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             deadline = time.time() + 5
             saved_ref = None
             while time.time() < deadline:
-                raw = self.docker_exec("cat ~/.config/herdr-mobile/state.json").stdout
+                raw = self.docker_exec("cat ~/.agents-term/agents_tabs/tabs.jsonl").stdout
                 if raw.strip():
-                    state = json.loads(raw)
-                    tab = next((t for t in state.get("tabs", []) if t["id"] == tab_id), None)
-                    if tab and isinstance(tab.get("sessionRef"), dict):
-                        saved_ref = tab["sessionRef"].get("value")
-                        if saved_ref:
-                            break
+                    for line in raw.splitlines():
+                        if not line.strip():
+                            continue
+                        tab = json.loads(line)
+                        if tab.get("id") == tab_id and isinstance(tab.get("sessionRef"), dict):
+                            saved_ref = tab["sessionRef"].get("value")
+                            if saved_ref:
+                                break
+                    if saved_ref:
+                        break
                 time.sleep(0.1)
             self.assertEqual(saved_ref, "claude-sess-e2e-1", "Issue #62: sessionRef not persisted mid-turn")
+            self.assertEqual(
+                self.docker_exec(f"test -f ~/.agents-term/agents_tabs/{tab_id}/messages.json").returncode, 0
+            )
+            self.assertEqual(self.docker_exec("test -f ~/.agents-term/agents_tabs/workspace.json").returncode, 0)
 
             restart_res = self.docker_exec(
-                f"$HOME/.local/bin/agentsterm-daemon install --host 127.0.0.1 --port {self.daemon_port} --force-restart"
+                f"$HOME/.agents-term/bin/agentsterm-daemon install --host 127.0.0.1 --port {self.daemon_port} --force-restart"
             )
             self.assertEqual(restart_res.returncode, 0, restart_res.stdout + restart_res.stderr)
 
@@ -1441,12 +1463,12 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             # Part B: Hard SIGKILL crash mid-turn + ensure-running recovery + resumed follow-up!
             self.assertEqual(self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "SLOW_TURN hard crash"})[0], 200)
             time.sleep(0.4)
-            pid_now = self.docker_exec("cat ~/.config/herdr-mobile/daemon.pid").stdout.strip()
+            pid_now = self.docker_exec("cat ~/.agents-term/daemon.pid").stdout.strip()
             self.docker_exec(f"kill -KILL {pid_now}")
             time.sleep(0.3)
 
             revive = self.docker_exec(
-                f"$HOME/.local/bin/agentsterm-daemon ensure-running --host 127.0.0.1 --port {self.daemon_port}"
+                f"$HOME/.agents-term/bin/agentsterm-daemon ensure-running --host 127.0.0.1 --port {self.daemon_port}"
             )
             self.assertEqual(revive.returncode, 0, revive.stdout + revive.stderr)
             self.wait_for_daemon_healthy()
@@ -1465,7 +1487,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             self.assertIn("sess=claude-sess-e2e-1", resumed_msgs[-1]["text"])
 
             # Verify daemon.log has ISO-8601 UTC timestamps (#61).
-            daemon_log = self.docker_exec("cat ~/.config/herdr-mobile/daemon.log").stdout
+            daemon_log = self.docker_exec("cat ~/.agents-term/daemon.log").stdout
             self.assertRegex(daemon_log, ISO_TS_RE, f"Expected ISO-8601 timestamps in daemon.log:\n{daemon_log}")
         finally:
             self.api("DELETE", f"/api/tabs/{tab_id}")
@@ -1480,9 +1502,9 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
 set -eu
 SCRATCH=$(mktemp -d /tmp/agentsterm-systemd-e2e.XXXXXX)
 trap 'if [ -f "$SCRATCH/svc.pid" ]; then kill "$(cat "$SCRATCH/svc.pid")" 2>/dev/null || true; fi; rm -rf "$SCRATCH"' EXIT
-mkdir -p "$SCRATCH/bin" "$SCRATCH/home/.local/bin"
-cp "$HOME/.local/bin/agentsterm-daemon" "$SCRATCH/home/.local/bin/agentsterm-daemon"
-chmod 755 "$SCRATCH/home/.local/bin/agentsterm-daemon"
+mkdir -p "$SCRATCH/bin" "$SCRATCH/home/.agents-term/bin"
+cp "$HOME/.agents-term/bin/agentsterm-daemon" "$SCRATCH/home/.agents-term/bin/agentsterm-daemon"
+chmod 755 "$SCRATCH/home/.agents-term/bin/agentsterm-daemon"
 
 cat > "$SCRATCH/bin/loginctl" <<'SH'
 #!/usr/bin/env sh
@@ -1502,7 +1524,7 @@ case "\\$*" in
   *"daemon-reload"*|*"enable"*) exit 0 ;;
   *"restart"*)
     if [ -f "$SCRATCH/svc.pid" ]; then kill "\\$(cat "$SCRATCH/svc.pid")" 2>/dev/null || true; fi
-    HOME="$SCRATCH/home" "$SCRATCH/home/.local/bin/agentsterm-daemon" serve --host 127.0.0.1 --port {scratch_port} >> "$SCRATCH/svc.log" 2>&1 < /dev/null &
+    HOME="$SCRATCH/home" "$SCRATCH/home/.agents-term/bin/agentsterm-daemon" serve --host 127.0.0.1 --port {scratch_port} >> "$SCRATCH/svc.log" 2>&1 < /dev/null &
     echo \\$! > "$SCRATCH/svc.pid"
     exit 0
     ;;
@@ -1511,22 +1533,23 @@ exit 0
 SH
 chmod 755 "$SCRATCH/bin/systemctl"
 
-OUT=$(HOME="$SCRATCH/home" PATH="$SCRATCH/bin:$PATH" AGENTSTERM_NO_CRON=1 \
-  "$SCRATCH/home/.local/bin/agentsterm-daemon" install --host 127.0.0.1 --port {scratch_port})
+OUT=$(HOME="$SCRATCH/home" PATH="$SCRATCH/bin:$PATH" AGENTSTERM_NO_CRON=1 AGENTSTERM_KEEP_LEGACY=1 \
+  "$SCRATCH/home/.agents-term/bin/agentsterm-daemon" install --host 127.0.0.1 --port {scratch_port})
 printf '%s\\n' "$OUT"
-grep -q "systemd --user (herdr-mobile.service)" <<EOF
+grep -q "systemd --user (agentsterm-daemon.service)" <<EOF
 $OUT
 EOF
 grep -q "will survive reboots (systemd --user with linger enabled)" <<EOF
 $OUT
 EOF
-UNIT="$SCRATCH/home/.config/systemd/user/herdr-mobile.service"
+UNIT="$SCRATCH/home/.config/systemd/user/agentsterm-daemon.service"
 test -f "$UNIT"
-grep -q "ExecStart=$SCRATCH/home/.local/bin/agentsterm-daemon serve --host 127.0.0.1 --port {scratch_port}" "$UNIT"
+grep -q "ExecStart=$SCRATCH/home/.agents-term/bin/agentsterm-daemon serve --host 127.0.0.1 --port {scratch_port}" "$UNIT"
+grep -q "Environment=PATH=%h/.agents-term/bin:" "$UNIT"
 grep -q "Restart=always" "$UNIT"
 grep -q "daemon-reload" "$SCRATCH/systemctl.log"
-grep -q "enable -q herdr-mobile.service" "$SCRATCH/systemctl.log"
-grep -q "restart herdr-mobile.service" "$SCRATCH/systemctl.log"
+grep -q "enable -q agentsterm-daemon.service" "$SCRATCH/systemctl.log"
+grep -q "restart agentsterm-daemon.service" "$SCRATCH/systemctl.log"
 """
         res = self.docker_exec(script, timeout=45)
         self.assertEqual(
