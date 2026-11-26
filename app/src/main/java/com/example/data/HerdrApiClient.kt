@@ -16,6 +16,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 const val HTTP_UNAUTHORIZED = 401
+const val HTTP_FORBIDDEN = 403
+
+fun isAuthStatusCode(statusCode: Int?): Boolean = statusCode == HTTP_UNAUTHORIZED || statusCode == HTTP_FORBIDDEN
 
 class HttpStatusException(
     val statusCode: Int,
@@ -23,11 +26,35 @@ class HttpStatusException(
 ) : IOException(message)
 
 val Throwable.isAuthError: Boolean
-    get() = this is HttpStatusException && statusCode == HTTP_UNAUTHORIZED
+    get() = this is HttpStatusException && isAuthStatusCode(statusCode)
+
+internal fun recordWebSocketFailure(
+    debugRecorder: DebugRecorder?,
+    reason: String,
+    httpStatusCode: Int?,
+    isInForeground: Boolean,
+) {
+    if (debugRecorder == null) return
+    if (!isInForeground && !isAuthStatusCode(httpStatusCode)) {
+        debugRecorder.record(
+            category = "ws",
+            event = "ws_background_closed",
+            detail = "WebSocket closed while backgrounded: $reason",
+        )
+    } else {
+        debugRecorder.record(
+            category = "error",
+            event = "ws_failure",
+            detail = "WebSocket failure: $reason",
+        )
+    }
+}
 
 open class HerdrApiClient(
     private val debugRecorder: DebugRecorder? = null,
 ) {
+    @Volatile
+    internal var isAppInForeground: () -> Boolean = { true }
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     private val client = OkHttpClient.Builder()
@@ -431,10 +458,11 @@ open class HerdrApiClient(
                     deltaLogAggregator.flush()
                     val codeMsg = response?.let { "HTTP ${it.code}: ${it.message}" }
                     val reason = codeMsg ?: t.message ?: "Connection lost"
-                    debugRecorder?.record(
-                        category = "error",
-                        event = "ws_failure",
-                        detail = "WebSocket failure: $reason",
+                    recordWebSocketFailure(
+                        debugRecorder = debugRecorder,
+                        reason = reason,
+                        httpStatusCode = response?.code,
+                        isInForeground = isAppInForeground(),
                     )
                     notifyClosedOnce(reason, response?.code)
                 }

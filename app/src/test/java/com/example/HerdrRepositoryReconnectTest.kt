@@ -5,8 +5,10 @@ import com.example.data.ConnectionConfig
 import com.example.data.ConnectionSettings
 import com.example.data.ConnectionState
 import com.example.data.CreateTabRequest
+import com.example.data.DebugRecorder
 import com.example.data.FsDirectoryEntry
 import com.example.data.FsListResponse
+import com.example.data.HTTP_FORBIDDEN
 import com.example.data.HTTP_UNAUTHORIZED
 import com.example.data.HerdrApiClient
 import com.example.data.HerdrRepository
@@ -15,6 +17,7 @@ import com.example.data.ServerInfo
 import com.example.data.TabMessagesResponse
 import com.example.data.TabRecord
 import com.example.data.WsServerEnvelope
+import com.example.data.recordWebSocketFailure
 import com.example.data.resolveInitialDirectoryListing
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -684,9 +687,11 @@ class HerdrRepositoryReconnectTest {
         assertFalse(api.sockets[0].cancelled)
         assertEquals(ConnectionState.CONNECTED, repo.state.value.connectionState)
 
-        // Android freezes the process and aborts the socket
+        // Android freezes the process and aborts the socket while backgrounded:
+        // treat as a clean disconnect (no false ERROR banner) and pause retries.
         api.sockets[0].emitClosed("Software caused connection abort")
-        assertEquals(ConnectionState.ERROR, repo.state.value.connectionState)
+        assertEquals(ConnectionState.DISCONNECTED, repo.state.value.connectionState)
+        assertNull(repo.state.value.connectionError)
 
         // No doomed background reconnect attempts should fire while backgrounded
         advanceTimeBy(60_000L)
@@ -742,5 +747,69 @@ class HerdrRepositoryReconnectTest {
 
         assertTrue(result.isFailure)
         assertEquals(1, attempts)
+    }
+
+    @Test
+    fun forbiddenAuthFailureStopsReconnectLoopAndSkipsDirectoryRetries() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val api = FakeApiClient(fireClosedOnCancel = false)
+        val settings = InMemorySettings(connection = testConfig)
+        val repo = HerdrRepository(
+            api = api,
+            settings = settings,
+            ioDispatcher = dispatcher,
+        )
+
+        repo.connect(testConfig)
+        api.sockets[0].emitClosed("HTTP 403: Forbidden", httpStatusCode = HTTP_FORBIDDEN)
+        assertEquals(ConnectionState.AUTH_ERROR, repo.state.value.connectionState)
+
+        advanceTimeBy(60_000L)
+        runCurrent()
+        assertEquals(1, api.sockets.size)
+
+        var fsAttempts = 0
+        val fsResult = resolveInitialDirectoryListing(
+            preferredPath = "/home/ned/projects",
+            homeCwd = "/home/ned",
+        ) {
+            fsAttempts++
+            Result.failure(HttpStatusException(HTTP_FORBIDDEN, "Forbidden"))
+        }
+        assertTrue(fsResult.isFailure)
+        assertEquals(1, fsAttempts)
+    }
+
+    @Test
+    fun backgroundSocketFailureLogsWsEventInsteadOfError() {
+        val recorder = DebugRecorder()
+
+        recordWebSocketFailure(
+            debugRecorder = recorder,
+            reason = "Software caused connection abort",
+            httpStatusCode = null,
+            isInForeground = false,
+        )
+        recordWebSocketFailure(
+            debugRecorder = recorder,
+            reason = "Software caused connection abort",
+            httpStatusCode = null,
+            isInForeground = true,
+        )
+        recordWebSocketFailure(
+            debugRecorder = recorder,
+            reason = "HTTP 401: Unauthorized",
+            httpStatusCode = HTTP_UNAUTHORIZED,
+            isInForeground = false,
+        )
+
+        val events = recorder.snapshot()
+        assertEquals(3, events.size)
+        assertEquals("ws", events[0].category)
+        assertEquals("ws_background_closed", events[0].event)
+        assertEquals("error", events[1].category)
+        assertEquals("ws_failure", events[1].event)
+        assertEquals("error", events[2].category)
+        assertEquals("ws_failure", events[2].event)
     }
 }
