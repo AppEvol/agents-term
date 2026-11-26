@@ -137,6 +137,18 @@ class RealVmDockerE2ETest {
         }
     }
 
+    private fun waitForTagGone(tag: String, timeoutMs: Long = 20_000L) {
+        try {
+            composeRule.waitUntil(timeoutMillis = timeoutMs) {
+                runCatching {
+                    composeRule.onAllNodesWithTag(tag).fetchSemanticsNodes().isEmpty()
+                }.getOrDefault(false)
+            }
+        } catch (e: Throwable) {
+            throw AssertionError("Timed out waiting for tag '$tag' to disappear", e)
+        }
+    }
+
     private fun bootstrapOverRealSsh() {
         val host = arg("realVmSshHost", "127.0.0.1")
         val sshPort = arg("realVmSshPort")
@@ -175,7 +187,11 @@ class RealVmDockerE2ETest {
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextReplacement(name)
         Espresso.closeSoftKeyboard()
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+        // Wait for NewTabSheet to dismiss first: otherwise waitForText(name) can match
+        // new_tab_name_input while POST /api/tabs is still in flight.
+        waitForTagGone("create_tab_button")
         waitForText(name)
+        waitForTag("composer_input")
     }
 
     @Test
