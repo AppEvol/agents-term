@@ -437,6 +437,7 @@ data class ChatMessage(
     val toolCalls: List<ToolCallItem> = emptyList(),
     val segments: List<MessageSegment> = emptyList(),
     val deniedActions: List<DeniedAction> = emptyList(),
+    val permissionMode: String? = null,
     val status: String = "complete",
     val error: String? = null,
     val usage: UsageStats? = null,

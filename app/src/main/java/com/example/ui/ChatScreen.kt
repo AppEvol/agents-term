@@ -239,6 +239,8 @@ private sealed interface ChatFeedItem {
     data class BlockedPermissions(
         override val key: String,
         val deniedActions: List<DeniedAction>,
+        val deniedUnderFullAccess: Boolean,
+        val canRetryWithFullAccess: Boolean,
     ) : ChatFeedItem {
         override val contentType: String get() = "blocked_permissions"
         override val addMessageGap: Boolean get() = false
@@ -281,11 +283,11 @@ private fun buildChatFeedItems(
         if (msg.role == "user") {
             items.add(ChatFeedItem.UserMessage(key = "${msg.id}:user", addMessageGap = addMessageGap, message = msg))
         } else {
-            appendAssistantFeedItems(
-                items = items,
+            items.appendAssistantFeedItems(
                 tab = tab,
                 message = msg,
                 addMessageGap = addMessageGap,
+                isLatestMessage = msgIndex == messages.lastIndex,
                 markdownCache = markdownCache,
             )
         }
@@ -293,15 +295,15 @@ private fun buildChatFeedItems(
     return items
 }
 
-private fun appendAssistantFeedItems(
-    items: MutableList<ChatFeedItem>,
+private fun MutableList<ChatFeedItem>.appendAssistantFeedItems(
     tab: TabRecord,
     message: ChatMessage,
     addMessageGap: Boolean,
+    isLatestMessage: Boolean,
     markdownCache: ChatMarkdownCache,
 ) {
     val isStreaming = message.status == "streaming"
-    items.add(
+    add(
         ChatFeedItem.AssistantHeader(
             key = "${message.id}:header",
             addMessageGap = addMessageGap,
@@ -309,7 +311,7 @@ private fun appendAssistantFeedItems(
         ),
     )
     if (!message.thinking.isNullOrBlank()) {
-        items.add(
+        add(
             ChatFeedItem.AssistantThinking(
                 key = "${message.id}:thinking",
                 thinking = message.thinking,
@@ -317,8 +319,8 @@ private fun appendAssistantFeedItems(
             ),
         )
     }
-    appendAssistantBodyItems(items, tab, message, isStreaming, markdownCache)
-    appendAssistantStatusAndFooter(items, message, isStreaming)
+    appendAssistantBodyItems(this, tab, message, isStreaming, markdownCache)
+    appendAssistantStatusAndFooter(this, tab, message, isStreaming, isLatestMessage)
 }
 
 private fun appendAssistantBodyItems(
@@ -343,11 +345,26 @@ private fun appendAssistantBodyItems(
 
 private fun appendAssistantStatusAndFooter(
     items: MutableList<ChatFeedItem>,
+    tab: TabRecord,
     message: ChatMessage,
     isStreaming: Boolean,
+    isLatestMessage: Boolean,
 ) {
     if (message.deniedActions.isNotEmpty()) {
-        items.add(ChatFeedItem.BlockedPermissions(key = "${message.id}:denied", deniedActions = message.deniedActions))
+        val effectivePermissionMode = message.permissionMode ?: tab.permissionMode
+        val deniedUnderFullAccess = effectivePermissionMode == "full-access"
+        val canRetryWithFullAccess = !deniedUnderFullAccess &&
+            isLatestMessage &&
+            !isStreaming &&
+            tab.status != "working"
+        items.add(
+            ChatFeedItem.BlockedPermissions(
+                key = "${message.id}:denied",
+                deniedActions = message.deniedActions,
+                deniedUnderFullAccess = deniedUnderFullAccess,
+                canRetryWithFullAccess = canRetryWithFullAccess,
+            ),
+        )
     }
     if (!message.error.isNullOrBlank()) {
         items.add(ChatFeedItem.AssistantError(key = "${message.id}:error", error = message.error))
@@ -443,7 +460,7 @@ fun ChatWorkspace(
         onDispose { markdownCache.cancelAll() }
     }
     val markdownStyle = rememberMarkdownStyle(MaterialTheme.colorScheme.onSurface)
-    val feedItems = remember(messages, tab.statusDetail, markdownCache.commitVersion) {
+    val feedItems = remember(messages, tab.status, tab.statusDetail, tab.permissionMode, markdownCache.commitVersion) {
         buildChatFeedItems(
             tab = tab,
             messages = messages,
@@ -840,7 +857,10 @@ private fun ChatFeedItemContent(
         )
 
         is ChatFeedItem.BlockedPermissions -> BlockedPermissionCard(
+            agent = tab.agent,
             deniedActions = item.deniedActions,
+            deniedUnderFullAccess = item.deniedUnderFullAccess,
+            canRetryWithFullAccess = item.canRetryWithFullAccess,
             onRetryFullAccess = onRetryFullAccess,
         )
 
@@ -1369,9 +1389,24 @@ private fun ToolCallRow(
     }
 }
 
+internal fun formatDeniedActionsSummary(deniedActions: List<DeniedAction>): String = deniedActions
+    .mapNotNull { action ->
+        val name = action.displayName.trim().ifEmpty { action.action.trim() }
+        if (name.isEmpty()) return@mapNotNull null
+        val detail = action.detail
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && !it.equals(name, ignoreCase = true) }
+        if (detail != null) "$name ($detail)" else name
+    }
+    .distinct()
+    .joinToString(", ")
+
 @Composable
 private fun BlockedPermissionCard(
+    agent: String,
     deniedActions: List<DeniedAction>,
+    deniedUnderFullAccess: Boolean,
+    canRetryWithFullAccess: Boolean,
     onRetryFullAccess: () -> Unit,
 ) {
     Surface(
@@ -1395,33 +1430,46 @@ private fun BlockedPermissionCard(
                     modifier = Modifier.size(20.dp),
                 )
                 Text(
-                    text = stringResource(R.string.permission_required_title),
+                    text = stringResource(
+                        if (deniedUnderFullAccess) {
+                            R.string.permission_denied_full_access_title
+                        } else {
+                            R.string.permission_required_title
+                        },
+                    ),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = AppTheme.colors.warning,
                 )
             }
-            val names = deniedActions.joinToString(", ") { it.displayName }
+            val names = formatDeniedActionsSummary(deniedActions)
+            val bodyResId = when {
+                !deniedUnderFullAccess -> R.string.permission_required_body
+                agent == "claude" -> R.string.permission_denied_full_access_claude_body
+                else -> R.string.permission_denied_full_access_body
+            }
             Text(
-                text = stringResource(R.string.permission_required_body, names),
+                text = stringResource(bodyResId, names),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            ThemedButton(
-                onClick = onRetryFullAccess,
-                shape = themedCorner(10.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppTheme.colors.warning,
-                    contentColor = AppTheme.colors.onWarning,
-                ),
-                modifier = Modifier
-                    .height(48.dp)
-                    .testTag("allow_full_access_button"),
-            ) {
-                Text(
-                    text = stringResource(R.string.action_allow_full_access),
-                    fontWeight = FontWeight.SemiBold,
-                )
+            if (canRetryWithFullAccess) {
+                ThemedButton(
+                    onClick = onRetryFullAccess,
+                    shape = themedCorner(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppTheme.colors.warning,
+                        contentColor = AppTheme.colors.onWarning,
+                    ),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("allow_full_access_button"),
+                ) {
+                    Text(
+                        text = stringResource(R.string.action_allow_full_access),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             }
         }
     }
