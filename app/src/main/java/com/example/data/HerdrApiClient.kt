@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -198,9 +199,14 @@ open class HerdrApiClient(
         tabId: String,
         text: String,
         overridePermissionMode: String? = null,
+        attachmentIds: List<String> = emptyList(),
     ): SendMessageResponse {
         val json = encodeHerdrJson(
-            SendMessageRequest(text = text, overridePermissionMode = overridePermissionMode),
+            SendMessageRequest(
+                text = text,
+                overridePermissionMode = overridePermissionMode,
+                attachments = attachmentIds.takeIf { it.isNotEmpty() },
+            ),
         )
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs/$tabId/messages")
@@ -210,18 +216,52 @@ open class HerdrApiClient(
         return executeJson(req)
     }
 
+    /** Stores an image on the VM for [tabId]; a message then refers to it by the returned id. */
+    open suspend fun uploadAttachment(
+        config: ConnectionConfig,
+        tabId: String,
+        bytes: ByteArray,
+        mimeType: String,
+    ): MessageAttachment {
+        val mediaType = mimeType.toMediaTypeOrNull() ?: "application/octet-stream".toMediaType()
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/tabs/$tabId/attachments")
+            .withAuth(config)
+            .post(bytes.toRequestBody(mediaType))
+            .build()
+        return executeJson<UploadAttachmentResponse>(req, logPayload = false).attachment
+    }
+
+    open suspend fun downloadAttachment(
+        config: ConnectionConfig,
+        tabId: String,
+        attachmentId: String,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/tabs/$tabId/attachments/$attachmentId")
+            .withAuth(config)
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}: ${resp.message}")
+            resp.body?.bytes() ?: throw IOException("Empty attachment response")
+        }
+    }
+
     open suspend fun interruptTab(
         config: ConnectionConfig,
         tabId: String,
         processQueue: Boolean = false,
         text: String? = null,
         overridePermissionMode: String? = null,
+        attachmentIds: List<String> = emptyList(),
     ): TabRecord? {
         val json = encodeHerdrJson(
             InterruptTabRequest(
                 processQueue = processQueue,
                 text = text?.trim()?.takeIf { it.isNotEmpty() },
                 overridePermissionMode = overridePermissionMode,
+                attachments = attachmentIds.takeIf { it.isNotEmpty() },
             ),
         )
         val req = Request.Builder()

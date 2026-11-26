@@ -278,6 +278,11 @@ class AgentsTermE2ETest {
         waitForText("Claude · projects")
         waitForTag("composer_input")
 
+        // This daemon predates image attachments (its /api/info does not offer them), so the
+        // composer must not offer an attach button that could never work.
+        waitForTag("composer_input")
+        assertTrue(composeRule.onAllNodesWithTag("attach_button").fetchSemanticsNodes().isEmpty())
+
         // Send a prompt and verify streamed reasoning, tool call, markdown text, and usage stats
         composeRule.onNodeWithTag("composer_input").performTextInput("Summarize the repo")
         composeRule.onNodeWithTag("send_button").performClick()

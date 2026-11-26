@@ -49,6 +49,7 @@ $HOME/.agents-term/                # mode 0700 (owner-only)
     ├── tabs.jsonl                 # current snapshot: 1 compact JSON object per open/closed tab
     └── <tab_id>/                  # per-tab folder; removed when closed tab expires
         ├── messages.json          # normalized AgentsTerm chat history for this tab
+        ├── attachments/           # mode 0700 — images sent from the app (att_<id>.<ext>, 0600)
         └── raw.jsonl              # optional raw CLI stdout/stderr stream & trajectory metadata
 ```
 

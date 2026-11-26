@@ -914,6 +914,7 @@ class HerdrRepository(
         tabId: String,
         text: String,
         overridePermissionMode: String? = null,
+        attachmentIds: List<String> = emptyList(),
     ): Result<Unit> {
         val cfg = _state.value.config
         debugRecorder?.record(
@@ -923,7 +924,7 @@ class HerdrRepository(
             payload = text.take(500),
         )
         return runCatching {
-            val resp = api.sendMessage(cfg, tabId, text, overridePermissionMode)
+            val resp = api.sendMessage(cfg, tabId, text, overridePermissionMode, attachmentIds)
             resp.tab?.let { updated -> _state.update { applyReplacedTab(it, updated) } }
             Unit
         }.onFailure { err ->
@@ -936,6 +937,7 @@ class HerdrRepository(
         processQueue: Boolean = false,
         text: String? = null,
         overridePermissionMode: String? = null,
+        attachmentIds: List<String> = emptyList(),
     ) {
         val cfg = _state.value.config
         debugRecorder?.record(
@@ -950,6 +952,7 @@ class HerdrRepository(
                 processQueue = processQueue,
                 text = text,
                 overridePermissionMode = overridePermissionMode,
+                attachmentIds = attachmentIds,
             )?.let { updated -> _state.update { applyReplacedTab(it, updated) } }
         }.onFailure { err -> showBanner(err.message ?: "Failed to interrupt") }
     }

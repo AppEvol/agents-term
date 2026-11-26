@@ -3,4 +3,8 @@
     <files-path
         name="debug_dumps"
         path="debug_dumps/" />
+    <!-- Photos taken from the chat composer, before they are uploaded to the VM. -->
+    <cache-path
+        name="camera_captures"
+        path="camera_captures/" />
 </paths>

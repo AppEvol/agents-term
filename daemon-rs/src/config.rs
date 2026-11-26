@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::attachments::{supported_mime_types, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES};
 use crate::models::get_cached_agent_models;
 
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -131,6 +132,11 @@ pub fn tab_dir(tab_id: &str) -> Option<PathBuf> {
 
 pub fn tab_messages_path(tab_id: &str) -> Option<PathBuf> {
     tab_dir(tab_id).map(|d| d.join("messages.json"))
+}
+
+/// Folder holding the images the app attached to a tab's messages.
+pub fn tab_attachments_dir(tab_id: &str) -> Option<PathBuf> {
+    tab_dir(tab_id).map(|d| d.join("attachments"))
 }
 
 pub fn live_debugging_doc_path() -> PathBuf {
@@ -524,6 +530,11 @@ pub fn build_server_info(bind_host: Option<&str>) -> Value {
         "defaultSystemPrompt": default_system_prompt(Some("default")),
         "defaultSystemPromptFullAccess": default_system_prompt(Some("full-access")),
         "agents": detect_available_agents(),
+        "attachments": {
+            "maxBytes": MAX_ATTACHMENT_BYTES,
+            "maxPerMessage": MAX_ATTACHMENTS_PER_MESSAGE,
+            "mimeTypes": supported_mime_types(),
+        },
     })
 }
 

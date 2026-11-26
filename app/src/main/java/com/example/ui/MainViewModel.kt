@@ -12,6 +12,7 @@ import com.example.data.AppStateReporter
 import com.example.data.AppStateSources
 import com.example.data.AppThemeId
 import com.example.data.AppUiController
+import com.example.data.AttachmentImageStore
 import com.example.data.BootstrapPhase
 import com.example.data.BootstrapUiState
 import com.example.data.ChatMessage
@@ -155,6 +156,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val usageController = AgentUsageController(repo = repo, scope = viewModelScope)
 
+    /** Images of sent messages, for the transcript, and images attached to unsent messages. */
+    val attachmentImages = AttachmentImageStore(application.cacheDir) { tabId, attachmentId ->
+        runCatching { api.downloadAttachment(state.value.config, tabId, attachmentId) }
+    }
+    val attachments = attachmentControllerFor(application, viewModelScope, attachmentImages, repo::showBanner) { tabId, bytes, mimeType ->
+        runCatching { api.uploadAttachment(state.value.config, tabId, bytes, mimeType) }
+    }
     private val _isRefreshingClosedTabs = MutableStateFlow(false)
     val isRefreshingClosedTabs: StateFlow<Boolean> = _isRefreshingClosedTabs.asStateFlow()
 
@@ -781,26 +789,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendMessage(text: String, overridePermissionMode: String? = null) {
         val tabId = state.value.activeTab?.id ?: return
+        val attachmentIds = attachments.takeReady(tabId).map { it.id }
+        if (text.isBlank() && attachmentIds.isEmpty()) return
         viewModelScope.launch {
-            repo.sendMessage(tabId, text, overridePermissionMode)
+            repo.sendMessage(tabId, text, overridePermissionMode, attachmentIds)
         }
     }
 
     fun retryLastUserPromptWithFullAccess() {
         val activeTab = state.value.activeTab ?: return
-        val lastUserText = state.value.activeMessages
-            .lastOrNull { it.role == "user" }
-            ?.text
-            ?: return
+        val lastUser = state.value.activeMessages.lastOrNull { it.role == "user" } ?: return
         viewModelScope.launch {
-            repo.sendMessage(activeTab.id, lastUserText, overridePermissionMode = "full-access")
+            repo.sendMessage(
+                activeTab.id,
+                lastUser.text,
+                overridePermissionMode = "full-access",
+                attachmentIds = lastUser.attachments.map { it.id },
+            )
         }
     }
 
     fun interruptActiveTab(processQueue: Boolean = false, text: String? = null) {
         val tabId = state.value.activeTab?.id ?: return
+        val attachmentIds = if (processQueue) attachments.takeReady(tabId).map { it.id } else emptyList()
         viewModelScope.launch {
-            repo.interruptTab(tabId, processQueue = processQueue, text = text)
+            repo.interruptTab(tabId, processQueue = processQueue, text = text, attachmentIds = attachmentIds)
         }
     }
 

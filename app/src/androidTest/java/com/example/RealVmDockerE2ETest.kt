@@ -1,23 +1,35 @@
 package com.example
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.os.ParcelFileDescriptor
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToString
+import androidx.core.content.FileProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.FixMethodOrder
@@ -27,6 +39,7 @@ import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
 import org.junit.runners.model.Statement
+import java.io.File
 
 /**
  * End-to-end instrumented tests connecting the real Android app on the Emulator to a real Linux
@@ -221,5 +234,96 @@ class RealVmDockerE2ETest {
             .performTextInput("$cliCmd --port $daemonPort state --pretty")
         composeRule.onNodeWithTag("send_button").performClick()
         waitForText("\"connectionState\": \"CONNECTED\"", substring = true, timeoutMs = 25_000L)
+    }
+
+    /** Puts a real PNG on the clipboard as a content URI, the way copying a screenshot does. */
+    private fun copyScreenshotToClipboard(name: String, color: Int): Int {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = File(File(context.cacheDir, "camera_captures").apply { mkdirs() }, name)
+        val bitmap = Bitmap.createBitmap(540, 960, Bitmap.Config.ARGB_8888).apply { eraseColor(color) }
+        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.debugfileprovider", file)
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newUri(context.contentResolver, "screenshot", uri))
+        }
+        return file.length().toInt()
+    }
+
+    private fun waitForReadyAttachments(count: Int) {
+        try {
+            composeRule.waitUntil(timeoutMillis = 30_000L) {
+                runCatching {
+                    composeRule.onAllNodesWithContentDescription("Attached image").fetchSemanticsNodes().size == count
+                }.getOrDefault(false)
+            }
+        } catch (e: Throwable) {
+            val tree = runCatching { composeRule.onRoot().printToString() }.getOrDefault("")
+            throw AssertionError("Timed out waiting for $count uploaded image(s): $tree", e)
+        }
+    }
+
+    @Test
+    fun test03_pastedImagesAreStoredOnTheVmShownInTheChatAndOpenedByTheAgent() {
+        bootstrapOverRealSsh()
+        createTab("claude", "Real Images")
+        waitForTag("attach_button")
+
+        // Paste two copied screenshots into the composer; each uploads to the VM straight away.
+        val firstSize = copyScreenshotToClipboard("e2e_shot_1.png", Color.rgb(20, 90, 200))
+        composeRule.onNodeWithTag("composer_input").performSemanticsAction(SemanticsActions.PasteText)
+        waitForReadyAttachments(1)
+        val secondSize = copyScreenshotToClipboard("e2e_shot_2.png", Color.rgb(200, 60, 20))
+        composeRule.onNodeWithTag("composer_input").performSemanticsAction(SemanticsActions.PasteText)
+        waitForReadyAttachments(2)
+
+        // One of them can be removed again before sending.
+        val pendingTags = composeRule.onAllNodesWithContentDescription("Attached image").fetchSemanticsNodes()
+            .map { it.config[SemanticsProperties.TestTag] }
+        composeRule.onNodeWithTag(pendingTags.last().replace("pending_attachment_", "remove_attachment_")).performClick()
+        waitForReadyAttachments(1)
+        composeRule.onNodeWithTag("composer_input").performSemanticsAction(SemanticsActions.PasteText)
+        waitForReadyAttachments(2)
+
+        composeRule.onNodeWithTag("composer_input").performTextInput("What is wrong in these?")
+        composeRule.onNodeWithTag("send_button").performClick()
+
+        // The transcript shows the text and both images; the composer is empty again.
+        waitForText("What is wrong in these?")
+        waitForTag("message_attachments")
+        composeRule.onNodeWithContentDescription("Sent image 1 of 2").assertExists()
+        composeRule.onNodeWithContentDescription("Sent image 2 of 2").assertExists()
+        assertTrue(composeRule.onAllNodesWithTag("pending_attachments_row").fetchSemanticsNodes().isEmpty())
+
+        // The agent CLI on the VM opened both files at the paths it was handed. Small
+        // screenshots are uploaded untouched, so the sizes it saw are the sizes that were pasted.
+        waitForText("Claude reply [sess=claude-sess-e2e-1", substring = true, timeoutMs = 20_000L)
+        waitForText(".png:$firstSize", substring = true)
+        waitForText(".png:$secondSize", substring = true)
+        assertTrue(composeRule.onAllNodesWithText("image-unreadable", substring = true).fetchSemanticsNodes().isEmpty())
+        assertTrue(
+            composeRule.onAllNodesWithText("image-outside-add-dir", substring = true).fetchSemanticsNodes().isEmpty(),
+        )
+
+        // Tapping a sent image opens it full size, downloaded back from the VM.
+        // Opened through its click action rather than a touch at screen coordinates: the list
+        // is still settling under the keyboard as the reply's footer arrives, and a touch aimed
+        // at where the thumbnail was a moment ago can miss it.
+        composeRule.onNodeWithContentDescription("Sent image 1 of 2")
+            .performSemanticsAction(SemanticsActions.OnClick)
+        waitForTag("attachment_viewer")
+        waitForTag("attachment_viewer_image")
+        composeRule.onNodeWithTag("attachment_viewer_close").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithTag("attachment_viewer").fetchSemanticsNodes().isEmpty()
+        }
+
+        // An image with no text at all is a complete message.
+        copyScreenshotToClipboard("e2e_shot_3.png", Color.rgb(30, 160, 60))
+        composeRule.onNodeWithTag("composer_input").performSemanticsAction(SemanticsActions.PasteText)
+        waitForReadyAttachments(1)
+        composeRule.onNodeWithTag("send_button").performClick()
+        waitForText("resumed=yes", substring = true, timeoutMs = 20_000L)
+        composeRule.onNodeWithContentDescription("Sent image 1 of 1").assertExists()
     }
 }

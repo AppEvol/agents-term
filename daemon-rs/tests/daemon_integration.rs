@@ -175,6 +175,91 @@ impl TestDaemon {
         (status, parsed)
     }
 
+    /// Sends a raw request body and returns the raw response body, for image up/downloads.
+    fn api_raw(
+        &self,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: Option<&[u8]>,
+    ) -> (u16, String, Vec<u8>) {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", self.port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        let mut req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n",
+            self.port
+        );
+        if let Some(token) = token {
+            req.push_str(&format!("Authorization: Bearer {token}\r\n"));
+        }
+        if let Some(bytes) = body {
+            req.push_str("Content-Type: application/octet-stream\r\n");
+            req.push_str(&format!("Content-Length: {}\r\n", bytes.len()));
+        }
+        req.push_str("\r\n");
+        stream.write_all(req.as_bytes()).unwrap();
+        if let Some(bytes) = body {
+            // The daemon may answer and close before reading an oversized body to the end.
+            let _ = stream.write_all(bytes);
+        }
+        let mut raw = Vec::new();
+        let _ = stream.read_to_end(&mut raw);
+        let split = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("HTTP response head");
+        let head = String::from_utf8_lossy(&raw[..split]).to_string();
+        let status: u16 = head
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        (status, head.to_ascii_lowercase(), raw[split + 4..].to_vec())
+    }
+
+    fn upload_image(&self, tab_id: &str, bytes: &[u8]) -> (u16, Value) {
+        let (status, _, body) = self.api_raw(
+            "POST",
+            &format!("/api/tabs/{tab_id}/attachments"),
+            Some(&self.token),
+            Some(bytes),
+        );
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
+
+    fn create_tab(&self, agent: &str, cwd: &Path) -> String {
+        let (st, created) = self.api(
+            "POST",
+            "/api/tabs",
+            Some(json!({ "agent": agent, "cwd": cwd.to_string_lossy() })),
+        );
+        assert_eq!(st, 200, "{created}");
+        created["tab"]["id"].as_str().unwrap().to_string()
+    }
+
+    fn wait_settled(&self, tab_id: &str, expected_msg_count: usize) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let (_, resp) = self.api("GET", &format!("/api/tabs/{tab_id}/messages"), None);
+            let count = resp["messages"].as_array().map(Vec::len).unwrap_or(0);
+            let status = resp["tab"]["status"].as_str().unwrap_or("").to_string();
+            if count >= expected_msg_count && status != "working" {
+                return resp;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Tab did not settle: status={status} msgs={count}"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     fn kill_sigkill(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -1120,5 +1205,384 @@ fn split_per_tab_storage_rewrites_only_dirty_tab_and_cleans_orphans() {
     assert!(rec_b.get("closedAt").is_none());
     assert!(tab_a_msgs.is_file());
 
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// A minimal valid-looking PNG: the signature followed by filler bytes.
+fn fake_png(fill: u8, len: usize) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.resize(len.max(bytes.len()), fill);
+    bytes
+}
+
+/// A fake `claude` that records its arguments and answers with one line of text. A prompt
+/// containing `SLOW_TURN` keeps the turn running long enough to queue messages behind it.
+fn write_fake_claude(fake_bin: &Path, args_log: &Path) {
+    fs::create_dir_all(fake_bin).unwrap();
+    write_exec(
+        &fake_bin.join("claude"),
+        &format!(
+            r#"#!/usr/bin/env sh
+printf '%s\n---\n' "$*" >> "{}"
+case "$*" in
+  *"SLOW_TURN"*) sleep 2 ;;
+esac
+printf '{{"type":"stream_event","session_id":"sess-att","event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"I see it."}}}}}}\n'
+"#,
+            args_log.display()
+        ),
+    );
+}
+
+#[test]
+fn image_attachments_are_validated_and_stored_privately_in_the_tab_folder() {
+    let home = make_temp_dir("agentsterm-rs-att-upload");
+    let daemon = TestDaemon::start(&home, None);
+
+    // The app reads the limits from /api/info, and hides the attach button without them.
+    let (st, info) = daemon.api("GET", "/api/info", None);
+    assert_eq!(st, 200);
+    assert_eq!(
+        info["attachments"]["maxBytes"].as_u64(),
+        Some(8 * 1024 * 1024)
+    );
+    assert_eq!(info["attachments"]["maxPerMessage"].as_u64(), Some(8));
+    assert!(info["attachments"]["mimeTypes"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("image/png")));
+
+    let tab_id = daemon.create_tab("claude", &home);
+    let png = fake_png(7, 4096);
+    let (st, uploaded) = daemon.upload_image(&tab_id, &png);
+    assert_eq!(st, 200, "{uploaded}");
+    let att = &uploaded["attachment"];
+    let att_id = att["id"].as_str().unwrap();
+    assert!(att_id.starts_with("att_"));
+    assert_eq!(att["mimeType"].as_str(), Some("image/png"));
+    assert_eq!(att["bytes"].as_u64(), Some(4096));
+
+    // Stored under ~/.agents-term/agents_tabs/<tabId>/attachments/, readable by the owner only.
+    let dir = home
+        .join(".agents-term")
+        .join("agents_tabs")
+        .join(&tab_id)
+        .join("attachments");
+    let stored = dir.join(format!("{att_id}.png"));
+    assert_eq!(
+        att["path"].as_str(),
+        Some(stored.to_string_lossy().as_ref())
+    );
+    assert_eq!(fs::read(&stored).unwrap(), png);
+    assert_eq!(fs::metadata(&stored).unwrap().mode() & 0o777, 0o600);
+    assert_eq!(fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
+
+    // The transcript downloads it back with the right type.
+    let path = format!("/api/tabs/{tab_id}/attachments/{att_id}");
+    let (st, head, body) = daemon.api_raw("GET", &path, Some(&daemon.token), None);
+    assert_eq!(st, 200);
+    assert!(head.contains("content-type: image/png"), "{head}");
+    assert_eq!(body, png);
+    let (st, _, _) = daemon.api_raw("GET", &path, None, None);
+    assert_eq!(st, 401, "downloads need the bearer token");
+    let (st, _, _) = daemon.api_raw("GET", &path, Some("wrong"), None);
+    assert_eq!(st, 401);
+    for missing in ["att_00", "att_..%2F..%2Fconfig", "config.json"] {
+        let (st, _, _) = daemon.api_raw(
+            "GET",
+            &format!("/api/tabs/{tab_id}/attachments/{missing}"),
+            Some(&daemon.token),
+            None,
+        );
+        assert_eq!(st, 404, "{missing}");
+    }
+
+    // A JPEG keeps its own type; the type is read from the bytes, not claimed by the client.
+    let (st, jpeg) = daemon.upload_image(&tab_id, b"\xff\xd8\xff\xe0JFIF-ish");
+    assert_eq!(st, 200);
+    assert_eq!(jpeg["attachment"]["mimeType"].as_str(), Some("image/jpeg"));
+    assert!(jpeg["attachment"]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with(".jpg"));
+
+    // Rejections.
+    let (st, err) = daemon.upload_image(&tab_id, b"#!/bin/sh\necho not an image\n");
+    assert_eq!(st, 415, "{err}");
+    assert!(err["error"]
+        .as_str()
+        .unwrap()
+        .contains("Unsupported image format"));
+    let (st, _) = daemon.upload_image(&tab_id, b"");
+    assert_eq!(st, 400);
+    let (st, err) = daemon.upload_image(&tab_id, &fake_png(1, 8 * 1024 * 1024 + 1));
+    assert_eq!(st, 413, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("8 MB"));
+    let (st, _) = daemon.upload_image(&tab_id, &fake_png(1, 8 * 1024 * 1024));
+    assert_eq!(st, 200, "an image of exactly the limit is accepted");
+    let (st, _) = daemon.upload_image("tab_missing", &png);
+    assert_eq!(st, 404);
+    let (st, _, _) = daemon.api_raw(
+        "POST",
+        &format!("/api/tabs/{tab_id}/attachments"),
+        None,
+        Some(&png),
+    );
+    assert_eq!(st, 401);
+
+    // Shell tabs run commands, so they take no images.
+    let shell_id = daemon.create_tab("shell", &home);
+    let (st, err) = daemon.upload_image(&shell_id, &png);
+    assert_eq!(st, 400, "{err}");
+    let (st, err) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{shell_id}/messages"),
+        Some(json!({ "text": "echo hi", "attachments": [att_id] })),
+    );
+    assert_eq!(st, 400, "an attachment of another tab is not found: {err}");
+
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn message_with_images_hands_the_file_paths_to_the_agent_and_survives_restart() {
+    let home = make_temp_dir("agentsterm-rs-att-send");
+    let fake_bin = home.join("fake-bin");
+    let args_log = home.join("claude-args.log");
+    write_fake_claude(&fake_bin, &args_log);
+
+    let daemon = TestDaemon::start(&home, Some(&fake_bin));
+    let tab_id = daemon.create_tab("claude", &home);
+    let messages_path = format!("/api/tabs/{tab_id}/messages");
+
+    // Old app builds send text only: no attachments field appears and the prompt is untouched.
+    let (st, sent) = daemon.api(
+        "POST",
+        &messages_path,
+        Some(json!({ "text": "PLAIN_TURN" })),
+    );
+    assert_eq!(st, 200);
+    assert!(sent["userMessage"].get("attachments").is_none());
+    daemon.wait_settled(&tab_id, 2);
+    let log = fs::read_to_string(&args_log).unwrap();
+    assert!(!log.contains("--add-dir"), "{log}");
+    assert!(!log.contains("attached"), "{log}");
+
+    let (_, first) = daemon.upload_image(&tab_id, &fake_png(1, 512));
+    let (_, second) = daemon.upload_image(&tab_id, &fake_png(2, 1024));
+    let first_id = first["attachment"]["id"].as_str().unwrap().to_string();
+    let second_id = second["attachment"]["id"].as_str().unwrap().to_string();
+    let first_path = first["attachment"]["path"].as_str().unwrap().to_string();
+    let second_path = second["attachment"]["path"].as_str().unwrap().to_string();
+
+    // Unknown ids are refused rather than silently dropped, and nothing is sent.
+    let (st, err) = daemon.api(
+        "POST",
+        &messages_path,
+        Some(json!({ "text": "look", "attachments": [first_id, "att_ffff"] })),
+    );
+    assert_eq!(st, 400, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("att_ffff"));
+    let too_many: Vec<String> = (0..9)
+        .map(|i| {
+            let (_, up) = daemon.upload_image(&tab_id, &fake_png(i, 64));
+            up["attachment"]["id"].as_str().unwrap().to_string()
+        })
+        .collect();
+    let (st, err) = daemon.api(
+        "POST",
+        &messages_path,
+        Some(json!({ "text": "look", "attachments": too_many })),
+    );
+    assert_eq!(st, 400, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("at most 8"));
+    let (_, unchanged) = daemon.api("GET", &messages_path, None);
+    assert_eq!(unchanged["messages"].as_array().unwrap().len(), 2);
+
+    // Text plus two images.
+    let (st, sent) = daemon.api(
+        "POST",
+        &messages_path,
+        Some(json!({ "text": "What is wrong in these?", "attachments": [first_id, second_id] })),
+    );
+    assert_eq!(st, 200, "{sent}");
+    let user_atts = sent["userMessage"]["attachments"].as_array().unwrap();
+    assert_eq!(user_atts.len(), 2);
+    assert_eq!(user_atts[0]["id"].as_str(), Some(first_id.as_str()));
+    assert_eq!(user_atts[1]["mimeType"].as_str(), Some("image/png"));
+    assert_eq!(
+        sent["userMessage"]["text"].as_str(),
+        Some("What is wrong in these?"),
+        "the transcript keeps the text the user typed, without the file paths"
+    );
+    daemon.wait_settled(&tab_id, 4);
+    let log = fs::read_to_string(&args_log).unwrap();
+    let turn = log.split("\n---\n").nth(1).unwrap();
+    assert!(turn.contains("What is wrong in these?"), "{turn}");
+    assert!(turn.contains(&format!("- {first_path}")), "{turn}");
+    assert!(turn.contains(&format!("- {second_path}")), "{turn}");
+    let att_dir = Path::new(&first_path).parent().unwrap();
+    assert!(
+        turn.contains(&format!("--add-dir={}", att_dir.display())),
+        "the agent is given read access to the attachment folder: {turn}"
+    );
+
+    // Images only, no text.
+    let (_, third) = daemon.upload_image(&tab_id, &fake_png(3, 256));
+    let third_id = third["attachment"]["id"].as_str().unwrap().to_string();
+    let third_path = third["attachment"]["path"].as_str().unwrap().to_string();
+    let (st, sent) = daemon.api(
+        "POST",
+        &messages_path,
+        Some(json!({ "text": "", "attachments": [third_id] })),
+    );
+    assert_eq!(st, 200, "{sent}");
+    assert_eq!(sent["userMessage"]["text"].as_str(), Some(""));
+    daemon.wait_settled(&tab_id, 6);
+    let log = fs::read_to_string(&args_log).unwrap();
+    let turn = log.split("\n---\n").nth(2).unwrap();
+    assert!(turn.contains("Look at the attached image."), "{turn}");
+    assert!(turn.contains(&format!("- {third_path}")), "{turn}");
+
+    // A message with neither text nor images is still refused.
+    let (st, _) = daemon.api(
+        "POST",
+        &messages_path,
+        Some(json!({ "text": "  ", "attachments": [] })),
+    );
+    assert_eq!(st, 400);
+
+    // After a daemon restart the transcript still lists the images and can download them.
+    drop(daemon);
+    let daemon = TestDaemon::start(&home, Some(&fake_bin));
+    let (st, reloaded) = daemon.api("GET", &messages_path, None);
+    assert_eq!(st, 200);
+    let msgs = reloaded["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 6);
+    assert_eq!(msgs[2]["attachments"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        msgs[4]["attachments"][0]["id"].as_str(),
+        Some(third_id.as_str())
+    );
+    let (st, _, body) = daemon.api_raw(
+        "GET",
+        &format!("/api/tabs/{tab_id}/attachments/{second_id}"),
+        Some(&daemon.token),
+        None,
+    );
+    assert_eq!(st, 200);
+    assert_eq!(body, fake_png(2, 1024));
+
+    // Closing the tab keeps its images (it can be revived); they go when the tab is purged.
+    let (st, _) = daemon.api("DELETE", &format!("/api/tabs/{tab_id}"), None);
+    assert_eq!(st, 200);
+    assert!(Path::new(&first_path).exists());
+    let (st, _) = daemon.api("POST", &format!("/api/tabs/closed/{tab_id}/revive"), None);
+    assert_eq!(st, 200);
+    let (st, _, _) = daemon.api_raw(
+        "GET",
+        &format!("/api/tabs/{tab_id}/attachments/{first_id}"),
+        Some(&daemon.token),
+        None,
+    );
+    assert_eq!(st, 200);
+
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn queued_messages_keep_their_images_and_removed_ones_delete_them() {
+    let home = make_temp_dir("agentsterm-rs-att-queue");
+    let fake_bin = home.join("fake-bin");
+    let args_log = home.join("claude-args.log");
+    write_fake_claude(&fake_bin, &args_log);
+
+    let daemon = TestDaemon::start(&home, Some(&fake_bin));
+    let tab_id = daemon.create_tab("claude", &home);
+    let messages_path = format!("/api/tabs/{tab_id}/messages");
+
+    let (st, _) = daemon.api("POST", &messages_path, Some(json!({ "text": "SLOW_TURN" })));
+    assert_eq!(st, 200);
+
+    let upload = |fill: u8| -> (String, String) {
+        let (st, up) = daemon.upload_image(&tab_id, &fake_png(fill, 128));
+        assert_eq!(st, 200);
+        (
+            up["attachment"]["id"].as_str().unwrap().to_string(),
+            up["attachment"]["path"].as_str().unwrap().to_string(),
+        )
+    };
+    let (dropped_id, dropped_path) = upload(1);
+    let (kept_id, kept_path) = upload(2);
+    let (image_only_id, image_only_path) = upload(3);
+
+    // While the agent is busy, messages with images are queued with their images.
+    let (st, queued) = daemon.api(
+        "POST",
+        &messages_path,
+        Some(json!({ "text": "never mind this one", "attachments": [dropped_id] })),
+    );
+    assert_eq!(st, 200, "{queued}");
+    assert_eq!(queued["queued"].as_bool(), Some(true));
+    let dropped_queue_id = queued["queuedMessage"]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        queued["queuedMessage"]["attachments"][0]["id"].as_str(),
+        Some(dropped_id.as_str())
+    );
+    let (st, _) = daemon.api(
+        "POST",
+        &messages_path,
+        Some(json!({ "text": "QUEUED_WITH_IMAGE", "attachments": [kept_id] })),
+    );
+    assert_eq!(st, 200);
+    let (st, queued) = daemon.api(
+        "POST",
+        &messages_path,
+        Some(json!({ "text": "", "attachments": [image_only_id] })),
+    );
+    assert_eq!(st, 200, "{queued}");
+    assert_eq!(queued["tab"]["queuedMessages"].as_array().unwrap().len(), 3);
+
+    // Removing a queued message deletes the images that will now never be sent.
+    assert!(Path::new(&dropped_path).exists());
+    let (st, removed) = daemon.api(
+        "DELETE",
+        &format!("/api/tabs/{tab_id}/queue/{dropped_queue_id}"),
+        None,
+    );
+    assert_eq!(st, 200);
+    assert_eq!(
+        removed["tab"]["queuedMessages"].as_array().unwrap().len(),
+        2
+    );
+    assert!(!Path::new(&dropped_path).exists());
+    assert!(Path::new(&kept_path).exists());
+
+    // When the running turn ends, the queue runs as one turn carrying every image.
+    let settled = daemon.wait_settled(&tab_id, 4);
+    assert!(settled["tab"]["queuedMessages"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let msgs = settled["messages"].as_array().unwrap();
+    assert_eq!(msgs[2]["role"].as_str(), Some("user"));
+    assert_eq!(msgs[2]["text"].as_str(), Some("QUEUED_WITH_IMAGE"));
+    let ids: Vec<&str> = msgs[2]["attachments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["id"].as_str())
+        .collect();
+    assert_eq!(ids, vec![kept_id.as_str(), image_only_id.as_str()]);
+    let log = fs::read_to_string(&args_log).unwrap();
+    let turn = log.split("\n---\n").nth(1).unwrap();
+    assert!(turn.contains("QUEUED_WITH_IMAGE"), "{turn}");
+    assert!(turn.contains(&format!("- {kept_path}")), "{turn}");
+    assert!(turn.contains(&format!("- {image_only_path}")), "{turn}");
+    assert!(!turn.contains(&dropped_path), "{turn}");
+
+    drop(daemon);
     let _ = fs::remove_dir_all(&home);
 }

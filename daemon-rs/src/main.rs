@@ -1,5 +1,6 @@
 mod app_cli;
 mod app_state;
+mod attachments;
 mod config;
 mod http_client;
 mod install;
