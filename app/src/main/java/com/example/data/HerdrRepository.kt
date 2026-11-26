@@ -443,16 +443,23 @@ private fun applySocketClosed(
     state: WorkspaceState,
     stayConnected: Boolean,
     isAuthFailure: Boolean,
+    isInForeground: Boolean,
     reason: String?,
 ): WorkspaceState {
     val nextState = when {
         !stayConnected -> ConnectionState.DISCONNECTED
         isAuthFailure -> ConnectionState.AUTH_ERROR
+        !isInForeground -> ConnectionState.DISCONNECTED
         else -> ConnectionState.ERROR
+    }
+    val nextError = if (nextState == ConnectionState.DISCONNECTED && stayConnected) {
+        null
+    } else {
+        reason ?: "Disconnected from VM"
     }
     return state.copy(
         connectionState = nextState,
-        connectionError = reason ?: "Disconnected from VM",
+        connectionError = nextError,
     )
 }
 
@@ -489,6 +496,10 @@ class HerdrRepository(
     private var reconnectAttempt = 0
     private var socketGeneration = 0L
     private var lastConnectAttemptMs = 0L
+
+    init {
+        api.isAppInForeground = { synchronized(socketLock) { isInForeground } }
+    }
 
     /** Answers app state inspection requests from the VM; null disables the feature entirely. */
     @Volatile
@@ -703,9 +714,17 @@ class HerdrRepository(
                 val shouldReconnect = synchronized(socketLock) {
                     if (generation != socketGeneration) return@openWebSocket
                     webSocket = null
-                    val isAuthFailure = httpStatusCode == HTTP_UNAUTHORIZED
+                    val isAuthFailure = isAuthStatusCode(httpStatusCode)
                     val stayConnected = shouldStayConnected
-                    _state.update { applySocketClosed(it, stayConnected, isAuthFailure, reason) }
+                    _state.update {
+                        applySocketClosed(
+                            state = it,
+                            stayConnected = stayConnected,
+                            isAuthFailure = isAuthFailure,
+                            isInForeground = isInForeground,
+                            reason = reason,
+                        )
+                    }
                     stayConnected && !isAuthFailure && isInForeground
                 }
                 if (shouldReconnect) {
