@@ -186,6 +186,7 @@ fun ConnectScreen(
     onConsumedPendingPairing: () -> Unit,
     onConsumedPendingSshAutofill: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
+    preferSshMode: Boolean = false,
     tailscaleStatus: TailscaleStatus? = rememberTailscaleStatus(),
 ) {
     if (canCancel) {
@@ -209,15 +210,23 @@ fun ConnectScreen(
         mutableStateOf(
             when {
                 pendingSshAutofill != null -> ConnectMode.SSH_BOOTSTRAP
-                initialConfig.isValid || pendingPairing != null -> ConnectMode.DIRECT_URI
+                pendingPairing != null -> ConnectMode.DIRECT_URI
+                preferSshMode -> ConnectMode.SSH_BOOTSTRAP
+                initialConfig.isValid -> ConnectMode.DIRECT_URI
                 else -> ConnectMode.SSH_BOOTSTRAP
             },
         )
     }
 
     // Direct / Pairing URI state
-    var host by remember(initialConfig) { mutableStateOf(initialConfig.host) }
-    var portText by remember(initialConfig) { mutableStateOf(initialConfig.port.toString()) }
+    var host by remember(initialConfig, sshProfile) {
+        mutableStateOf(initialConfig.host.ifBlank { sshProfile.host })
+    }
+    var portText by remember(initialConfig, sshProfile) {
+        mutableStateOf(
+            (if (initialConfig.isValid) initialConfig.port else sshProfile.daemonPort).toString(),
+        )
+    }
     var token by remember(initialConfig) { mutableStateOf(initialConfig.token) }
     var showToken by remember { mutableStateOf(false) }
     var pasteFeedback by remember { mutableStateOf<String?>(null) }

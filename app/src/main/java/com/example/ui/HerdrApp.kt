@@ -36,6 +36,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Hub
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
@@ -206,6 +207,7 @@ fun HerdrApp(viewModel: MainViewModel) {
             onConsumedPendingPairing = { viewModel.clearPendingPairingConfig() },
             onConsumedPendingSshAutofill = { viewModel.clearPendingSshAutofill() },
             onOpenAppSettings = { viewModel.openAppSettings() },
+            preferSshMode = state.connectionState == ConnectionState.AUTH_ERROR && sshProfile.username.isNotBlank(),
         )
         return
     }
@@ -1208,13 +1210,14 @@ internal fun WorkspaceScaffold(
                     )
                 }
 
-                // Connection warning strip when offline or reconnecting
+                // Connection warning strip when offline, auth-rejected, or reconnecting
                 if (state.connectionState != ConnectionState.CONNECTED) {
+                    val isAuthError = state.connectionState == ConnectionState.AUTH_ERROR
                     Surface(
-                        color = if (state.connectionState == ConnectionState.CONNECTING) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            AppTheme.colors.warning.copy(alpha = 0.2f)
+                        color = when (state.connectionState) {
+                            ConnectionState.CONNECTING -> MaterialTheme.colorScheme.primaryContainer
+                            ConnectionState.AUTH_ERROR -> MaterialTheme.colorScheme.errorContainer
+                            else -> AppTheme.colors.warning.copy(alpha = 0.2f)
                         },
                         modifier = Modifier.fillMaxWidth().testTag("connection_banner"),
                     ) {
@@ -1226,7 +1229,7 @@ internal fun WorkspaceScaffold(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.WifiOff,
+                                imageVector = if (isAuthError) Icons.Rounded.Lock else Icons.Rounded.WifiOff,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
                             )
@@ -1234,6 +1237,9 @@ internal fun WorkspaceScaffold(
                                 text = when (state.connectionState) {
                                     ConnectionState.CONNECTING ->
                                         stringResource(R.string.status_connecting_to, state.config.host)
+
+                                    ConnectionState.AUTH_ERROR ->
+                                        stringResource(R.string.status_auth_error)
 
                                     else ->
                                         state.connectionError
@@ -1244,7 +1250,14 @@ internal fun WorkspaceScaffold(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
-                            if (state.connectionState != ConnectionState.CONNECTING) {
+                            if (isAuthError) {
+                                ThemedTextButton(
+                                    onClick = onOpenSettings,
+                                    modifier = Modifier.testTag("banner_repair_button"),
+                                ) {
+                                    Text(stringResource(R.string.action_repair_connection))
+                                }
+                            } else if (state.connectionState != ConnectionState.CONNECTING) {
                                 IconButton(
                                     onClick = onReconnect,
                                     modifier = Modifier.testTag("banner_reconnect_button"),
@@ -1285,12 +1298,13 @@ internal fun WorkspaceScaffold(
     ) { innerPadding ->
         if (activeTab == null) {
             NoTabsPlaceholder(
-                connected = state.connectionState == ConnectionState.CONNECTED,
+                connectionState = state.connectionState,
                 hostname = state.serverInfo?.hostname?.ifBlank { state.config.host }
                     ?: state.config.host,
                 closedTabCount = state.closedTabs.size,
                 onCreateTab = onNewTab,
                 onOpenRecentlyClosed = onOpenRecentlyClosed,
+                onOpenSettings = onOpenSettings,
                 modifier = Modifier.padding(innerPadding),
             )
         } else {
@@ -1754,13 +1768,16 @@ private fun QuickTabItem(
 
 @Composable
 private fun NoTabsPlaceholder(
-    connected: Boolean,
+    connectionState: ConnectionState,
     hostname: String,
     onCreateTab: () -> Unit,
     modifier: Modifier = Modifier,
     closedTabCount: Int = 0,
     onOpenRecentlyClosed: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
 ) {
+    val connected = connectionState == ConnectionState.CONNECTED
+    val isAuthError = connectionState == ConnectionState.AUTH_ERROR
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1770,22 +1787,30 @@ private fun NoTabsPlaceholder(
     ) {
         Surface(
             shape = themedCorner(18.dp),
-            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+            color = if (isAuthError) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+            },
             modifier = Modifier.size(64.dp),
         ) {
             Icon(
-                imageVector = Icons.Rounded.Hub,
+                imageVector = if (isAuthError) Icons.Rounded.Lock else Icons.Rounded.Hub,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = if (isAuthError) {
+                    MaterialTheme.colorScheme.onErrorContainer
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
                 modifier = Modifier.padding(16.dp),
             )
         }
         Spacer(Modifier.height(16.dp))
         Text(
-            text = if (connected) {
-                stringResource(R.string.status_connected_to, hostname)
-            } else {
-                stringResource(R.string.status_connecting_to, hostname)
+            text = when (connectionState) {
+                ConnectionState.CONNECTED -> stringResource(R.string.status_connected_to, hostname)
+                ConnectionState.AUTH_ERROR -> stringResource(R.string.status_auth_required_title, hostname)
+                else -> stringResource(R.string.status_connecting_to, hostname)
             },
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold,
@@ -1793,23 +1818,41 @@ private fun NoTabsPlaceholder(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = stringResource(R.string.empty_workspace_description),
+            text = if (isAuthError) {
+                stringResource(R.string.empty_workspace_auth_error_description)
+            } else {
+                stringResource(R.string.empty_workspace_description)
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(22.dp))
-        ThemedButton(
-            onClick = onCreateTab,
-            enabled = connected,
-            shape = themedCorner(14.dp),
-            modifier = Modifier
-                .height(50.dp)
-                .testTag("empty_new_tab_button"),
-        ) {
-            Icon(Icons.Rounded.Add, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.action_new_tab))
+        if (isAuthError) {
+            ThemedButton(
+                onClick = onOpenSettings,
+                shape = themedCorner(14.dp),
+                modifier = Modifier
+                    .height(50.dp)
+                    .testTag("empty_repair_button"),
+            ) {
+                Icon(Icons.Rounded.Lock, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.action_repair_vm))
+            }
+        } else {
+            ThemedButton(
+                onClick = onCreateTab,
+                enabled = connected,
+                shape = themedCorner(14.dp),
+                modifier = Modifier
+                    .height(50.dp)
+                    .testTag("empty_new_tab_button"),
+            ) {
+                Icon(Icons.Rounded.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.action_new_tab))
+            }
         }
         if (closedTabCount > 0) {
             Spacer(Modifier.height(10.dp))

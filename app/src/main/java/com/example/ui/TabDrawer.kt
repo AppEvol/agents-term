@@ -142,7 +142,7 @@ fun TabSidebarBody(
                 val connColor = when (state.connectionState) {
                     ConnectionState.CONNECTED -> header.semantic.success
                     ConnectionState.CONNECTING -> header.semantic.info
-                    ConnectionState.ERROR -> header.semantic.danger
+                    ConnectionState.ERROR, ConnectionState.AUTH_ERROR -> header.semantic.danger
                     ConnectionState.DISCONNECTED -> header.semantic.idle
                 }
                 Box(

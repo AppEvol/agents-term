@@ -201,9 +201,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repo.initializeAutoConnect()
     }
 
-    fun onForeground() {
-        debugRecorder.record("lifecycle", "on_foreground", "App resumed to foreground")
-        repo.ensureConnectedOnForeground()
+    fun onForegroundChanged(inForeground: Boolean) {
+        if (inForeground) {
+            debugRecorder.record("lifecycle", "on_foreground", "App resumed to foreground")
+            repo.ensureConnectedOnForeground()
+        } else {
+            debugRecorder.record("lifecycle", "on_background", "App moved to background")
+            repo.onBackground()
+        }
     }
 
     override fun onCleared() {
