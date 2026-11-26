@@ -5,6 +5,10 @@ private val CODE_FENCE_RE = Regex("```[^\\n]*\\n?(.*?)```", setOf(RegexOption.DO
 private val MARKDOWN_LINK_RE = Regex("\\[([^\\]]+)]\\([^)]+\\)")
 private val MARKDOWN_LINE_PREFIX_RE = Regex("^\\s*(?:#{1,6}\\s+|>\\s+|[-*+]\\s+)")
 private val TASK_SUMMARY_WRAPPER_RE = Regex("</?tab_task_summary>", RegexOption.IGNORE_CASE)
+private val LEADING_TASK_SUMMARY_TAG_RE = Regex(
+    "^\\s*<tab_task_summary>.*?</tab_task_summary>\\s*",
+    setOf(RegexOption.DOT_MATCHES_ALL),
+)
 private val MODEL_SLASH_RE = Regex("^/model(?:\\s|$)", RegexOption.IGNORE_CASE)
 private val LEADING_CD_RE = Regex(
     """^\s*cd(?:\s+(?:-[LP]|--))?\s+(?:"[^"]*"|'[^']*'|(?:\\.|[^\s;&|\n])+)\s*(?:&&|;|\r?\n)\s*""",
@@ -96,8 +100,16 @@ fun formatToolRunSummary(toolCalls: List<ToolCallItem>): String {
     return parts.joinToString(" · ")
 }
 
+/**
+ * Removes a task summary tag that opens assistant text. The daemon strips it while streaming, but
+ * messages saved by daemons that only did so on a tab's first turn still carry it.
+ */
+fun stripLeadingTaskSummaryTag(text: String): String = LEADING_TASK_SUMMARY_TAG_RE.replaceFirst(text, "")
+
+private fun cleanAssistantText(text: String): String = stripLeadingTaskSummaryTag(stripWorkDoneToken(text))
+
 fun buildAssistantDisplayBlocks(message: ChatMessage): List<AssistantDisplayBlock> {
-    val cleanMessageText = stripWorkDoneToken(message.text)
+    val cleanMessageText = cleanAssistantText(message.text)
     if (message.segments.isEmpty()) {
         val blocks = mutableListOf<AssistantDisplayBlock>()
         if (message.toolCalls.isNotEmpty()) {
@@ -145,7 +157,7 @@ fun buildAssistantDisplayBlocks(message: ChatMessage): List<AssistantDisplayBloc
             }
 
             "text" -> {
-                val text = stripWorkDoneToken(seg.text.orEmpty())
+                val text = cleanAssistantText(seg.text.orEmpty())
                 if (text.isNotBlank()) {
                     flushTools()
                     addText(text)

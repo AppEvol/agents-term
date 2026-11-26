@@ -659,6 +659,14 @@ impl AgentRunner {
                 .insert(msg_id.clone(), TaskSummaryStreamFilter::new());
             pad_first_prompt_for_task_summary(&agent_prompt)
         } else {
+            if is_coding_agent {
+                // The first prompt's summary request stays in the agent's context, so later
+                // replies can repeat the tag; strip it there too.
+                self.summary_filters
+                    .lock()
+                    .unwrap()
+                    .insert(msg_id.clone(), TaskSummaryStreamFilter::strip_only());
+            }
             agent_prompt
         };
 
