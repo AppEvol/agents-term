@@ -38,9 +38,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -423,6 +423,7 @@ fun ChatWorkspace(
     onRetryFullAccess: () -> Unit,
     modifier: Modifier = Modifier,
     attachments: ComposerAttachments? = null,
+    draft: TextFieldState = key(tab.id) { rememberTextFieldState() },
 ) {
     val listState = rememberSaveable(tab.id, saver = LazyListState.Saver) {
         LazyListState()
@@ -451,7 +452,6 @@ fun ChatWorkspace(
     SideEffect {
         markdownCache.flushPending(messages.mapTo(HashSet(messages.size)) { it.id })
     }
-    var draft by rememberSaveable(tab.id) { mutableStateOf("") }
     val isWorking = tab.status == "working"
     val latestMessages by rememberUpdatedState(messages)
     val latestFeedItemCount by rememberUpdatedState(feedItems.size)
@@ -607,7 +607,7 @@ fun ChatWorkspace(
                         if (isConnected && !isWorking) {
                             onSendMessage(prompt)
                         } else {
-                            draft = prompt
+                            draft.setTextAndPlaceCursorAtEnd(prompt)
                         }
                     },
                 )
@@ -650,7 +650,6 @@ fun ChatWorkspace(
 
         ChatComposer(
             draft = draft,
-            onDraftChange = { draft = it },
             placeholder = when {
                 isWorking && tab.agent == "shell" ->
                     stringResource(R.string.composer_queue_shell_placeholder)
@@ -673,9 +672,9 @@ fun ChatWorkspace(
             onOpenModelPicker = onOpenModelPicker,
             attachments = attachments,
             onSend = {
-                val text = draft.trim()
+                val text = draft.text.toString().trim()
                 if (text.isNotEmpty() || attachments?.hasReady == true) {
-                    draft = ""
+                    draft.setTextAndPlaceCursorAtEnd("")
                     autoScrollPinned = true
                     sendGeneration += 1
                     onSendMessage(text)
@@ -683,7 +682,7 @@ fun ChatWorkspace(
             },
             onForceInterrupt = { draftText ->
                 if (!draftText.isNullOrBlank()) {
-                    draft = ""
+                    draft.setTextAndPlaceCursorAtEnd("")
                 }
                 onForceInterrupt(draftText)
             },
@@ -1433,38 +1432,11 @@ private fun BlockedPermissionCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ComposerTextField(
-    draft: String,
-    onDraftChange: (String) -> Unit,
+    draft: TextFieldState,
     placeholder: String,
     onImages: ((List<Uri>) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    val fieldState = remember { TextFieldState(draft) }
-    val currentOnDraftChange by rememberUpdatedState(onDraftChange)
-    // The last text the field itself reported. A draft that differs from it was changed from
-    // outside (cleared after sending, or another tab's draft) and has to be put into the field;
-    // one that matches is only the field's own edit coming back and must not undo newer typing.
-    var lastReported by remember { mutableStateOf(draft) }
-    val report: (String) -> Unit = { typed ->
-        if (typed != lastReported) {
-            lastReported = typed
-            currentOnDraftChange(typed)
-        }
-    }
-    // Every edit is reported as it happens, so the send button never acts on an older draft
-    // than what the field shows. This changes nothing in the text; it only observes it.
-    val reportEdits = remember { InputTransformation { report(asCharSequence().toString()) } }
-    // Changes that bypass the input path (such as undo) are picked up here, a moment later.
-    LaunchedEffect(fieldState) {
-        snapshotFlow { fieldState.text.toString() }.collect { typed -> report(typed) }
-    }
-    LaunchedEffect(draft) {
-        if (draft != lastReported) {
-            lastReported = draft
-            fieldState.setTextAndPlaceCursorAtEnd(draft)
-        }
-    }
-
     val interactionSource = remember { MutableInteractionSource() }
     val colors = TextFieldDefaults.colors(
         focusedContainerColor = Color.Transparent,
@@ -1480,8 +1452,7 @@ private fun ComposerTextField(
         Modifier
     }
     BasicTextField(
-        state = fieldState,
-        inputTransformation = reportEdits,
+        state = draft,
         textStyle = LocalTextStyle.current.merge(color = MaterialTheme.colorScheme.onSurface),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
@@ -1489,7 +1460,7 @@ private fun ComposerTextField(
         interactionSource = interactionSource,
         decorator = { innerTextField ->
             TextFieldDefaults.DecorationBox(
-                value = fieldState.text.toString(),
+                value = draft.text.toString(),
                 innerTextField = innerTextField,
                 enabled = true,
                 singleLine = false,
@@ -1631,8 +1602,7 @@ private fun QueuedMessagesTray(
 
 @Composable
 private fun ChatComposer(
-    draft: String,
-    onDraftChange: (String) -> Unit,
+    draft: TextFieldState,
     placeholder: String,
     isWorking: Boolean,
     isConnected: Boolean,
@@ -1673,7 +1643,7 @@ private fun ChatComposer(
     val currentDraft by rememberUpdatedState(draft)
     // There is something to send once there is text or an uploaded image. Sending waits for
     // images that are still uploading, so a message never leaves without one of its images.
-    val hasContent = (draft.isNotBlank() || attachments?.hasReady == true) && attachments?.isUploading != true
+    val hasContent = (draft.text.isNotBlank() || attachments?.hasReady == true) && attachments?.isUploading != true
     val currentHasContent by rememberUpdatedState(hasContent)
     val currentHasQueued by rememberUpdatedState(queuedMessages.isNotEmpty())
     val currentOnSend by rememberUpdatedState(onSend)
@@ -1857,7 +1827,6 @@ private fun ChatComposer(
 
                         ComposerTextField(
                             draft = draft,
-                            onDraftChange = onDraftChange,
                             placeholder = if (isConnected) {
                                 placeholder
                             } else {
@@ -1942,7 +1911,7 @@ private fun ChatComposer(
                                         }
                                         if (isWorking) {
                                             onLongClick(label = holdActionLabel) {
-                                                val textToInclude = currentDraft.trim().takeIf { it.isNotEmpty() }
+                                                val textToInclude = currentDraft.text.toString().trim().takeIf { it.isNotEmpty() }
                                                 currentOnForceInterrupt(textToInclude)
                                                 true
                                             }
@@ -2000,7 +1969,7 @@ private fun ChatComposer(
                                         when (releasedBeforeTimeout) {
                                             null -> {
                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                val textToInclude = currentDraft.trim().takeIf { it.isNotEmpty() }
+                                                val textToInclude = currentDraft.text.toString().trim().takeIf { it.isNotEmpty() }
                                                 currentOnForceInterrupt(textToInclude)
                                                 waitForUpOrCancellation()
                                             }
