@@ -658,6 +658,45 @@ class ModelsAndStateTest {
     }
 
     @Test
+    fun assistantDisplayBlocksHideLeadingTaskSummaryTag() {
+        val leaked = "<tab_task_summary>Retry the publish step.</tab_task_summary>\nI'll check GitHub access."
+        val tool = ToolCallItem(id = "t1", name = "Bash", status = "done")
+        val segmented = ChatMessage(
+            id = "a1",
+            tabId = "tab_1",
+            role = "assistant",
+            text = "$leaked\n\nPR is open.",
+            toolCalls = listOf(tool),
+            segments = listOf(
+                MessageSegment(type = "text", text = leaked),
+                MessageSegment(type = "tool", toolCallId = "t1"),
+                MessageSegment(type = "text", text = "PR is open."),
+            ),
+        )
+        assertEquals(
+            listOf(
+                AssistantDisplayBlock.TextBlock("I'll check GitHub access."),
+                AssistantDisplayBlock.ToolRunBlock(listOf(tool)),
+                AssistantDisplayBlock.TextBlock("PR is open."),
+            ),
+            buildAssistantDisplayBlocks(segmented),
+        )
+
+        val legacy = ChatMessage(id = "a2", tabId = "tab_1", role = "assistant", text = leaked)
+        assertEquals(
+            listOf(AssistantDisplayBlock.TextBlock("I'll check GitHub access.")),
+            buildAssistantDisplayBlocks(legacy),
+        )
+
+        // A tag quoted later in the text is part of the reply and stays.
+        val quoted = "The `<tab_task_summary>x</tab_task_summary>` tag leaked."
+        assertEquals(
+            listOf(AssistantDisplayBlock.TextBlock(quoted)),
+            buildAssistantDisplayBlocks(legacy.copy(text = quoted)),
+        )
+    }
+
+    @Test
     fun reduceWorkspaceEventBuildsSegmentsLiveAndPreservesAcrossLegacyUpdate() {
         val tab = TabRecord("tab_1", "Claude · app", "claude", "/home/ned/app", status = "working")
         var state = reduceWorkspaceEvent(
