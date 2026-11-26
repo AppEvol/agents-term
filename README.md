@@ -20,18 +20,17 @@ Follow these steps to compile, test, and package the Android APK from this repos
   - `platform-tools` (for `adb`)
 - **Gradle 9.3.1+** on `PATH` (this repository uses `gradle/wrapper/gradle-wrapper.properties` pinned to `9.3.1` without committing `gradlew` / `gradle-wrapper.jar`).
 
-> **Important:** Do **not** commit a `local.properties` file or modify `signingConfigs` in `app/build.gradle.kts`. Set `ANDROID_SDK_ROOT` via the environment instead.
+> **Important:** Do **not** commit `local.properties` or any `*.keystore` files. Set `ANDROID_SDK_ROOT` via the environment instead.
 
-### Step 1: Ensure `debug.keystore` Exists
-`app/build.gradle.kts` signs debug builds using `${rootDir}/debug.keystore`. On a fresh clone, decode it from the committed base64 archive before running Gradle:
+### Debug Signing Keystore
+`app/build.gradle.kts` signs debug builds using the first available keystore:
+1. `${rootDir}/debug.keystore` (used by CI when decoding `DEBUG_KEYSTORE_BASE64`, or if you place a keystore in your checkout).
+2. The main checkout's `debug.keystore` when building from a linked `git worktree`.
+3. AGP's default debug signing config (`~/.android/debug.keystore`, generated automatically if missing).
 
-```bash
-if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
-  base64 -d debug.keystore.base64 > debug.keystore
-fi
-```
+Fresh clones and git worktrees therefore build out of the box with no manual keystore setup.
 
-### Step 2: Run Unit Tests
+### Step 1: Run Unit Tests
 Verify the protocol models, pairing URI parser, WebSocket state reducer, and SSH bootstrap command builder:
 
 ```bash
@@ -47,7 +46,7 @@ scripts/static-checks.sh --fix    # apply automatic fixes, then check
 gradle :app:lintDebug             # Android Lint (needs the Android SDK)
 ```
 
-### Step 3: Build the Debug APK
+### Step 2: Build the Debug APK
 ```bash
 gradle :app:assembleDebug
 ```
@@ -57,7 +56,7 @@ The compiled debug APK is written to:
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### Step 4 (Optional): Build a Signed Release APK / AAB
+### Step 3 (Optional): Build a Signed Release APK / AAB
 Release builds read signing credentials from environment variables (`app/build.gradle.kts`):
 
 ```bash
@@ -69,7 +68,7 @@ gradle :app:assembleRelease   # -> app/build/outputs/apk/release/app-release.apk
 gradle :app:bundleRelease     # -> app/build/outputs/bundle/release/app-release.aab
 ```
 
-### Step 5: Install onto an Android Device
+### Step 4: Install onto an Android Device
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
