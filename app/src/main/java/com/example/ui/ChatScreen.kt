@@ -1449,50 +1449,56 @@ private fun ComposerTextField(
     onImages: ((List<Uri>) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val colors = TextFieldDefaults.colors(
-        focusedContainerColor = Color.Transparent,
-        unfocusedContainerColor = Color.Transparent,
-        disabledContainerColor = Color.Transparent,
-        focusedIndicatorColor = Color.Transparent,
-        unfocusedIndicatorColor = Color.Transparent,
-    )
-    val currentOnImages by rememberUpdatedState(onImages)
-    val imageModifier = if (onImages != null) {
-        Modifier.receiveImages { uris -> currentOnImages?.invoke(uris) }
-    } else {
-        Modifier
+    // Key the text field on its TextFieldState so switching, creating, or closing a tab disposes
+    // the old IME input session cleanly. Reusing a focused BasicTextField across states while a
+    // bottom sheet or popup holds window focus leaves Compose 1.8's input session bound to the
+    // previous tab's state, causing typed text on the new tab to disappear into the old draft.
+    key(draft) {
+        val interactionSource = remember { MutableInteractionSource() }
+        val colors = TextFieldDefaults.colors(
+            focusedContainerColor = Color.Transparent,
+            unfocusedContainerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent,
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+        )
+        val currentOnImages by rememberUpdatedState(onImages)
+        val imageModifier = if (onImages != null) {
+            Modifier.receiveImages { uris -> currentOnImages?.invoke(uris) }
+        } else {
+            Modifier
+        }
+        BasicTextField(
+            state = draft,
+            textStyle = LocalTextStyle.current.merge(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+            interactionSource = interactionSource,
+            decorator = { innerTextField ->
+                TextFieldDefaults.DecorationBox(
+                    value = draft.text.toString(),
+                    innerTextField = innerTextField,
+                    enabled = true,
+                    singleLine = false,
+                    visualTransformation = VisualTransformation.None,
+                    interactionSource = interactionSource,
+                    placeholder = {
+                        Text(
+                            text = placeholder,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    colors = colors,
+                )
+            },
+            modifier = modifier
+                .defaultMinSize(minHeight = TextFieldDefaults.MinHeight)
+                .then(imageModifier)
+                .testTag("composer_input"),
+        )
     }
-    BasicTextField(
-        state = draft,
-        textStyle = LocalTextStyle.current.merge(color = MaterialTheme.colorScheme.onSurface),
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
-        interactionSource = interactionSource,
-        decorator = { innerTextField ->
-            TextFieldDefaults.DecorationBox(
-                value = draft.text.toString(),
-                innerTextField = innerTextField,
-                enabled = true,
-                singleLine = false,
-                visualTransformation = VisualTransformation.None,
-                interactionSource = interactionSource,
-                placeholder = {
-                    Text(
-                        text = placeholder,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-                colors = colors,
-            )
-        },
-        modifier = modifier
-            .defaultMinSize(minHeight = TextFieldDefaults.MinHeight)
-            .then(imageModifier)
-            .testTag("composer_input"),
-    )
 }
 
 /** What the queue shows for a message: its text, with the number of images it carries. */
