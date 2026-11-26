@@ -20,7 +20,7 @@
 
 - Always do your work in your own git worktree on a dedicated work branch. Multiple agents may work in this repository on the same machine at the same time, and separate worktrees keep their changes from conflicting.
 - `main` is protected and requires a pull request and passing required CI checks (including for simple changes). Do not push directly to `origin/main` or merge locally into `main` and push `main`.
-- Push your work branch to `origin`, open a pull request targeting `main`, keep the branch up to date with `main` if needed, and merge the pull request once all required CI checks pass.
+- Push your work branch to `origin`, open a pull request targeting `main`, and once all required CI checks pass, add it to the merge queue with `gh pr merge` (or the **Merge when ready** button). The queue reruns CI on your change combined with `main` and the pull requests ahead of it, then merges it. You do not need to rebase onto `main` unless there is a conflict. If the queue run fails, the pull request is removed from the queue: fix it and queue it again.
 - After the pull request is merged into `main` and the work is finished, clean up your local worktree and delete the merged local branch (e.g., `git worktree remove <worktree-path>` and `git branch -d <branch>`) so stale worktrees do not pile up.
 
 ## Testing & CI
@@ -63,12 +63,12 @@
 
 - While executing tasks, if you hit surprises, friction, or gotchas that trip up or slow down execution, file a bug in this repository with the `agent-productivity` label (e.g., `gh issue create --label bug --label agent-productivity ...`) and note the `#agent-productivity` category.
 - Check existing issues first (`gh issue list --label agent-productivity` or `gh issue list --search "..."`) to avoid filing duplicates.
-- If a matching issue already exists, do not open a new one—react to it instead to signal-boost it (e.g., `gh api repos/nedn/agents-term/issues/<number>/reactions -f content=+1`).
+- If a matching issue already exists, do not open a new one—react to it instead to signal-boost it (e.g., `gh api repos/AppEvol/agents-term/issues/<number>/reactions -f content=+1`).
 
 ## Feature Change Logs (`docs/features_logs/`)
 
 - Record notable feature changes (added, modified, removed) in `docs/features_logs/` so future retrospectives can easily track how the product evolved.
 - Start a new Markdown file each week, named with the first date of the week (Monday, `YYYY-MM-DD.md`, e.g., `docs/features_logs/2026-11-23.md`).
 - Organize each doc with concise bullet points so entries stay brief and scannable.
-- When a feature change is implemented via a branch merge, include a link to the merge commit (e.g., `[<short-sha>](https://github.com/nedn/agents-term/commit/<sha>)`).
+- When a feature change is implemented via a branch merge, include a link to the merge commit (e.g., `[<short-sha>](https://github.com/AppEvol/agents-term/commit/<sha>)`).
 
