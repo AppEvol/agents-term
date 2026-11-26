@@ -306,7 +306,12 @@ class RealVmDockerE2ETest {
         )
 
         // Tapping a sent image opens it full size, downloaded back from the VM.
-        composeRule.onNodeWithContentDescription("Sent image 1 of 2").performClick()
+        // Opened through its click action rather than a touch at screen coordinates: the list
+        // is still settling under the keyboard as the reply's footer arrives, and a touch aimed
+        // at where the thumbnail was a moment ago can miss it.
+        composeRule.onNodeWithContentDescription("Sent image 1 of 2")
+            .performSemanticsAction(SemanticsActions.OnClick)
+        waitForTag("attachment_viewer")
         waitForTag("attachment_viewer_image")
         composeRule.onNodeWithTag("attachment_viewer_close").performClick()
         composeRule.waitUntil(timeoutMillis = 10_000L) {
