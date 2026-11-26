@@ -648,6 +648,18 @@ fun ChatWorkspace(
             }
         }
 
+        Text(
+            text = tab.id,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = MonoFontFamily,
+                fontSize = 10.sp,
+                lineHeight = 12.sp,
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+
         ChatComposer(
             draft = draft,
             placeholder = when {
