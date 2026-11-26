@@ -48,7 +48,7 @@ class ChatToolCallsUiTest {
     )
 
     @Test
-    fun runningToolRunCollapsesFinishedCallsAndShowsOnlyActiveCallUntilExpanded() {
+    fun runningToolRunStaysCollapsedToSummaryHeaderUntilExpanded() {
         val tools = listOf(
             ToolCallItem("t1", "Bash", "cd ~/projects/app && git status", """{"command":"cd ~/projects/app && git status","description":"Check git status"}""", "clean", "done", 120L),
             ToolCallItem("t2", "Bash", "cd ~/projects/app && git diff", """{"command":"cd ~/projects/app && git diff","description":"Inspect diff"}""", "0 changes", "done", 90L),
@@ -82,20 +82,21 @@ class ChatToolCallsUiTest {
             }
         }
 
-        // Summary header collapses the 6 calls into one row
+        // Summary header collapses all 6 calls into one stable row (active command stays in composer status)
         composeRule.onNodeWithText("6 tool calls · 5 done · 1 running").assertIsDisplayed()
-        // Only the group header keeps a spinner; neither the active tool row nor composer status spins
+        // Only the group header keeps a sandclock indicator
         composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
             .assertCountEquals(1)
-        // Only the active running call is shown while collapsed
-        composeRule.onNodeWithText("Run Android unit tests").assertIsDisplayed()
+        // Individual tool call rows remain hidden until the header is tapped
         assertTrue(composeRule.onAllNodesWithText("Check git status").fetchSemanticsNodes().isEmpty())
         assertTrue(composeRule.onAllNodesWithText("Run daemon tests").fetchSemanticsNodes().isEmpty())
+        assertTrue(composeRule.onAllNodesWithTag("tool_call_card_t6").fetchSemanticsNodes().isEmpty())
 
         // Tapping the group header reveals all 6 calls with their meaningful descriptions
         composeRule.onNodeWithTag("tool_run_header").performClick()
         composeRule.onNodeWithText("Check git status").assertIsDisplayed()
         composeRule.onNodeWithText("Run daemon tests").assertIsDisplayed()
+        composeRule.onNodeWithText("Run Android unit tests").assertIsDisplayed()
 
         // Tapping an individual call expands its output
         composeRule.onNodeWithTag("tool_call_card_t5").performClick()
@@ -157,28 +158,40 @@ class ChatToolCallsUiTest {
     }
 
     @Test
-    fun liveRunKeepsItsLatestCallVisibleBetweenCallsAndCollapsesOnceTheTurnEnds() {
-        fun call(id: String, description: String) = ToolCallItem(
+    fun liveRunKeepsCardHeightConstantAcrossRunningGapsTextAndCompletion() {
+        fun call(id: String, description: String, status: String, durationMs: Long? = null) = ToolCallItem(
             id = id,
             name = "Bash",
             inputSummary = "git $id",
             inputJson = """{"command":"git $id","description":"$description"}""",
-            status = "done",
-            durationMs = 100L,
-        )
-        val t1 = call("t1", "Check git status")
-        val t2 = call("t2", "Inspect diff")
-
-        fun message(status: String) = ChatMessage(
-            id = "msg_between_calls",
-            tabId = "tab_1",
-            role = "assistant",
-            text = "",
-            toolCalls = listOf(t1, t2),
-            segments = listOf(MessageSegment("tool", toolCallId = "t1"), MessageSegment("tool", toolCallId = "t2")),
             status = status,
+            durationMs = durationMs,
         )
-        var current by mutableStateOf(message("streaming"))
+        val t1Done = call("t1", "Check git status", "done", 100L)
+        val t2Running = call("t2", "Inspect diff", "running")
+        val t2Done = call("t2", "Inspect diff", "done", 100L)
+
+        fun message(
+            calls: List<ToolCallItem>,
+            status: String,
+            trailingText: String? = null,
+        ): ChatMessage {
+            val segments = buildList {
+                calls.forEach { add(MessageSegment("tool", toolCallId = it.id)) }
+                if (trailingText != null) add(MessageSegment("text", text = trailingText))
+            }
+            return ChatMessage(
+                id = "msg_between_calls",
+                tabId = "tab_1",
+                role = "assistant",
+                text = trailingText.orEmpty(),
+                toolCalls = calls,
+                segments = segments,
+                status = status,
+            )
+        }
+
+        var current by mutableStateOf(message(listOf(t1Done, t2Running), "streaming"))
 
         composeRule.setContent {
             HerdrTheme {
@@ -194,22 +207,44 @@ class ChatToolCallsUiTest {
             }
         }
 
-        // Nothing is running, but the turn is: the last call holds the row the next one will take,
-        // and the header stays in its active state without flashing a checkmark or total duration.
+        val runningHeight = composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height
+        composeRule.onNodeWithText("2 tool calls · 1 done · 1 running").assertIsDisplayed()
+        composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .assertCountEquals(1)
+        assertTrue(composeRule.onAllNodesWithText("Inspect diff").fetchSemanticsNodes().isEmpty())
+
+        // Inter-call gap while still streaming: header stays active without flashing duration or changing height.
+        current = message(listOf(t1Done, t2Done), "streaming")
+        composeRule.waitForIdle()
         composeRule.onNodeWithText("2 tool calls · 2 done").assertIsDisplayed()
-        composeRule.onNodeWithText("Inspect diff").assertIsDisplayed()
         composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
             .assertCountEquals(1)
         assertTrue(composeRule.onAllNodesWithText("200ms").fetchSemanticsNodes().isEmpty())
-        assertTrue(composeRule.onAllNodesWithText("Check git status").fetchSemanticsNodes().isEmpty())
+        assertEquals(
+            runningHeight,
+            composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height,
+        )
 
-        current = message("complete")
+        // Assistant starts streaming text after the tool run: icon flips from sandclock to checkmark
+        // and duration appears, while card height stays strictly identical.
+        current = message(listOf(t1Done, t2Done), "streaming", trailingText = "Looks clean.")
         composeRule.waitForIdle()
         composeRule.onNodeWithText("2 tool calls · 2 done").assertIsDisplayed()
         composeRule.onNodeWithText("200ms").assertIsDisplayed()
         composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
             .assertCountEquals(0)
-        assertTrue(composeRule.onAllNodesWithText("Inspect diff").fetchSemanticsNodes().isEmpty())
+        assertEquals(
+            runningHeight,
+            composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height,
+        )
+
+        // Turn completes: height stays identical.
+        current = message(listOf(t1Done, t2Done), "complete", trailingText = "Looks clean.")
+        composeRule.waitForIdle()
+        assertEquals(
+            runningHeight,
+            composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height,
+        )
     }
 
     @Test
@@ -223,13 +258,13 @@ class ChatToolCallsUiTest {
             durationMs = durationMs,
         )
 
-        fun msg(calls: List<ToolCallItem>) = ChatMessage(
+        fun msg(calls: List<ToolCallItem>, status: String = "streaming") = ChatMessage(
             id = "msg_parallel",
             tabId = "tab_1",
             role = "assistant",
             toolCalls = calls,
             segments = calls.map { MessageSegment("tool", toolCallId = it.id) },
-            status = "streaming",
+            status = status,
         )
 
         val t1Done = tool("t1", "Read ChatScreen.kt", "done", 90L)
@@ -254,30 +289,31 @@ class ChatToolCallsUiTest {
         }
 
         val initialHeight = composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height
-        composeRule.onAllNodesWithTag("tool_run_active_call").assertCountEquals(1)
-        composeRule.onNodeWithText("Read WorkingIndicators.kt").assertIsDisplayed()
+        composeRule.onNodeWithText("2 tool calls · 1 done · 1 running").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithText("Read WorkingIndicators.kt").fetchSemanticsNodes().isEmpty())
 
-        // Starting two more calls in parallel keeps the collapsed preview at one row and the exact same height.
+        // Starting two more calls in parallel keeps the collapsed card at the exact same height.
         current = msg(listOf(t1Done, t2Run, t3Run, t4Run))
         composeRule.waitForIdle()
         composeRule.onNodeWithText("4 tool calls · 1 done · 3 running").assertIsDisplayed()
-        composeRule.onAllNodesWithTag("tool_run_active_call").assertCountEquals(1)
-        composeRule.onNodeWithText("Read Models.kt").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithText("Read Models.kt").fetchSemanticsNodes().isEmpty())
         assertEquals(
             initialHeight,
             composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height,
         )
 
-        // Switching to a tool with a blank summary keeps row height identical too.
+        // Completing all calls keeps the collapsed card height identical.
         current = msg(
             listOf(
                 t1Done,
                 t2Run.copy(status = "done", durationMs = 50L),
                 t3Run.copy(status = "done", durationMs = 60L),
-                ToolCallItem(id = "t4", name = "update_steps", inputSummary = "", status = "running"),
+                ToolCallItem(id = "t4", name = "update_steps", inputSummary = "", status = "done", durationMs = 40L),
             ),
+            status = "complete",
         )
         composeRule.waitForIdle()
+        composeRule.onNodeWithText("4 tool calls · 4 done").assertIsDisplayed()
         assertEquals(
             initialHeight,
             composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height,
@@ -306,13 +342,13 @@ class ChatToolCallsUiTest {
             val t2 = ToolCallItem("t2", "Bash", "git diff", output = "no diff", status = "running")
             val t3 = ToolCallItem("t3", "Bash", "gradle test", output = "all passed", status = "running")
 
-            fun msg(calls: List<ToolCallItem>) = ChatMessage(
+            fun msg(calls: List<ToolCallItem>, status: String = "streaming") = ChatMessage(
                 id = "msg_no_anim",
                 tabId = "tab_1",
                 role = "assistant",
                 toolCalls = calls,
                 segments = calls.map { MessageSegment("tool", toolCallId = it.id) },
-                status = "streaming",
+                status = status,
             )
 
             var current by mutableStateOf(msg(listOf(t1)))
@@ -335,8 +371,16 @@ class ChatToolCallsUiTest {
 
             current = msg(listOf(t1, t2, t3))
             composeRule.waitForIdle()
+            val runningHeight = composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height
             composeRule.onNodeWithText("3 tool calls · 1 done · 2 running").assertIsDisplayed()
-            composeRule.onNodeWithText("gradle test").assertIsDisplayed()
+            assertTrue(composeRule.onAllNodesWithText("gradle test").fetchSemanticsNodes().isEmpty())
+
+            current = msg(
+                listOf(t1, t2.copy(status = "done", durationMs = 50L), t3.copy(status = "done", durationMs = 70L)),
+                status = "complete",
+            )
+            composeRule.waitForIdle()
+            assertEquals(runningHeight, composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height)
 
             composeRule.onNodeWithTag("tool_run_header").performClick()
             composeRule.waitForIdle()
