@@ -920,9 +920,9 @@ private fun AssistantStreamingActivity(statusDetail: String?) {
             .padding(vertical = 2.dp)
             .testTag("streaming_activity_indicator"),
     ) {
-        WorkingPulseDots(
+        ThinkingRobotIndicator(
             color = AppTheme.colors.info,
-            dotSize = 5.dp,
+            modifier = Modifier.size(width = 34.dp, height = 20.dp),
         )
         Text(
             text = statusDetail?.takeIf { it.isNotBlank() }
