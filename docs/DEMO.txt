@@ -1,25 +1,116 @@
 Here is the demo script for you to follow:
 
-1) Starting from the demo tab, click around to show different menus of the app.
+## Setup & Execution Rules
 
+- **Check readiness first:** Run `agents_term_app_cli status` and verify both
+  `ready: true` and `controlReady: true` (see `~/.agents-term/live-debugging.md`).
+- **Narrate before each key action (except Step 6):** Type a short line into
+  `composer_input` (`--replace`) explaining what you are about to do next, pause
+  ~1.5s so the viewer can read it, then clear it (`--replace ""`) before tapping
+  a menu/button or replace it with the actual prompt before sending.
+- **Never send `key back` blindly on the main workspace screen:** An extra Back
+  press when no overlay, menu, sheet, Settings screen, or soft keyboard is open
+  sends AgentsTerm to the background, disconnects the WebSocket, and interrupts
+  the demo. Always check `agents_term_app_cli ui --brief` first: only send
+  `key back` when `window=1` is present, Settings/another screen is open, or the
+  keyboard is visibly open (`composer_input` center is near mid-screen rather
+  than near the bottom).
 
-2) Go back to the demo tab, type "what is the meaning of life?" then hit
-send. Wait for it to show lot of text on the screen then do the scroll. This to
-demonstarte the performance for the one in (2)
+## Demo Steps
 
-2) Open a new tab with Codex, pick Astra 5.2, type "Gather the data you can have
-from the app, then analyze any performance issues we have right now, then file
-bugs for these issues. Be sure to post to existing bugs if they already filed"
+1) **Explore app menus (from the `demo` tab):**
+   Starting from the `demo` tab, click around with brief ~1–1.5s pauses to show
+   the app's navigation and menus:
+   - Tabs drawer (`open_drawer_button`) -> close (`key back`)
+   - Model picker (`model_picker_chip`) -> close (`key back`)
+   - Overflow menu (`overflow_menu_button`) -> Settings & Debug
+     (`menu_app_settings`), scroll down to show settings/theme/debug options ->
+     return (`key back`)
+   - Overflow menu (`overflow_menu_button`) -> Recently Closed tabs
+     (`menu_recently_closed_tabs`) -> return (`key back`)
 
-Wait for the tool calls to load, then take a screenshot.
+2) **Long-response rendering and scroll performance (`demo` tab):**
+   Go back to the `demo` tab, type `"what is the meaning of life?"`, and hit
+   send (`send_button`). Wait for a lot of text to render on screen, dismiss the
+   keyboard only if `ui --brief` shows it is open, then scroll smoothly up and
+   down through `chat_message_list` (`--amount 0.65`) to demonstrate chat
+   rendering and scroll performance (and generate real UI/scroll telemetry for
+   Step 3).
+   - *If executing this demo from inside the `demo` tab:* hitting send queues
+     the prompt on the active turn. Stream a long, multi-section Markdown answer
+     directly in the current turn so there is plenty of scrollable text on
+     screen, scroll through it, and tap the queued message's remove button
+     (`remove_queued_<id>`) afterward so it does not trigger an extra turn when
+     the demo finishes.
 
-3) Open a new tab with Claude Code, pick Fable 5.2, add the recently taken
-screenshot to the chat, then ask it "Can you please update the tool call icon?"
+3) **Open a Codex (`GPT-6.2-Astra`) tab for live performance analysis:**
+   Tap `top_new_tab_button`, select **Codex** (`agent_option_codex`), set the
+   working directory to the `agents-term` repo (tap `projects` then
+   `agents-term` if the picker starts in your home directory), pick
+   **GPT-6.2-Astra** (`new_tab_model_gpt-6.2-astra`), scroll down inside the
+   sheet, and tap `create_tab_button`.
 
-4) Come back to demo tab. Type "the meaning of life is being able to full
-control of your destiny and doing awesome things!"
+   Type and send:
+   `"Gather the data you can have from the app, then analyze any performance issues we have right now, then file bugs for these issues. Be sure to post to existing bugs if they are already filed (or reference them in a follow-up issue if commenting is blocked)."`
 
-5) Demo end.
+   Wait for the tool calls to load (`agents_term_app_cli wait --tag tool_run_header`),
+   pause ~1s, make sure `composer_input` is empty, and capture a screenshot:
+   `agents_term_app_cli screenshot -o /tmp/demo_codex_tool_calls.png`
 
-Before each key action, please type some text giving the users what you are
-about to do next, except for the number (4).
+4) **Open a Claude Code (`Fable 5.2`) tab and attach the screenshot:**
+   Tap `top_new_tab_button`, select **Claude Code** (`agent_option_claude`),
+   ensure the working directory is the `agents-term` repo, pick
+   **Fable 5.2** (`new_tab_model_claude-fable-5-2`), scroll down inside the
+   sheet, and tap `create_tab_button`.
+
+   Add `/tmp/demo_codex_tool_calls.png` to the chat and ask it:
+   `"Can you please update the tool call icon? Open a PR once ready and report back without waiting for CI."`
+   - *How to attach the screenshot programmatically:* Do **not** tap
+     `attach_button` — the Android system photo picker runs in a separate app
+     that `agents_term_app_cli` cannot control. Instead, briefly show the prompt
+     typed in `composer_input`, then upload the PNG and send the message via the
+     daemon HTTP API using `host`, `port`, and `token` from
+     `~/.agents-term/config.json` and the new tab's ID from `state`:
+     1. `POST http://<host>:<port>/api/tabs/<tab_id>/attachments`
+        (`Authorization: Bearer <token>`, `Content-Type: image/png`, raw PNG body)
+        -> read `attachment.id`.
+     2. `POST http://<host>:<port>/api/tabs/<tab_id>/messages`
+        (`Content-Type: application/json`, body
+        `{"text": "<prompt>", "attachments": [{"id": "<att_id>"}]}`).
+     3. Clear `composer_input` (`--replace ""`) so the sent prompt does not stay
+        behind as a draft.
+
+5) **Scroll through the Codex (Astra) and Claude Code (Fable) tabs fully:**
+   Poll `agents_term_app_cli state` until both the Codex (`GPT-6.2-Astra`) tab
+   and the Claude Code (`Fable 5.2`) tab finish (`status` is `done` or `idle`;
+   use a reasonable timeout, e.g. ~4 minutes, so the demo does not hang
+   indefinitely).
+   - Switch to the **Codex (Astra)** tab (`quick_tab_<codex_tab_id>`), ensure
+     the keyboard is closed, then scroll up to the top of `chat_message_list`
+     and smoothly scroll all the way down to the bottom (`--amount 0.65`, ~1s
+     pauses) until the full prompt, tool call summary, and complete analysis /
+     filed bug links have been shown.
+   - Switch to the **Claude Code (Fable)** tab (`quick_tab_<claude_tab_id>`),
+     ensure the keyboard is closed, then scroll up to the top of
+     `chat_message_list` and smoothly scroll all the way down to the bottom
+     (`--amount 0.65`, ~1s pauses) until the attached screenshot, prompt, tool
+     call summary, and full response / PR link have been shown.
+
+6) **Return to the `demo` tab for the closing message (NO narration before this step):**
+   Switch back to the `demo` tab (`quick_tab_<demo_tab_id>`). Without typing any
+   narration beforehand, type into `composer_input` (`--replace`) and leave it
+   displayed (do not hit send):
+   `"the meaning of life is being able to take full control of your destiny and do awesome things!"`
+
+7) **Demo end.**
+
+## Quick Reference — Common UI Test Tags
+
+- Navigation / menus: `open_drawer_button`, `model_picker_chip`,
+  `overflow_menu_button`, `menu_app_settings`, `menu_recently_closed_tabs`,
+  `top_new_tab_button`, `quick_tab_<tab_id>`
+- New Tab sheet: `agent_option_codex`, `agent_option_claude`,
+  `new_tab_model_gpt-6.2-astra`, `new_tab_model_claude-fable-5-2`,
+  `create_tab_button`
+- Chat & composer: `chat_message_list`, `tool_run_header`, `composer_input`,
+  `send_button`, `remove_queued_<id>`
