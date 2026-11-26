@@ -173,7 +173,7 @@ class ModelsAndStateTest {
               "type": "snapshot",
               "server": {
                 "version": "0.1.0",
-                "hostname": "ned-vm",
+                "hostname": "example-vm",
                 "tailscaleIp": "100.71.219.26",
                 "defaultCwd": "/home/ned",
                 "agents": [{"type": "agy", "name": "Antigravity", "available": true}]
@@ -184,7 +184,7 @@ class ModelsAndStateTest {
         """.trimIndent()
         val env = decodeHerdrJson<WsServerEnvelope>(raw)
         assertEquals("snapshot", env.type)
-        assertEquals("ned-vm", env.server?.hostname)
+        assertEquals("example-vm", env.server?.hostname)
         assertEquals(1, env.server?.agents?.size)
     }
 
@@ -384,10 +384,10 @@ class ModelsAndStateTest {
         assertEquals(SshAuthMethod.PRIVATE_KEY, parsed.authMethod)
 
         val herdrUri = parseSshSetupUri(
-            "herdr://ssh?host=ned-vm&username=ubuntu&port=2200&daemonPort=7505&authMethod=password",
+            "herdr://ssh?host=example-vm&username=ubuntu&port=2200&daemonPort=7505&authMethod=password",
         )
         assertNotNull(herdrUri)
-        assertEquals("ned-vm", herdrUri!!.host)
+        assertEquals("example-vm", herdrUri!!.host)
         assertEquals("ubuntu", herdrUri.username)
         assertEquals(2200, herdrUri.sshPort)
         assertEquals(7505, herdrUri.daemonPort)
@@ -407,9 +407,9 @@ class ModelsAndStateTest {
         assertEquals("ned", cliSimple.username)
         assertNull(cliSimple.sshPort)
 
-        val cliWithFlags = parseSshSetupInput("ssh -p 2222 -i ~/.ssh/id_ed25519 ned@ned-vm.tail1234.ts.net")
+        val cliWithFlags = parseSshSetupInput("ssh -p 2222 -i ~/.ssh/id_ed25519 ned@example-vm.tail1234.ts.net")
         assertNotNull(cliWithFlags)
-        assertEquals("ned-vm.tail1234.ts.net", cliWithFlags!!.host)
+        assertEquals("example-vm.tail1234.ts.net", cliWithFlags!!.host)
         assertEquals("ned", cliWithFlags.username)
         assertEquals(2222, cliWithFlags.sshPort)
 
@@ -433,7 +433,7 @@ class ModelsAndStateTest {
 
         // Plain hostname/IP without user@ or ssh prefix should not trigger false autofill
         assertNull(parseSshSetupInput("100.71.219.26"))
-        assertNull(parseSshSetupInput("ned-vm"))
+        assertNull(parseSshSetupInput("example-vm"))
     }
 
     @Test
@@ -457,7 +457,7 @@ class ModelsAndStateTest {
               "type": "snapshot",
               "server": {
                 "version": "0.1.0",
-                "hostname": "ned-vm",
+                "hostname": "example-vm",
                 "agents": [
                   {
                     "type": "claude",
