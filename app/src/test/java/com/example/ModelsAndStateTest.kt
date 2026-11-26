@@ -994,4 +994,62 @@ class ModelsAndStateTest {
             summarizeTaskPromptForDisplay("Investigate crash in `MainActivity`\n```kotlin\nthrow Error()\n```"),
         )
     }
+
+    @Test
+    fun agentUsageFormattingAndModelLookup() {
+        val raw = """
+            {
+              "agent": "agy",
+              "fetchedAt": 1700000000000,
+              "plan": "pro",
+              "items": [
+                {
+                  "id": "gemini-3-flash",
+                  "label": "Gemini Models",
+                  "remainingPercent": 75.6,
+                  "usedPercent": 24.4,
+                  "resetsAtMs": 1700009300000,
+                  "modelIds": ["gemini-3-flash"],
+                  "modelPrefixes": ["gemini-"]
+                },
+                {
+                  "id": "claude-opus-5-5-high",
+                  "label": "Claude Opus 5.5",
+                  "remainingPercent": 0.4,
+                  "usedPercent": 99.6,
+                  "resetsAtMs": 1700090000000,
+                  "modelIds": ["claude-opus-5-5-high"],
+                  "modelPrefixes": []
+                }
+              ]
+            }
+        """.trimIndent()
+        val parsed = com.example.data.decodeHerdrJson<com.example.data.AgentUsageResponse>(raw)
+        assertEquals("agy", parsed.agent)
+        assertEquals("pro", parsed.plan)
+        assertEquals(2, parsed.items.size)
+
+        assertEquals("76%", com.example.data.formatUsagePercent(parsed.items[0].remainingPercent))
+        assertEquals("<1%", com.example.data.formatUsagePercent(parsed.items[1].remainingPercent))
+        assertEquals("0%", com.example.data.formatUsagePercent(0.0))
+        assertEquals("100%", com.example.data.formatUsagePercent(100.0))
+
+        val now = 1_700_000_000_000L
+        assertEquals("Resets in 2h 35m", com.example.data.formatTimeUntilReset(now + 9_300_000L, now))
+        assertEquals("Resets in 1d 1h", com.example.data.formatTimeUntilReset(now + 90_000_000L, now))
+        assertEquals("Resets in 45m", com.example.data.formatTimeUntilReset(now + 2_700_000L, now))
+        assertEquals("Resets in <1m", com.example.data.formatTimeUntilReset(now + 20_000L, now))
+        assertEquals("Resets soon", com.example.data.formatTimeUntilReset(now - 5_000L, now))
+        assertNull(com.example.data.formatTimeUntilReset(null, now))
+
+        assertEquals(
+            "Gemini Models",
+            com.example.data.findUsageForModel("gemini-4-neon-high", parsed.items)?.label,
+        )
+        assertEquals(
+            "Claude Opus 5.5",
+            com.example.data.findUsageForModel("claude-opus-5-5-high", parsed.items)?.label,
+        )
+        assertNull(com.example.data.findUsageForModel("unknown-model", parsed.items))
+    }
 }

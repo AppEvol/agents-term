@@ -29,6 +29,7 @@ use crate::log::{log_info, log_warn};
 use crate::models::{get_agent_models, warm_agent_models_cache};
 use crate::runner::AgentRunner;
 use crate::store::{resolve_abs_path, ReviveTabError, StateStore, MAX_OPEN_TABS};
+use crate::usage::get_agent_usage;
 use crate::util::{now_ms, rand_hex};
 
 const PING_INTERVAL: Duration = Duration::from_secs(25);
@@ -414,6 +415,17 @@ async fn get_models(
         Some("1" | "true")
     );
     json_status(StatusCode::OK, get_agent_models(&agent, refresh).await)
+}
+
+async fn get_usage(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(agent): AxumPath<String>,
+) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    json_status(StatusCode::OK, get_agent_usage(&agent).await)
 }
 
 async fn get_fs(
@@ -957,6 +969,7 @@ pub async fn run_daemon(
         .route("/ws", get(ws_handler))
         .route("/api/info", get(get_info))
         .route("/api/agents/{agent}/models", get(get_models))
+        .route("/api/agents/{agent}/usage", get(get_usage))
         .route("/api/fs", get(get_fs))
         .route(
             "/api/debug/dumps",

@@ -96,6 +96,77 @@ data class AgentModelsResponse(
     val models: List<AgentModelOption> = emptyList(),
 )
 
+@JsonClass(generateAdapter = true)
+data class AgentUsageItem(
+    val id: String,
+    val label: String,
+    val subtitle: String? = null,
+    val remainingPercent: Double,
+    val usedPercent: Double = (100.0 - remainingPercent).coerceIn(0.0, 100.0),
+    val resetsAt: String? = null,
+    val resetsAtMs: Long? = null,
+    val modelIds: List<String> = emptyList(),
+    val modelPrefixes: List<String> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class AgentUsageResponse(
+    val agent: String,
+    val fetchedAt: Long = 0L,
+    val plan: String? = null,
+    val items: List<AgentUsageItem> = emptyList(),
+    val error: String? = null,
+)
+
+data class AgentUsageUiState(
+    val isLoading: Boolean = false,
+    val response: AgentUsageResponse? = null,
+    val error: String? = null,
+)
+
+fun formatUsagePercent(percent: Double): String {
+    val clamped = percent.coerceIn(0.0, 100.0)
+    if (clamped > 0.0 && clamped < 1.0) return "<1%"
+    return "${kotlin.math.round(clamped).toInt()}%"
+}
+
+fun formatTimeUntilReset(
+    resetsAtMs: Long?,
+    nowMs: Long = System.currentTimeMillis(),
+): String? {
+    if (resetsAtMs == null || resetsAtMs <= 0L) return null
+    val diffMs = resetsAtMs - nowMs
+    if (diffMs <= 0L) return "Resets soon"
+    val totalMinutes = diffMs / 60_000L
+    if (totalMinutes < 1L) return "Resets in <1m"
+    val days = totalMinutes / (60L * 24L)
+    val hours = (totalMinutes % (60L * 24L)) / 60L
+    val minutes = totalMinutes % 60L
+    return when {
+        days > 0L && hours > 0L -> "Resets in ${days}d ${hours}h"
+        days > 0L -> "Resets in ${days}d"
+        hours > 0L && minutes > 0L -> "Resets in ${hours}h ${minutes}m"
+        hours > 0L -> "Resets in ${hours}h"
+        else -> "Resets in ${minutes}m"
+    }
+}
+
+fun findUsageForModel(
+    modelId: String,
+    items: List<AgentUsageItem>,
+): AgentUsageItem? {
+    val trimmed = modelId.trim()
+    if (trimmed.isEmpty() || items.isEmpty()) return null
+    items.firstOrNull { item ->
+        item.modelIds.any { it.equals(trimmed, ignoreCase = true) }
+    }?.let { return it }
+    return items.firstOrNull { item ->
+        item.modelPrefixes.any { prefix ->
+            prefix.isNotBlank() && trimmed.startsWith(prefix, ignoreCase = true)
+        }
+    }
+}
+
 sealed class ModelSlashCommand {
     data object OpenPicker : ModelSlashCommand()
     data object ResetToDefault : ModelSlashCommand()

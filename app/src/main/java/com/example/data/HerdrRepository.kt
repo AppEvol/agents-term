@@ -854,6 +854,14 @@ class HerdrRepository(
         }
     }
 
+    suspend fun fetchAgentUsage(agent: String): Result<AgentUsageResponse> {
+        val cfg = _state.value.config
+        if (!cfg.isValid) return Result.failure(IllegalStateException("Not connected to a VM daemon"))
+        return runCatching {
+            api.getAgentUsage(cfg, agent)
+        }
+    }
+
     suspend fun deleteTab(tabId: String): Result<TabRecord?> {
         val cfg = _state.value.config
         debugRecorder?.record("ui", "delete_tab", "Deleting tab $tabId")

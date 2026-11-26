@@ -111,6 +111,20 @@ open class HerdrApiClient(
         return executeJson(req)
     }
 
+    open suspend fun getAgentUsage(
+        config: ConnectionConfig,
+        agent: String,
+    ): AgentUsageResponse {
+        val url = "${config.httpBaseUrl()}/api/agents/$agent/usage".toHttpUrlOrNull()
+            ?: throw IOException("Invalid host URL")
+        val req = Request.Builder()
+            .url(url)
+            .withAuth(config)
+            .get()
+            .build()
+        return executeJson(req)
+    }
+
     suspend fun listTabs(config: ConnectionConfig): TabsResponse {
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs")

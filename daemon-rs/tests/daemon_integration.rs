@@ -708,3 +708,111 @@ esac
 
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn agent_usage_endpoint_returns_parsed_usage_and_errors() {
+    let home = make_temp_dir("agentsterm-usage");
+    // enriched_path() searches $HOME/.local/bin before /usr/bin, so place the mock curl there.
+    let fake_bin = home.join(".local/bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+
+    // Write fake credentials for agy, claude, and codex.
+    let agy_dir = home.join(".gemini/antigravity-cli");
+    fs::create_dir_all(&agy_dir).unwrap();
+    fs::write(
+        agy_dir.join("antigravity-oauth-token"),
+        r#"{"token":{"access_token":"fake-agy-token"}}"#,
+    )
+    .unwrap();
+
+    let claude_dir = home.join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    fs::write(
+        claude_dir.join(".credentials.json"),
+        r#"{"claudeAiOauth":{"accessToken":"fake-claude-token","subscriptionType":"max"}}"#,
+    )
+    .unwrap();
+
+    let codex_dir = home.join(".codex");
+    fs::create_dir_all(&codex_dir).unwrap();
+    fs::write(
+        codex_dir.join("auth.json"),
+        r#"{"tokens":{"access_token":"fake-codex-token","account_id":"acct-1"}}"#,
+    )
+    .unwrap();
+
+    // Fake curl that inspects the URL argument and returns mock JSON + HTTP 200.
+    let fake_curl = fake_bin.join("curl");
+    write_exec(
+        &fake_curl,
+        r#"#!/bin/sh
+cat >/dev/null
+URL=""
+for arg in "$@"; do
+  case "$arg" in
+    https://*) URL="$arg" ;;
+  esac
+done
+case "$URL" in
+  *fetchAvailableModels*)
+    printf '%s\n200' '{"models":{"claude-opus-5-5-high":{"displayName":"Claude Opus 5.5 (High)","quotaInfo":{"remainingFraction":0.85,"resetTime":"2026-11-26T05:59:04Z"}},"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":0.7,"resetTime":"2026-11-26T03:34:04Z"}}}}'
+    ;;
+  *api.anthropic.com/api/oauth/usage*)
+    printf '%s\n200' '{"limits":[{"kind":"session","percent":15,"resets_at":"2026-11-26T05:00:00Z","scope":null},{"kind":"weekly_all","percent":22,"resets_at":"2026-11-30T01:59:59Z","scope":null}]}'
+    ;;
+  *chatgpt.com/backend-api/wham/usage*)
+    printf '%s\n200' '{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":4,"limit_window_seconds":604800,"reset_at":1796238718}}}'
+    ;;
+  *)
+    printf '%s\n404' '{"error":"unknown url"}'
+    ;;
+esac
+"#,
+    );
+
+    let daemon = TestDaemon::start(&home, Some(&fake_bin));
+
+    // 1) agy usage
+    let (st, agy) = daemon.api("GET", "/api/agents/agy/usage", None);
+    assert_eq!(st, 200);
+    assert_eq!(agy["agent"].as_str(), Some("agy"));
+    assert!(agy["error"].is_null());
+    let agy_items = agy["items"].as_array().unwrap();
+    assert_eq!(agy_items.len(), 2);
+    assert_eq!(agy_items[0]["label"].as_str(), Some("Gemini 3 Flash"));
+    assert_eq!(agy_items[0]["remainingPercent"].as_f64(), Some(70.0));
+    assert_eq!(agy_items[1]["label"].as_str(), Some("Claude Opus 5.5"));
+    assert_eq!(agy_items[1]["remainingPercent"].as_f64(), Some(85.0));
+
+    // 2) claude usage
+    let (st, claude) = daemon.api("GET", "/api/agents/claude/usage", None);
+    assert_eq!(st, 200);
+    assert_eq!(claude["agent"].as_str(), Some("claude"));
+    assert_eq!(claude["plan"].as_str(), Some("max"));
+    let claude_items = claude["items"].as_array().unwrap();
+    assert_eq!(claude_items.len(), 2);
+    assert_eq!(claude_items[0]["label"].as_str(), Some("5-hour session"));
+    assert_eq!(claude_items[0]["remainingPercent"].as_f64(), Some(85.0));
+    assert_eq!(claude_items[1]["label"].as_str(), Some("Weekly limit"));
+    assert_eq!(claude_items[1]["remainingPercent"].as_f64(), Some(78.0));
+
+    // 3) codex usage
+    let (st, codex) = daemon.api("GET", "/api/agents/codex/usage", None);
+    assert_eq!(st, 200);
+    assert_eq!(codex["agent"].as_str(), Some("codex"));
+    assert_eq!(codex["plan"].as_str(), Some("pro"));
+    let codex_items = codex["items"].as_array().unwrap();
+    assert_eq!(codex_items.len(), 1);
+    assert_eq!(codex_items[0]["label"].as_str(), Some("Weekly limit"));
+    assert_eq!(codex_items[0]["remainingPercent"].as_f64(), Some(96.0));
+
+    // 4) shell returns clear unsupported error
+    let (st, shell) = daemon.api("GET", "/api/agents/shell/usage", None);
+    assert_eq!(st, 200);
+    assert!(shell["error"]
+        .as_str()
+        .unwrap_or("")
+        .contains("not supported"));
+
+    let _ = fs::remove_dir_all(&home);
+}

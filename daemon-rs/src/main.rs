@@ -8,6 +8,7 @@ mod models;
 mod runner;
 mod server;
 mod store;
+mod usage;
 mod util;
 
 use std::env;

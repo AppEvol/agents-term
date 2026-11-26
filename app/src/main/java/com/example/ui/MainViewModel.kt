@@ -153,6 +153,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isRefreshingModels = MutableStateFlow(false)
     val isRefreshingModels: StateFlow<Boolean> = _isRefreshingModels.asStateFlow()
 
+    val usageController = AgentUsageController(repo = repo, scope = viewModelScope)
+
     private val _isRefreshingClosedTabs = MutableStateFlow(false)
     val isRefreshingClosedTabs: StateFlow<Boolean> = _isRefreshingClosedTabs.asStateFlow()
 
