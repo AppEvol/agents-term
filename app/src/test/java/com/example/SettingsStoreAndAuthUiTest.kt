@@ -71,7 +71,7 @@ class SettingsStoreAndAuthUiTest {
         // Simulate Android Auto Backup restoring non-secret SSH profile while local prefs are empty.
         val backedUpPrefs = context.getSharedPreferences(SettingsStore.PREFS_NAME, Context.MODE_PRIVATE)
         backedUpPrefs.edit(commit = true) {
-            putString("ssh_host", "ned-vm")
+            putString("ssh_host", "example-vm")
             putInt("ssh_port", 22)
             putString("ssh_username", "ned")
             putString("ssh_auth_method", SshAuthMethod.TAILSCALE_SSH.storageKey)
@@ -84,7 +84,7 @@ class SettingsStoreAndAuthUiTest {
         assertEquals("", loadedConnection.token)
 
         val sshProfile = store.loadSshProfile()
-        assertEquals("ned-vm", sshProfile.host)
+        assertEquals("example-vm", sshProfile.host)
         assertEquals("ned", sshProfile.username)
         assertEquals(SshAuthMethod.TAILSCALE_SSH, sshProfile.authMethod)
     }
@@ -169,7 +169,7 @@ class SettingsStoreAndAuthUiTest {
                 ConnectScreen(
                     initialConfig = ConnectionConfig(host = "100.71.219.26", port = 7501, token = "stale"),
                     sshProfile = SshProfile(
-                        host = "ned-vm",
+                        host = "example-vm",
                         username = "ned",
                         authMethod = SshAuthMethod.TAILSCALE_SSH,
                     ),
@@ -192,7 +192,7 @@ class SettingsStoreAndAuthUiTest {
 
         // SSH bootstrap mode is shown directly with the saved host and username pre-filled.
         composeRule.onNodeWithText("SSH & Bootstrap VM").assertIsDisplayed()
-        composeRule.onNodeWithText("ned-vm").assertExists()
+        composeRule.onNodeWithText("example-vm").assertExists()
         composeRule.onNodeWithText("ned").assertExists()
     }
 }
