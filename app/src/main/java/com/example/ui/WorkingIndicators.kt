@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -24,12 +27,10 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -46,7 +47,6 @@ import com.example.ui.theme.isLunaControls
 import com.example.ui.theme.statusColor
 import kotlin.math.PI
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 /** Marks a tab whose latest result the user has not opened yet. */
 @Composable
@@ -254,97 +254,34 @@ private fun DrawScope.drawThinkingRobot(color: Color, dots: Int) {
     }
 }
 
-private const val SANDCLOCK_CYCLE_MILLIS = 2000
-
-/** Share of the cycle spent draining; the rest is the flip. */
-private const val SANDCLOCK_DRAIN_SHARE = 0.72f
+private const val TOOL_WRENCH_SWING_MILLIS = 620
+private const val TOOL_WRENCH_SWING_DEGREES = 24f
 
 /**
- * Sandclock that drains its sand, flips over and starts again. Stands in for an indeterminate
- * spinner while a tool call runs, and reports itself as one to accessibility services.
+ * Wrench that rocks back and forth as if turning a bolt. Stands in for an indeterminate spinner
+ * while a tool call runs, and reports itself as one to accessibility services.
  */
 @Composable
-fun SandclockIndicator(
+fun ToolWorkingIndicator(
     color: Color,
     modifier: Modifier = Modifier,
 ) {
-    val transition = rememberInfiniteTransition(label = "sandclock")
-    val cycle by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
+    val transition = rememberInfiniteTransition(label = "tool_wrench")
+    val swing by transition.animateFloat(
+        initialValue = -TOOL_WRENCH_SWING_DEGREES,
+        targetValue = TOOL_WRENCH_SWING_DEGREES,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = SANDCLOCK_CYCLE_MILLIS, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
+            animation = tween(durationMillis = TOOL_WRENCH_SWING_MILLIS, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
         ),
-        label = "sandclock_cycle",
+        label = "tool_wrench_swing",
     )
-    Canvas(
-        modifier = modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate },
-    ) {
-        val drained = (cycle / SANDCLOCK_DRAIN_SHARE).coerceAtMost(1f)
-        val flip = ((cycle - SANDCLOCK_DRAIN_SHARE) / (1f - SANDCLOCK_DRAIN_SHARE)).coerceAtLeast(0f)
-        // A drained glass turned half a turn looks like a full one, so the loop restarts unseen.
-        rotate(degrees = 180f * FastOutSlowInEasing.transform(flip)) {
-            drawSandclock(color = color, drained = drained)
-        }
-    }
-}
-
-private fun DrawScope.drawSandclock(color: Color, drained: Float) {
-    val stroke = size.minDimension * 0.085f
-    val inset = size.minDimension * 0.12f
-    val centerX = size.width / 2f
-    val centerY = size.height / 2f
-    val halfWidth = size.width * 0.26f
-    val top = inset + stroke / 2f
-    val bottom = size.height - inset - stroke / 2f
-    val bulbHeight = centerY - top
-
-    // Sand keeps its area: a bulb holding a share of the sand is filled to sqrt(share) of its height.
-    val remaining = sqrt(1f - drained)
-    val sandHalfWidth = halfWidth * remaining
-    val topSand = Path().apply {
-        moveTo(centerX - sandHalfWidth, centerY - bulbHeight * remaining)
-        lineTo(centerX + sandHalfWidth, centerY - bulbHeight * remaining)
-        lineTo(centerX, centerY)
-        close()
-    }
-    val pileTop = centerY + bulbHeight * remaining
-    val bottomSand = Path().apply {
-        moveTo(centerX - sandHalfWidth, pileTop)
-        lineTo(centerX + sandHalfWidth, pileTop)
-        lineTo(centerX + halfWidth, bottom)
-        lineTo(centerX - halfWidth, bottom)
-        close()
-    }
-    val sandColor = color.copy(alpha = color.alpha * 0.55f)
-    drawPath(topSand, sandColor)
-    drawPath(bottomSand, sandColor)
-    if (drained > 0f && drained < 1f) {
-        drawLine(
-            color = sandColor,
-            start = Offset(centerX, centerY),
-            end = Offset(centerX, pileTop),
-            strokeWidth = stroke * 0.7f,
-        )
-    }
-
-    val glass = Path().apply {
-        moveTo(centerX - halfWidth, top)
-        lineTo(centerX + halfWidth, top)
-        lineTo(centerX - halfWidth, bottom)
-        lineTo(centerX + halfWidth, bottom)
-        close()
-    }
-    drawPath(glass, color, style = Stroke(width = stroke, join = StrokeJoin.Round))
-    val capHalfWidth = halfWidth + stroke
-    for (y in listOf(top, bottom)) {
-        drawLine(
-            color = color,
-            start = Offset(centerX - capHalfWidth, y),
-            end = Offset(centerX + capHalfWidth, y),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-    }
+    Icon(
+        imageVector = Icons.Rounded.Build,
+        contentDescription = null,
+        tint = color,
+        modifier = modifier
+            .semantics { progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate }
+            .graphicsLayer { rotationZ = swing },
+    )
 }

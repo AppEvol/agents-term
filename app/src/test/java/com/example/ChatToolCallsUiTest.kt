@@ -84,7 +84,7 @@ class ChatToolCallsUiTest {
 
         // Summary header collapses all 6 calls into one stable row (active command stays in composer status)
         composeRule.onNodeWithText("6 tool calls · 5 done · 1 running").assertIsDisplayed()
-        // Only the group header keeps a sandclock indicator
+        // Only the group header keeps a rocking wrench indicator
         composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
             .assertCountEquals(1)
         // Individual tool call rows remain hidden until the header is tapped
@@ -225,7 +225,7 @@ class ChatToolCallsUiTest {
             composeRule.onNodeWithTag("tool_run_group").getUnclippedBoundsInRoot().height,
         )
 
-        // Assistant starts streaming text after the tool run: icon flips from sandclock to checkmark
+        // Assistant starts streaming text after the tool run: icon flips from wrench to checkmark
         // and duration appears, while card height stays strictly identical.
         current = message(listOf(t1Done, t2Done), "streaming", trailingText = "Looks clean.")
         composeRule.waitForIdle()

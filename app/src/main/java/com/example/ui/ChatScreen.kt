@@ -1176,7 +1176,7 @@ private fun ToolCallRunHeader(
         // Same box for the spinner and the icons, so the label does not shift when they swap.
         Box(contentAlignment = Alignment.Center, modifier = Modifier.size(15.dp)) {
             when {
-                isActive -> SandclockIndicator(
+                isActive -> ToolWorkingIndicator(
                     color = AppTheme.colors.info,
                     modifier = Modifier.size(15.dp),
                 )
