@@ -60,7 +60,7 @@ jobs:
       binary_changed: ${{ steps.detect.outputs.binary_changed }}
       run_rust_daemon_build: ${{ steps.detect.outputs.run_rust_daemon_build }}
       run_daemon_vm_e2e: ${{ steps.detect.outputs.run_daemon_vm_e2e }}
-      run_installer_and_cli_tests: ${{ steps.detect.outputs.run_installer_and_cli_tests }}
+      run_installer_tests: ${{ steps.detect.outputs.run_installer_tests }}
 
     steps:
       - name: Checkout repository
@@ -118,7 +118,7 @@ jobs:
 
           DAEMON_RS_TESTS_CHANGED="false"
           DAEMON_E2E_HARNESS_CHANGED="false"
-          INSTALLER_AND_CLI_CHANGED="false"
+          INSTALLER_TESTS_CHANGED="false"
 
           BASE_SHA=""
           if [ "${EVENT_NAME}" = "pull_request" ] && [ -n "${PR_BASE_SHA}" ]; then
@@ -136,14 +136,14 @@ jobs:
             if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^(e2e/docker-vm/|scripts/daemon-build-hash\.py$)'; then
               DAEMON_E2E_HARNESS_CHANGED="true"
             fi
-            if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^(daemon-rs/install\.sh$|daemon-rs/tests/.*\.py$|app_state_cli/)'; then
-              INSTALLER_AND_CLI_CHANGED="true"
+            if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^(daemon-rs/install\.sh$|daemon-rs/tests/.*\.py$)'; then
+              INSTALLER_TESTS_CHANGED="true"
             fi
           fi
 
           RUN_RUST_DAEMON_BUILD="false"
           RUN_DAEMON_VM_E2E="false"
-          RUN_INSTALLER_AND_CLI_TESTS="false"
+          RUN_INSTALLER_TESTS="false"
 
           if [ "${BINARY_CHANGED}" = "true" ] || [ "${DAEMON_RS_TESTS_CHANGED}" = "true" ] || [ "${FORCE_DAEMON_TESTS}" = "true" ]; then
             RUN_RUST_DAEMON_BUILD="true"
@@ -151,15 +151,15 @@ jobs:
           if [ "${BINARY_CHANGED}" = "true" ] || [ "${DAEMON_E2E_HARNESS_CHANGED}" = "true" ] || [ "${FORCE_DAEMON_TESTS}" = "true" ]; then
             RUN_DAEMON_VM_E2E="true"
           fi
-          if [ "${BINARY_CHANGED}" = "true" ] || [ "${INSTALLER_AND_CLI_CHANGED}" = "true" ] || [ "${FORCE_DAEMON_TESTS}" = "true" ]; then
-            RUN_INSTALLER_AND_CLI_TESTS="true"
+          if [ "${BINARY_CHANGED}" = "true" ] || [ "${INSTALLER_TESTS_CHANGED}" = "true" ] || [ "${FORCE_DAEMON_TESTS}" = "true" ]; then
+            RUN_INSTALLER_TESTS="true"
           fi
 
           {
             echo "binary_changed=${BINARY_CHANGED}"
             echo "run_rust_daemon_build=${RUN_RUST_DAEMON_BUILD}"
             echo "run_daemon_vm_e2e=${RUN_DAEMON_VM_E2E}"
-            echo "run_installer_and_cli_tests=${RUN_INSTALLER_AND_CLI_TESTS}"
+            echo "run_installer_tests=${RUN_INSTALLER_TESTS}"
           } >> "${GITHUB_OUTPUT}"
 
           {
@@ -169,7 +169,7 @@ jobs:
             echo "- Binary changed: \`${BINARY_CHANGED}\`"
             echo "- Run Rust daemon build & tests: \`${RUN_RUST_DAEMON_BUILD}\`"
             echo "- Run multi-distro Linux VM E2E matrix: \`${RUN_DAEMON_VM_E2E}\`"
-            echo "- Run installer & app_state_cli tests: \`${RUN_INSTALLER_AND_CLI_TESTS}\`"
+            echo "- Run installer tests: \`${RUN_INSTALLER_TESTS}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload verified cached daemon binaries (when unchanged)
@@ -361,11 +361,11 @@ jobs:
           path: app/build/outputs/roborazzi/
           if-no-files-found: ignore
 
-  installer-and-cli-tests:
-    name: Daemon Installer & App State CLI Tests (Python ${{ matrix.python }})
+  installer-tests:
+    name: Daemon Installer Tests (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     needs: [daemon-change-check]
-    if: needs.daemon-change-check.outputs.run_installer_and_cli_tests == 'true'
+    if: needs.daemon-change-check.outputs.run_installer_tests == 'true'
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -383,9 +383,6 @@ jobs:
 
       - name: Test the POSIX installer for the Rust daemon
         run: python3 -W error::ResourceWarning -m unittest discover -s daemon-rs/tests -v
-
-      - name: Run app_state_cli tests
-        run: python3 -W error::ResourceWarning -m unittest discover -s app_state_cli -v
 
   docker-vm-e2e:
     name: Rust Daemon Linux VM E2E (${{ matrix.vm.label }})
@@ -565,7 +562,7 @@ jobs:
       - daemon-change-check
       - rust-daemon-build-and-test
       - build-and-unit-test
-      - installer-and-cli-tests
+      - installer-tests
       - docker-vm-e2e
       - e2e-tests
     if: always()
@@ -578,7 +575,7 @@ jobs:
           DAEMON_CHANGE_CHECK: ${{ needs.daemon-change-check.result }}
           RUST_DAEMON: ${{ needs.rust-daemon-build-and-test.result }}
           BUILD_AND_UNIT_TEST: ${{ needs.build-and-unit-test.result }}
-          INSTALLER_AND_CLI: ${{ needs.installer-and-cli-tests.result }}
+          INSTALLER_TESTS: ${{ needs.installer-tests.result }}
           DOCKER_VM_E2E: ${{ needs.docker-vm-e2e.result }}
           E2E_TESTS: ${{ needs.e2e-tests.result }}
         run: |
@@ -601,14 +598,14 @@ jobs:
           require_success "build-and-unit-test" "$BUILD_AND_UNIT_TEST"
           require_success "e2e-tests" "$E2E_TESTS"
           require_success_or_skipped "rust-daemon-build-and-test" "$RUST_DAEMON"
-          require_success_or_skipped "installer-and-cli-tests" "$INSTALLER_AND_CLI"
+          require_success_or_skipped "installer-tests" "$INSTALLER_TESTS"
           require_success_or_skipped "docker-vm-e2e" "$DOCKER_VM_E2E"
           exit "$fail"
 
   publish-branch-prerelease:
     name: Publish Branch Pre-Release (APK + Rust Daemon Binaries)
     runs-on: ubuntu-latest
-    needs: [static-checks, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-and-cli-tests, docker-vm-e2e]
+    needs: [static-checks, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-tests, docker-vm-e2e]
     if: >-
       always() &&
       !cancelled() &&
@@ -617,7 +614,7 @@ jobs:
       needs.build-and-unit-test.result == 'success' &&
       needs.e2e-tests.result == 'success' &&
       (needs.rust-daemon-build-and-test.result == 'success' || needs.rust-daemon-build-and-test.result == 'skipped') &&
-      (needs.installer-and-cli-tests.result == 'success' || needs.installer-and-cli-tests.result == 'skipped') &&
+      (needs.installer-tests.result == 'success' || needs.installer-tests.result == 'skipped') &&
       (needs.docker-vm-e2e.result == 'success' || needs.docker-vm-e2e.result == 'skipped') &&
       github.event_name == 'workflow_dispatch' &&
       github.ref != 'refs/heads/main'
@@ -677,7 +674,7 @@ jobs:
   publish-apk:
     name: Publish Verified APK & Static Daemon Release
     runs-on: ubuntu-latest
-    needs: [static-checks, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-and-cli-tests, docker-vm-e2e]
+    needs: [static-checks, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-tests, docker-vm-e2e]
     if: >-
       always() &&
       !cancelled() &&
@@ -686,7 +683,7 @@ jobs:
       needs.build-and-unit-test.result == 'success' &&
       needs.e2e-tests.result == 'success' &&
       (needs.rust-daemon-build-and-test.result == 'success' || needs.rust-daemon-build-and-test.result == 'skipped') &&
-      (needs.installer-and-cli-tests.result == 'success' || needs.installer-and-cli-tests.result == 'skipped') &&
+      (needs.installer-tests.result == 'success' || needs.installer-tests.result == 'skipped') &&
       (needs.docker-vm-e2e.result == 'success' || needs.docker-vm-e2e.result == 'skipped') &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')

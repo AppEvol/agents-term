@@ -1,5 +1,5 @@
 //! Minimal zero-dependency blocking HTTP/1.1 client for talking to the local/tailnet daemon
-//! from `install`, `ensure-running`, and `app` (`app_state_cli`) subcommands.
+//! from `install`, `ensure-running`, and `app` (`agents_term_app_cli`) subcommands.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -28,18 +28,23 @@ pub fn http_request(
     body: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<HttpResponse, String> {
-    let addr = format!("{host}:{port}")
+    let host_port = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    let addr = host_port
         .to_socket_addrs()
-        .map_err(|e| format!("Failed to resolve {host}:{port}: {e}"))?
+        .map_err(|e| format!("Failed to resolve {host_port}: {e}"))?
         .next()
-        .ok_or_else(|| format!("No socket address for {host}:{port}"))?;
+        .ok_or_else(|| format!("No socket address for {host_port}"))?;
 
     let mut stream = TcpStream::connect_timeout(&addr, timeout)
-        .map_err(|e| format!("Connection to {host}:{port} failed: {e}"))?;
+        .map_err(|e| format!("Connection to {host_port} failed: {e}"))?;
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
 
-    let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n");
+    let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {host_port}\r\nAccept: application/json\r\nConnection: close\r\n");
     if let Some(tok) = token.filter(|t| !t.is_empty()) {
         req.push_str(&format!("Authorization: Bearer {tok}\r\n"));
     }

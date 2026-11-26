@@ -489,14 +489,16 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.assertEqual(info["commit"], self.binary_hash)
         self.assertEqual(info["defaultCwd"], "/home/vmuser")
         self.assertIn("live-debugging.md", info["defaultSystemPrompt"])
+        self.assertIn("agents_term_app_cli", info["defaultSystemPrompt"])
         self.assertIn("close this tab", info["defaultSystemPromptFullAccess"])
         agent_types = {a["type"]: a for a in info["agents"]}
         for kind in ("agy", "claude", "codex", "shell"):
             self.assertIn(kind, agent_types)
             self.assertTrue(agent_types[kind]["available"], f"Agent {kind} should be available")
 
-        # Verify embedded doc, symlink, and strict config permissions (0700 dir / 0600 config.json).
+        # Verify embedded doc, symlinks, and strict config permissions (0700 dir / 0600 config.json).
         self.assertEqual(self.docker_exec("test -f ~/.config/herdr-mobile/live-debugging.md").returncode, 0)
+        self.assertEqual(self.docker_exec("test -L ~/.local/bin/agents_term_app_cli").returncode, 0)
         self.assertEqual(self.docker_exec("test -L ~/.local/bin/app_state_cli").returncode, 0)
         perms = self.docker_exec(
             "stat -c '%a' ~/.config/herdr-mobile ~/.config/herdr-mobile/config.json"
@@ -1134,7 +1136,12 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         self.assertFalse(status_empty["ready"])
         self.assertEqual(status_empty["reason"], "no_app_connected")
 
-        cli_no_app = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} status")
+        cli_help = self.docker_exec("$HOME/.local/bin/agents_term_app_cli --help")
+        self.assertEqual(cli_help.returncode, 0, cli_help.stdout + cli_help.stderr)
+        self.assertIn("agents_term_app_cli", cli_help.stdout)
+        self.assertIn("RECOMMENDED AGENT WORKFLOW", cli_help.stdout)
+
+        cli_no_app = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} status")
         self.assertEqual(cli_no_app.returncode, 3)
 
         st_cmd, err_no_app = self.api("POST", "/api/app/command", {"command": "state", "args": {}})
@@ -1202,15 +1209,20 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
                             "requestId": rid,
                             "ok": True,
                             "result": {
-                                "windowWidth": 1080,
-                                "windowHeight": 2400,
+                                "width": 1080,
+                                "height": 2400,
+                                "windows": [{"index": 0, "type": "activity"}],
+                                "nodeCount": 1,
                                 "nodes": [
                                     {
+                                        "id": 1,
+                                        "window": 0,
                                         "tag": "send_btn",
                                         "text": "Send",
                                         "role": "Button",
                                         "clickable": True,
-                                        "bounds": {"left": 10, "top": 20, "right": 110, "bottom": 70},
+                                        "bounds": [10, 20, 110, 70],
+                                        "center": [60, 45],
                                     }
                                 ],
                             },
@@ -1252,7 +1264,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
                 }
             )
             time.sleep(0.15)
-            dis_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} status")
+            dis_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} status")
             self.assertEqual(dis_res.returncode, 3)
             self.assertEqual(json.loads(dis_res.stdout)["reason"], "inspection_disabled")
 
@@ -1273,17 +1285,21 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             threading.Thread(target=responder, daemon=True).start()
             time.sleep(0.15)
 
-            st_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli status --port {self.daemon_port}")
+            st_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli status --port {self.daemon_port}")
             self.assertEqual(st_res.returncode, 0, st_res.stdout + st_res.stderr)
             st_json = json.loads(st_res.stdout)
             self.assertTrue(st_json["ready"])
             self.assertFalse(st_json["controlReady"])
             self.assertEqual(st_json["controlReason"], "control_disabled")
 
-            # Read-only commands via both `app_state_cli` symlink and `agentsterm-daemon app`.
-            state_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} state")
+            # Read-only commands via `agents_term_app_cli`, legacy `app_state_cli` alias, and `agentsterm-daemon app`.
+            state_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} state")
             self.assertEqual(state_res.returncode, 0)
             self.assertEqual(json.loads(state_res.stdout)["result"]["screen"], "chat")
+
+            ping_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} ping")
+            self.assertEqual(ping_res.returncode, 0)
+            self.assertEqual(json.loads(ping_res.stdout)["result"]["echoCommand"], "ping")
 
             logs_res = self.docker_exec(
                 f"$HOME/.local/bin/agentsterm-daemon app logs --limit 5 --category net --grep hi --port {self.daemon_port}"
@@ -1292,38 +1308,41 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             self.assertEqual(json.loads(logs_res.stdout)["result"]["echoArgs"]["contains"], "hi")
 
             logcat_res = self.docker_exec(
-                f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} logcat --lines 20 --raw"
+                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} logcat --lines 20 --raw"
             )
             self.assertEqual(logcat_res.returncode, 0)
             self.assertIn("RAW_LOGCAT_LINE", logcat_res.stdout)
 
-            crash_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} crash --raw")
+            crash_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} crash --raw")
             self.assertEqual(crash_res.returncode, 0)
             self.assertIn("RAW_CRASH_LINE", crash_res.stdout)
 
-            ui_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} ui --brief")
+            ui_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} ui --brief")
             self.assertEqual(ui_res.returncode, 0)
-            self.assertIn("window: 1080x2400", ui_res.stdout)
-            self.assertIn("#send_btn", ui_res.stdout)
+            self.assertIn("1080x2400 screenshot pixels", ui_res.stdout)
+            self.assertIn("tag=send_btn", ui_res.stdout)
 
             shot_res = self.docker_exec(
-                f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} screenshot -o /tmp/e2e-shot.png"
+                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} screenshot -o /tmp/e2e-shot.png"
             )
             self.assertEqual(shot_res.returncode, 0, shot_res.stdout + shot_res.stderr)
             self.assertEqual(self.docker_exec("test -s /tmp/e2e-shot.png").returncode, 0)
 
-            dump_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} dump --note e2e")
+            dump_res = self.docker_exec(
+                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} dump --note e2e --no-screenshot"
+            )
             self.assertEqual(dump_res.returncode, 0)
+            self.assertFalse(json.loads(dump_res.stdout)["result"]["echoArgs"]["includeScreenshot"])
 
             raw_res = self.docker_exec(
-                f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} raw ping '{{\"x\":1}}'"
+                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} raw ping --args '{{\"x\":1}}'"
             )
             self.assertEqual(raw_res.returncode, 0)
             self.assertEqual(json.loads(raw_res.stdout)["result"]["echoArgs"]["x"], 1)
 
             # Control command rejected with exit 3 when controlEnabled=False.
             tap_denied = self.docker_exec(
-                f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} tap --tag send_btn"
+                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} tap --tag send_btn"
             )
             self.assertEqual(tap_denied.returncode, 3)
             self.assertIn("control_disabled", tap_denied.stderr)
@@ -1345,31 +1364,34 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             time.sleep(0.15)
             for subcmd in [
                 "tap --tag send_btn",
-                "long-press --xy 10 20 --duration 600",
-                "swipe 10 20 30 40 --duration 200",
-                "scroll --direction down",
-                "type 'hello world' --tag composer --submit",
+                "tap 60 45",
+                "long-press 10 20 --duration-ms 600",
+                "swipe 10 20 30 40 --duration-ms 200 --hold-ms 50",
+                "scroll down --amount 0.3",
+                "type 'hello world' --tag composer --replace --submit",
                 "key back",
-                "wait --tag send_btn --timeout 2",
+                "wait --tag send_btn --wait-timeout 2",
             ]:
-                c_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} {subcmd}")
+                c_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} {subcmd}")
                 self.assertEqual(c_res.returncode, 0, f"Command `{subcmd}` failed:\n{c_res.stdout}\n{c_res.stderr}")
 
             # App error response -> exit 4.
             mode_state["behavior"] = "error"
-            err_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} state")
+            err_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} state")
             self.assertEqual(err_res.returncode, 4)
             self.assertIn("Simulated app failure", err_res.stderr)
 
             # Timeout -> exit 4 (HTTP 504).
             mode_state["behavior"] = "timeout"
-            to_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} --timeout 1 state")
+            to_res = self.docker_exec(
+                f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} --timeout 1 state"
+            )
             self.assertEqual(to_res.returncode, 4)
             self.assertIn("timeout", to_res.stderr)
 
             # App disconnect mid-flight -> exit 3 (HTTP 503).
             mode_state["behavior"] = "disconnect"
-            dc_res = self.docker_exec(f"$HOME/.local/bin/app_state_cli --port {self.daemon_port} state")
+            dc_res = self.docker_exec(f"$HOME/.local/bin/agents_term_app_cli --port {self.daemon_port} state")
             self.assertEqual(dc_res.returncode, 3)
             self.assertIn("app_disconnected", dc_res.stderr)
         finally:

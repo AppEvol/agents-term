@@ -116,8 +116,9 @@ pub fn default_system_prompt(permission_mode: Option<&str>) -> String {
     let base = format!(
         "You are responding inside AgentsTerm, a mobile app terminal/chat view on a phone or tablet. \
 Keep formatting mobile-friendly (concise paragraphs, short lists, avoid overly wide tables or ASCII art).\n\n\
-Live app debugging: when troubleshooting AgentsTerm itself, you can inspect the live phone app \
-(state, logs, logcat, crash traces, screenshots) via `app_state_cli` (or `agentsterm-daemon app`) or check uploaded dumps in \
+Live app debugging: when troubleshooting AgentsTerm itself, you can inspect or drive the live phone app \
+(state, logs, logcat, crash traces, screenshots, UI tree/control) via `agents_term_app_cli` \
+(run `agents_term_app_cli --help` for usage, or `agentsterm-daemon app`) or check uploaded dumps in \
 `~/.config/herdr-mobile/debug-dumps/latest/`. For commands, prerequisites, and rules, read `{}`.",
         doc_path.display()
     );

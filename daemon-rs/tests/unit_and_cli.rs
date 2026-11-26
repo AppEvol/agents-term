@@ -80,26 +80,47 @@ fn app_cli_reports_exit_2_when_daemon_unreachable_and_supports_symlink() {
     let home = make_temp_dir("agentsterm-app-cli");
     let link_dir = home.join("bin");
     fs::create_dir_all(&link_dir).unwrap();
-    let link = link_dir.join("app_state_cli");
-    std::os::unix::fs::symlink(bin_path(), &link).unwrap();
+    let primary_link = link_dir.join("agents_term_app_cli");
+    let legacy_link = link_dir.join("app_state_cli");
+    std::os::unix::fs::symlink(bin_path(), &primary_link).unwrap();
+    std::os::unix::fs::symlink(bin_path(), &legacy_link).unwrap();
 
     // Global flags work both before and after subcommand, and unreachable daemon exits 2.
-    let res = Command::new(&link)
-        .args(["status", "--host", "127.0.0.1", "--port", "1"])
+    for link in [&primary_link, &legacy_link] {
+        let res = Command::new(link)
+            .args(["status", "--host", "127.0.0.1", "--port", "1"])
+            .env("HOME", &home)
+            .output()
+            .unwrap();
+        assert_eq!(res.status.code(), Some(2));
+        let err_json: Value = serde_json::from_slice(&res.stderr).unwrap();
+        assert_eq!(err_json["ok"].as_bool(), Some(false));
+        assert_eq!(err_json["code"].as_str(), Some("daemon_unreachable"));
+    }
+
+    // Help output via agents_term_app_cli explains agent usage, prerequisites, and exit codes.
+    let help = Command::new(&primary_link)
+        .arg("--help")
         .env("HOME", &home)
         .output()
         .unwrap();
-    assert_eq!(res.status.code(), Some(2));
-    let err_json: Value = serde_json::from_slice(&res.stderr).unwrap();
-    assert_eq!(err_json["code"].as_str(), Some("daemon_unreachable"));
+    assert!(help.status.success());
+    let help_str = String::from_utf8_lossy(&help.stdout);
+    assert!(help_str.contains("agents_term_app_cli"));
+    assert!(help_str.contains("RECOMMENDED AGENT WORKFLOW"));
+    assert!(help_str.contains("Allow VM agents to inspect the app"));
+    assert!(help_str.contains("Allow VM agents to control the app"));
+    assert!(help_str.contains("tap 980 2200"));
 
-    // Usage error (both --tag and --xy on tap) exits 1.
+    // Usage error (both --tag and --xy on tap) exits 1 with bad_args.
     let bad_tap = Command::new(bin_path())
         .args(["app", "tap", "--tag", "foo", "--xy", "1", "2"])
         .env("HOME", &home)
         .output()
         .unwrap();
     assert_eq!(bad_tap.status.code(), Some(1));
+    let bad_json: Value = serde_json::from_slice(&bad_tap.stderr).unwrap();
+    assert_eq!(bad_json["code"].as_str(), Some("bad_args"));
 
     let _ = fs::remove_dir_all(&home);
 }

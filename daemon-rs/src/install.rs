@@ -135,18 +135,20 @@ fn stop_legacy_daemons() {
     }
 }
 
-fn ensure_app_state_cli_symlink(exe: &Path) {
+fn ensure_app_cli_symlinks(exe: &Path) {
     let bin_dir = home_dir().join(".local").join("bin");
     let _ = fs::create_dir_all(&bin_dir);
-    let link_path = bin_dir.join("app_state_cli");
-    if let Ok(meta) = fs::symlink_metadata(&link_path) {
-        if meta.file_type().is_symlink() {
-            let _ = fs::remove_file(&link_path);
-        } else {
-            return;
+    for name in ["agents_term_app_cli", "app_state_cli"] {
+        let link_path = bin_dir.join(name);
+        if let Ok(meta) = fs::symlink_metadata(&link_path) {
+            if meta.file_type().is_symlink() {
+                let _ = fs::remove_file(&link_path);
+            } else {
+                continue;
+            }
         }
+        let _ = symlink(exe, &link_path);
     }
-    let _ = symlink(exe, &link_path);
 }
 
 fn current_username() -> String {
@@ -409,7 +411,7 @@ pub fn run_install(host_arg: Option<String>, port: u16, force_restart: bool) -> 
         return die(1, &format!("Could not create config dir: {err}"));
     }
     ensure_live_debugging_doc();
-    ensure_app_state_cli_symlink(&exe);
+    ensure_app_cli_symlinks(&exe);
 
     let mut cfg = load_or_create_config();
     if cfg.host.as_deref() != Some(host.as_str()) || cfg.port != Some(port) {

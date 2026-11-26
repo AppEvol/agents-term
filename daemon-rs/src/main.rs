@@ -27,7 +27,7 @@ const USAGE: &str = "usage: agentsterm-daemon [serve|install|ensure-running|pair
   pairing         print the herdr://connect pairing URI for the Android app\n\
   rotate-token    generate a new bearer token (restart the daemon to apply)\n\
   version         print the daemon version and build hash (--hash-only for hash only)\n\
-  app             inspect or drive the connected Android app (also invoked via app_state_cli symlink)\n\
+  app             inspect or drive the connected Android app (also via agents_term_app_cli symlink)\n\
 \n\
 Options:\n\
   --host HOST       bind/advertise address\n\
@@ -47,17 +47,21 @@ fn default_port() -> u16 {
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
-    // Support direct invocation via symlink `~/.local/bin/app_state_cli -> agentsterm-daemon`.
+    // Support direct invocation via symlink `~/.local/bin/agents_term_app_cli -> agentsterm-daemon`
+    // (and legacy `~/.local/bin/app_state_cli -> agentsterm-daemon`).
     let invoked_name = args
         .first()
         .and_then(|a| Path::new(a).file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    if invoked_name == "app_state_cli" || invoked_name == "app-state-cli" {
+    if matches!(
+        invoked_name,
+        "agents_term_app_cli" | "agents-term-app-cli" | "app_state_cli" | "app-state-cli"
+    ) {
         unsafe {
             libc::signal(libc::SIGPIPE, libc::SIG_DFL);
         }
-        return ExitCode::from(app_cli::run_app_cli(&args[1..]) as u8);
+        return ExitCode::from(app_cli::run_app_cli("agents_term_app_cli", &args[1..]) as u8);
     }
 
     let argv = &args[1..];
@@ -66,7 +70,7 @@ fn main() -> ExitCode {
             unsafe {
                 libc::signal(libc::SIGPIPE, libc::SIG_DFL);
             }
-            return ExitCode::from(app_cli::run_app_cli(&argv[1..]) as u8);
+            return ExitCode::from(app_cli::run_app_cli("agentsterm-daemon app", &argv[1..]) as u8);
         }
     }
 

@@ -13,7 +13,7 @@ data class DebugSharingSettings(
     val autoUploadOnError: Boolean = false,
     /** Lets agents on the connected VM query live app state (logs, state, screenshots) via the daemon. */
     val remoteInspectionEnabled: Boolean = false,
-    /** Also lets those agents tap, swipe and type in the app (app_state_cli tap/swipe/type/key). */
+    /** Also lets those agents tap, swipe and type in the app (agents_term_app_cli tap/swipe/type/key). */
     val remoteControlEnabled: Boolean = false,
 ) {
     val remoteInspectionActive: Boolean get() = enabled && remoteInspectionEnabled

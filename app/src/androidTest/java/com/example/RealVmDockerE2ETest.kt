@@ -31,7 +31,7 @@ import org.junit.runners.model.Statement
 /**
  * End-to-end instrumented tests connecting the real Android app on the Emulator to a real Linux
  * Docker VM container over `adb reverse` (real OpenSSH -> real daemon install -> real HTTP/WS ->
- * real bash & deterministic agent CLIs -> real live app debugging via `app_state_cli`).
+ * real bash & deterministic agent CLIs -> real live app debugging via `agents_term_app_cli`).
  *
  * Activated when instrumentation argument `realVmSshPort` is supplied (see `.github/workflows/ci.yml`).
  */
@@ -188,7 +188,7 @@ class RealVmDockerE2ETest {
         // Re-running SSH bootstrap against the already-running Docker daemon must succeed idempotently.
         bootstrapOverRealSsh()
 
-        // Enable remote inspection in Settings so app_state_cli inside Docker can query this live app.
+        // Enable remote inspection in Settings so agents_term_app_cli inside Docker can query this live app.
         composeRule.onNodeWithTag("overflow_menu_button").performClick()
         composeRule.onNodeWithTag("menu_app_settings").performClick()
         waitForTag("debug_sharing_switch")
@@ -197,9 +197,9 @@ class RealVmDockerE2ETest {
         composeRule.onNodeWithTag("settings_back_button").performClick()
         waitForTag("top_new_tab_button")
 
-        // Invoke native app_state_cli symlink from inside the zero-dependency Docker VM via a real Shell tab.
+        // Invoke native agents_term_app_cli symlink from inside the zero-dependency Docker VM via a real Shell tab.
         val daemonPort = arg("realVmDaemonPort", "7591")
-        val cliCmd = arg("realVmAppStateCliCmd", "app_state_cli")
+        val cliCmd = arg("realVmAppStateCliCmd", "agents_term_app_cli")
         createTab("shell", "Live Debug Shell")
         composeRule.onNodeWithTag("composer_input")
             .performTextInput("$cliCmd --port $daemonPort state --pretty")
