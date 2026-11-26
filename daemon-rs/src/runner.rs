@@ -576,12 +576,23 @@ impl AgentRunner {
         });
         let is_first_task_prompt = !has_prior_task;
 
+        let effective_mode = override_permission_mode
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| tab.get("permissionMode").and_then(Value::as_str))
+            .unwrap_or("full-access")
+            .to_string();
+
         let now = now_ms();
         let mut user_message = Self::new_message(&tab_id, "user", prompt_text, "complete", now);
         if !attachments.is_empty() {
             user_message["attachments"] = Value::Array(attachments.to_vec());
         }
-        let assistant_message = Self::new_message(&tab_id, "assistant", "", "streaming", now + 1);
+        let mut assistant_message =
+            Self::new_message(&tab_id, "assistant", "", "streaming", now + 1);
+        if agent != "shell" {
+            assistant_message["permissionMode"] = json!(effective_mode);
+        }
         self.store.add_message(&tab_id, user_message.clone());
         self.store.add_message(&tab_id, assistant_message.clone());
 
@@ -591,13 +602,6 @@ impl AgentRunner {
                 return self.handle_model_command(tab, user_message, assistant_message, arg);
             }
         }
-
-        let effective_mode = override_permission_mode
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .or_else(|| tab.get("permissionMode").and_then(Value::as_str))
-            .unwrap_or("full-access")
-            .to_string();
 
         let mut working_patch = Map::new();
         working_patch.insert("status".into(), json!("working"));
@@ -1158,7 +1162,7 @@ impl AgentRunner {
             })
         };
 
-        let (msg_text, existing_err, existing_denied) = {
+        let (msg_text, existing_err, existing_denied, msg_permission_mode) = {
             let m = msg_arc.lock().unwrap();
             (
                 m.get("text")
@@ -1170,6 +1174,9 @@ impl AgentRunner {
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default(),
+                m.get("permissionMode")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             )
         };
         let denied = if !denied_actions.is_empty() {
@@ -1177,6 +1184,14 @@ impl AgentRunner {
         } else {
             existing_denied
         };
+        let turn_permission_mode = msg_permission_mode
+            .or_else(|| {
+                tab.get("permissionMode")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "full-access".to_string());
+        let denied_under_full_access = turn_permission_mode == "full-access";
 
         let failed = exit_code.map(|c| c != 0).unwrap_or(false);
         let mut final_status = "complete";
@@ -1194,7 +1209,7 @@ impl AgentRunner {
                     final_error = Some(RESTART_INTERRUPTED_REASON.to_string());
                 }
             }
-        } else if !denied.is_empty() {
+        } else if !denied.is_empty() && !denied_under_full_access {
             final_status = "complete";
             tab_status = "blocked";
             status_detail = Some("Waiting for approval".to_string());

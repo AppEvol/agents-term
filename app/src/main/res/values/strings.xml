@@ -89,6 +89,9 @@
     <string name="holding_interrupt_run_status">Keep holding to interrupt &amp; run…</string>
     <string name="permission_required_title">Permission Required</string>
     <string name="permission_required_body">Agent was blocked waiting for approval: %1$s</string>
+    <string name="permission_denied_full_access_title">Denied by Agent Settings</string>
+    <string name="permission_denied_full_access_claude_body">Full access is already enabled, so this was blocked by Claude\'s deny rules (e.g. ~/.claude/settings.json): %1$s</string>
+    <string name="permission_denied_full_access_body">Full access is already enabled, so this was blocked by the agent\'s own settings or policy: %1$s</string>
     <string name="thinking_label">Reasoning</string>
     <string name="thinking_streaming_label">Reasoning…</string>
     <string name="assistant_empty_response">No response text was returned by the agent.</string>

@@ -1592,3 +1592,89 @@ fn queued_messages_keep_their_images_and_removed_ones_delete_them() {
     drop(daemon);
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn full_access_permission_denials_do_not_mark_tab_blocked() {
+    let home = make_temp_dir("agentsterm-rs-full-access-denials");
+    let fake_bin = home.join("fake-bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    write_exec(
+        &fake_bin.join("claude"),
+        r#"#!/usr/bin/env sh
+printf '{"type":"result","session_id":"sess-deny","subtype":"success","is_error":false,"result":"Tool call was denied by settings.","permission_denials":[{"tool_name":"Bash","tool_input":{"description":"Download rustup","command":"curl https://sh.rustup.rs"}}]}\n'
+"#,
+    );
+
+    let daemon = TestDaemon::start(&home, Some(&fake_bin));
+
+    // 1) Restricted ("default") tab: denial marks the tab blocked waiting for approval.
+    let (st, created_default) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({
+            "agent": "claude",
+            "cwd": home.to_string_lossy(),
+            "permissionMode": "default",
+        })),
+    );
+    assert_eq!(st, 200, "{created_default}");
+    let default_tab = created_default["tab"]["id"].as_str().unwrap().to_string();
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{default_tab}/messages"),
+        Some(json!({ "text": "install rust" })),
+    );
+    assert_eq!(st, 200);
+    let settled = daemon.wait_settled(&default_tab, 2);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("blocked"));
+    assert_eq!(
+        settled["tab"]["statusDetail"].as_str(),
+        Some("Waiting for approval")
+    );
+    let default_msg = &settled["messages"].as_array().unwrap()[1];
+    assert_eq!(default_msg["permissionMode"].as_str(), Some("default"));
+    assert_eq!(default_msg["deniedActions"].as_array().unwrap().len(), 1);
+
+    // 2) Single-turn overridePermissionMode="full-access": records permissionMode="full-access"
+    //    and leaves the tab idle instead of "blocked" even when the CLI's own deny rules reject it.
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{default_tab}/messages"),
+        Some(json!({ "text": "install rust", "overridePermissionMode": "full-access" })),
+    );
+    assert_eq!(st, 200);
+    let settled = daemon.wait_settled(&default_tab, 4);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("idle"));
+    assert!(settled["tab"]["statusDetail"].is_null());
+    let override_msg = &settled["messages"].as_array().unwrap()[3];
+    assert_eq!(override_msg["permissionMode"].as_str(), Some("full-access"));
+    assert_eq!(override_msg["deniedActions"].as_array().unwrap().len(), 1);
+
+    // 3) Tab configured with full-access: preserves deniedActions without marking the tab blocked.
+    let (st, created_full) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({
+            "agent": "claude",
+            "cwd": home.to_string_lossy(),
+            "permissionMode": "full-access",
+        })),
+    );
+    assert_eq!(st, 200, "{created_full}");
+    let full_tab = created_full["tab"]["id"].as_str().unwrap().to_string();
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{full_tab}/messages"),
+        Some(json!({ "text": "install rust" })),
+    );
+    assert_eq!(st, 200);
+    let settled = daemon.wait_settled(&full_tab, 2);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("idle"));
+    assert!(settled["tab"]["statusDetail"].is_null());
+    let full_msg = &settled["messages"].as_array().unwrap()[1];
+    assert_eq!(full_msg["permissionMode"].as_str(), Some("full-access"));
+    assert_eq!(full_msg["deniedActions"].as_array().unwrap().len(), 1);
+
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}
