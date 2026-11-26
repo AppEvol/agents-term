@@ -1,0 +1,25 @@
+Here is the demo script for you to follow:
+
+1) Starting from the demo tab, click around to show different menus of the app.
+
+
+2) Go back to the demo tab, type "what is the meaning of life?" then hit
+send. Wait for it to show lot of text on the screen then do the scroll. This to
+demonstarte the performance for the one in (2)
+
+2) Open a new tab with Codex, pick Astra 5.2, type "Gather the data you can have
+from the app, then analyze any performance issues we have right now, then file
+bugs for these issues. Be sure to post to existing bugs if they already filed"
+
+Wait for the tool calls to load, then take a screenshot.
+
+3) Open a new tab with Claude Code, pick Fable 5.2, add the recently taken
+screenshot to the chat, then ask it "Can you please update the tool call icon?"
+
+4) Come back to demo tab. Type "the meaning of life is being able to full
+control of your destiny and doing awesome things!"
+
+5) Demo end.
+
+Before each key action, please type some text giving the users what you are
+about to do next, except for the number (4).
