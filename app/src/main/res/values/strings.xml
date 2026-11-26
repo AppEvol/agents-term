@@ -44,6 +44,8 @@
     <string name="attachment_no_picker">No photo picker is available</string>
     <string name="action_copy_code">Copy code</string>
     <string name="action_copy_message">Copy response</string>
+    <string name="action_copy_tab_id">Copy tab ID</string>
+    <string name="tab_id_copied">Copied tab ID</string>
     <string name="action_toggle_token">Toggle token visibility</string>
     <string name="action_parent_folder">Parent folder</string>
     <string name="action_save">Save</string>
