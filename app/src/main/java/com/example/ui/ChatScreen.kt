@@ -1,5 +1,18 @@
 package com.example.ui
 
+import android.net.Uri
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.VisualTransformation
+import com.example.data.formatAttachmentCount
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -62,7 +75,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -409,6 +421,7 @@ fun ChatWorkspace(
     onRemoveQueuedMessage: (String) -> Unit = {},
     onRetryFullAccess: () -> Unit,
     modifier: Modifier = Modifier,
+    attachments: ComposerAttachments? = null,
 ) {
     val listState = rememberSaveable(tab.id, saver = LazyListState.Saver) {
         LazyListState()
@@ -657,9 +670,10 @@ fun ChatWorkspace(
             modelLabel = modelLabel,
             hasCustomModel = hasCustomModel,
             onOpenModelPicker = onOpenModelPicker,
+            attachments = attachments,
             onSend = {
                 val text = draft.trim()
-                if (text.isNotEmpty()) {
+                if (text.isNotEmpty() || attachments?.hasReady == true) {
                     draft = ""
                     autoScrollPinned = true
                     sendGeneration += 1
@@ -752,21 +766,32 @@ private fun EmptyChatState(
 
 @Composable
 private fun UserMessageBubble(message: ChatMessage) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Surface(
-            shape = themedCorner(20.dp, 20.dp, 6.dp, 20.dp),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.widthIn(max = 320.dp),
-        ) {
-            Text(
-                text = message.text,
-                style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.padding(horizontal = 15.dp, vertical = 10.dp),
+        if (message.attachments.isNotEmpty()) {
+            MessageAttachmentsRow(
+                tabId = message.tabId,
+                attachments = message.attachments,
+                modifier = Modifier.widthIn(max = 320.dp),
             )
+        }
+        // A message can be images only, in which case there is no text bubble to draw.
+        if (message.text.isNotBlank() || message.attachments.isEmpty()) {
+            Surface(
+                shape = themedCorner(20.dp, 20.dp, 6.dp, 20.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.widthIn(max = 320.dp),
+            ) {
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(horizontal = 15.dp, vertical = 10.dp),
+                )
+            }
         }
     }
 }
@@ -1400,6 +1425,96 @@ private fun BlockedPermissionCard(
     }
 }
 
+/**
+ * The composer's text field. It is built on the state-based text field because that is the one
+ * that can receive images pasted from the clipboard or inserted by the keyboard.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ComposerTextField(
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    placeholder: String,
+    onImages: ((List<Uri>) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val fieldState = remember { TextFieldState(draft) }
+    val currentOnDraftChange by rememberUpdatedState(onDraftChange)
+    // The last text the field itself reported. A draft that differs from it was changed from
+    // outside (cleared after sending, or another tab's draft) and has to be put into the field;
+    // one that matches is only the field's own edit coming back and must not undo newer typing.
+    var lastReported by remember { mutableStateOf(draft) }
+    LaunchedEffect(fieldState) {
+        snapshotFlow { fieldState.text.toString() }.collect { typed ->
+            if (typed != lastReported) {
+                lastReported = typed
+                currentOnDraftChange(typed)
+            }
+        }
+    }
+    LaunchedEffect(draft) {
+        if (draft != lastReported) {
+            lastReported = draft
+            fieldState.setTextAndPlaceCursorAtEnd(draft)
+        }
+    }
+
+    val interactionSource = remember { MutableInteractionSource() }
+    val colors = TextFieldDefaults.colors(
+        focusedContainerColor = Color.Transparent,
+        unfocusedContainerColor = Color.Transparent,
+        disabledContainerColor = Color.Transparent,
+        focusedIndicatorColor = Color.Transparent,
+        unfocusedIndicatorColor = Color.Transparent,
+    )
+    val currentOnImages by rememberUpdatedState(onImages)
+    val imageModifier = if (onImages != null) {
+        Modifier.receiveImages { uris -> currentOnImages?.invoke(uris) }
+    } else {
+        Modifier
+    }
+    BasicTextField(
+        state = fieldState,
+        textStyle = LocalTextStyle.current.merge(color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+        interactionSource = interactionSource,
+        decorator = { innerTextField ->
+            TextFieldDefaults.DecorationBox(
+                value = fieldState.text.toString(),
+                innerTextField = innerTextField,
+                enabled = true,
+                singleLine = false,
+                visualTransformation = VisualTransformation.None,
+                interactionSource = interactionSource,
+                placeholder = {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                colors = colors,
+            )
+        },
+        modifier = modifier
+            .defaultMinSize(minHeight = TextFieldDefaults.MinHeight)
+            .then(imageModifier)
+            .testTag("composer_input"),
+    )
+}
+
+/** What the queue shows for a message: its text, with the number of images it carries. */
+internal fun queuedMessageLabel(item: QueuedMessage): String {
+    val images = item.attachments.size
+    return when {
+        images == 0 -> item.text
+        item.text.isBlank() -> formatAttachmentCount(images)
+        else -> "${item.text} (${formatAttachmentCount(images)})"
+    }
+}
+
 @Composable
 private fun QueuedMessagesTray(
     queuedMessages: List<QueuedMessage>,
@@ -1469,8 +1584,16 @@ private fun QueuedMessagesTray(
                             fontFamily = MonoFontFamily,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (item.attachments.isNotEmpty()) {
+                            Icon(
+                                imageVector = Icons.Rounded.Image,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
                         Text(
-                            text = item.text,
+                            text = queuedMessageLabel(item),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 2,
@@ -1511,6 +1634,7 @@ private fun ChatComposer(
     modelLabel: String? = null,
     hasCustomModel: Boolean = false,
     onOpenModelPicker: (() -> Unit)? = null,
+    attachments: ComposerAttachments? = null,
     onSend: () -> Unit,
     onForceInterrupt: (String?) -> Unit,
     onRemoveQueuedMessage: (String) -> Unit = {},
@@ -1540,6 +1664,10 @@ private fun ChatComposer(
     }
 
     val currentDraft by rememberUpdatedState(draft)
+    // There is something to send once there is text or an uploaded image. Sending waits for
+    // images that are still uploading, so a message never leaves without one of its images.
+    val hasContent = (draft.isNotBlank() || attachments?.hasReady == true) && attachments?.isUploading != true
+    val currentHasContent by rememberUpdatedState(hasContent)
     val currentHasQueued by rememberUpdatedState(queuedMessages.isNotEmpty())
     val currentOnSend by rememberUpdatedState(onSend)
     val currentOnForceInterrupt by rememberUpdatedState(onForceInterrupt)
@@ -1638,7 +1766,7 @@ private fun ChatComposer(
                         }
 
                         if (isHolding) {
-                            val hasPendingToRun = draft.isNotBlank() || queuedMessages.isNotEmpty()
+                            val hasPendingToRun = hasContent || queuedMessages.isNotEmpty()
                             Text(
                                 text = if (hasPendingToRun) {
                                     stringResource(R.string.holding_interrupt_run_status)
@@ -1692,6 +1820,14 @@ private fun ChatComposer(
                     MaterialTheme.colorScheme.outlineVariant
                 }
 
+                if (attachments != null && attachments.pending.isNotEmpty()) {
+                    PendingAttachmentsRow(
+                        pending = attachments.pending,
+                        onRemove = attachments.onRemove,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+
                 Surface(
                     shape = themedCorner(26.dp),
                     color = if (isLunaControls) Color.White else MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -1704,39 +1840,29 @@ private fun ChatComposer(
                             .padding(start = 8.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
                         verticalAlignment = Alignment.Bottom,
                     ) {
-                        TextField(
-                            value = draft,
-                            onValueChange = onDraftChange,
-                            placeholder = {
-                                Text(
-                                    text = if (isConnected) {
-                                        placeholder
-                                    } else {
-                                        stringResource(R.string.composer_reconnecting)
-                                    },
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                        if (attachments != null) {
+                            AttachImageButton(
+                                attachments = attachments,
+                                enabled = isConnected,
+                                modifier = Modifier.padding(bottom = 2.dp),
+                            )
+                        }
+
+                        ComposerTextField(
+                            draft = draft,
+                            onDraftChange = onDraftChange,
+                            placeholder = if (isConnected) {
+                                placeholder
+                            } else {
+                                stringResource(R.string.composer_reconnecting)
                             },
-                            maxLines = 6,
-                            keyboardOptions = KeyboardOptions(
-                                capitalization = KeyboardCapitalization.Sentences,
-                            ),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                disabledContainerColor = Color.Transparent,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent,
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("composer_input"),
+                            onImages = attachments?.onAttach,
+                            modifier = Modifier.weight(1f),
                         )
 
                         Spacer(Modifier.width(4.dp))
 
-                        val hasDraft = draft.isNotBlank()
+                        val hasDraft = hasContent
                         val hasQueued = queuedMessages.isNotEmpty()
                         val canSendIdle = !isWorking && (hasDraft || hasQueued) && isConnected
                         val showStopIcon = isWorking && !hasDraft && !hasQueued
@@ -1790,7 +1916,7 @@ private fun ChatComposer(
                                     if (isConnected) {
                                         onClick(label = buttonDescription) {
                                             if (!isWorking) {
-                                                if (currentDraft.isNotBlank()) {
+                                                if (currentHasContent) {
                                                     currentOnSend()
                                                     true
                                                 } else if (currentHasQueued) {
@@ -1799,7 +1925,7 @@ private fun ChatComposer(
                                                 } else {
                                                     false
                                                 }
-                                            } else if (currentDraft.isNotBlank()) {
+                                            } else if (currentHasContent) {
                                                 currentOnSend()
                                                 true
                                             } else {
@@ -1823,7 +1949,7 @@ private fun ChatComposer(
                                         if (!isWorking) {
                                             val up = waitForUpOrCancellation()
                                             if (up != null) {
-                                                if (currentDraft.isNotBlank()) {
+                                                if (currentHasContent) {
                                                     currentOnSend()
                                                 } else if (currentHasQueued) {
                                                     currentOnForceInterrupt(null)
@@ -1873,7 +1999,7 @@ private fun ChatComposer(
                                             }
 
                                             true -> {
-                                                if (currentDraft.isNotBlank()) {
+                                                if (currentHasContent) {
                                                     currentOnSend()
                                                 } else {
                                                     currentOnShowHoldHint()

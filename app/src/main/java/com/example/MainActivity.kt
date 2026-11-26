@@ -9,11 +9,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.ForegroundActivityTracker
 import com.example.ui.HerdrApp
+import com.example.ui.LocalAttachmentImages
 import com.example.ui.MainViewModel
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.HerdrTheme
@@ -29,7 +31,9 @@ class MainActivity : ComponentActivity() {
             val theme by viewModel.appTheme.collectAsStateWithLifecycle()
             HerdrTheme(theme = theme) {
                 SystemBarIcons()
-                HerdrApp(viewModel = viewModel)
+                CompositionLocalProvider(LocalAttachmentImages provides viewModel.attachmentImages) {
+                    HerdrApp(viewModel = viewModel)
+                }
             }
         }
     }

@@ -914,16 +914,18 @@ class HerdrRepository(
         tabId: String,
         text: String,
         overridePermissionMode: String? = null,
+        attachmentIds: List<String> = emptyList(),
     ): Result<Unit> {
         val cfg = _state.value.config
         debugRecorder?.record(
             "ui",
             "send_message",
-            "Sending message to tab=$tabId len=${text.length} overrideMode=${overridePermissionMode ?: "none"}",
+            "Sending message to tab=$tabId len=${text.length} images=${attachmentIds.size} " +
+                "overrideMode=${overridePermissionMode ?: "none"}",
             payload = text.take(500),
         )
         return runCatching {
-            val resp = api.sendMessage(cfg, tabId, text, overridePermissionMode)
+            val resp = api.sendMessage(cfg, tabId, text, overridePermissionMode, attachmentIds)
             resp.tab?.let { updated -> _state.update { applyReplacedTab(it, updated) } }
             Unit
         }.onFailure { err ->
@@ -931,17 +933,30 @@ class HerdrRepository(
         }
     }
 
+    suspend fun uploadAttachment(tabId: String, bytes: ByteArray, mimeType: String): Result<MessageAttachment> {
+        val cfg = _state.value.config
+        debugRecorder?.record("ui", "upload_attachment", "Uploading image to tab=$tabId bytes=${bytes.size} type=$mimeType")
+        return runCatching { api.uploadAttachment(cfg, tabId, bytes, mimeType) }
+    }
+
+    suspend fun downloadAttachment(tabId: String, attachmentId: String): Result<ByteArray> {
+        val cfg = _state.value.config
+        return runCatching { api.downloadAttachment(cfg, tabId, attachmentId) }
+    }
+
     suspend fun interruptTab(
         tabId: String,
         processQueue: Boolean = false,
         text: String? = null,
         overridePermissionMode: String? = null,
+        attachmentIds: List<String> = emptyList(),
     ) {
         val cfg = _state.value.config
         debugRecorder?.record(
             "ui",
             "interrupt_tab",
-            "Interrupting tab=$tabId processQueue=$processQueue hasText=${!text.isNullOrBlank()}",
+            "Interrupting tab=$tabId processQueue=$processQueue hasText=${!text.isNullOrBlank()} " +
+                "images=${attachmentIds.size}",
         )
         runCatching {
             api.interruptTab(
@@ -950,6 +965,7 @@ class HerdrRepository(
                 processQueue = processQueue,
                 text = text,
                 overridePermissionMode = overridePermissionMode,
+                attachmentIds = attachmentIds,
             )?.let { updated -> _state.update { applyReplacedTab(it, updated) } }
         }.onFailure { err -> showBanner(err.message ?: "Failed to interrupt") }
     }

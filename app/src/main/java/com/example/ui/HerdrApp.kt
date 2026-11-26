@@ -89,6 +89,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.attachmentLimitsForTab
 import com.example.data.AgentUsageUiState
 import com.example.data.ChatMessage
 import com.example.data.ConnectionState
@@ -144,6 +145,19 @@ fun HerdrApp(viewModel: MainViewModel) {
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsStateWithLifecycle()
     val usageByAgent by viewModel.usageController.usageByAgent.collectAsStateWithLifecycle()
     val isRefreshingClosedTabs by viewModel.isRefreshingClosedTabs.collectAsStateWithLifecycle()
+    val pendingAttachments by viewModel.attachments.pendingByTab.collectAsStateWithLifecycle()
+    // Null hides the attach button: on shell tabs, and on daemons that predate attachments.
+    val composerAttachments = remember(state.activeTab, state.serverInfo?.attachments, pendingAttachments) {
+        val tab = state.activeTab
+        attachmentLimitsForTab(state.serverInfo, tab)?.let { limits ->
+            ComposerAttachments(
+                limits = limits,
+                pending = pendingAttachments[tab?.id].orEmpty(),
+                onAttach = viewModel::attachImages,
+                onRemove = viewModel::removePendingAttachment,
+            )
+        }
+    }
     val revivingTabId by viewModel.revivingTabId.collectAsStateWithLifecycle()
 
     if (showSettings) {
@@ -436,6 +450,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                     viewModel.removeQueuedMessage(queuedId)
                 },
                 onRetryFullAccess = { viewModel.retryLastUserPromptWithFullAccess() },
+                composerAttachments = composerAttachments,
             )
         }
 
@@ -930,6 +945,7 @@ internal fun WorkspaceScaffold(
     onRemoveQueuedMessage: (String) -> Unit,
     onRetryFullAccess: () -> Unit,
     activeMessagesFlow: StateFlow<List<ChatMessage>>? = null,
+    composerAttachments: ComposerAttachments? = null,
 ) {
     val activeTab = state.activeTab
     val finishedTabIds = state.finishedTabIds
@@ -1292,6 +1308,7 @@ internal fun WorkspaceScaffold(
                 onForceInterrupt = onForceInterrupt,
                 onRemoveQueuedMessage = onRemoveQueuedMessage,
                 onRetryFullAccess = onRetryFullAccess,
+                attachments = composerAttachments,
                 modifier = Modifier.padding(innerPadding),
             )
         }
@@ -1353,6 +1370,7 @@ private fun ActiveTabChatContent(
     onRemoveQueuedMessage: (String) -> Unit,
     onRetryFullAccess: () -> Unit,
     modifier: Modifier = Modifier,
+    attachments: ComposerAttachments? = null,
 ) {
     val messages = if (activeMessagesFlow != null) {
         activeMessagesFlow.collectAsStateWithLifecycle().value
@@ -1373,6 +1391,7 @@ private fun ActiveTabChatContent(
         onRemoveQueuedMessage = onRemoveQueuedMessage,
         onRetryFullAccess = onRetryFullAccess,
         modifier = modifier,
+        attachments = attachments,
     )
 }
 

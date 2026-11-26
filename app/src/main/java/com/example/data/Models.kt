@@ -294,7 +294,42 @@ data class ServerInfo(
     val defaultSystemPrompt: String? = null,
     val defaultSystemPromptFullAccess: String? = null,
     val agents: List<AvailableAgentInfo> = emptyList(),
+    /** Image attachment limits; null on daemons that predate attachments. */
+    val attachments: AttachmentLimits? = null,
 )
+
+@JsonClass(generateAdapter = true)
+data class AttachmentLimits(
+    val maxBytes: Long = DEFAULT_MAX_ATTACHMENT_BYTES,
+    val maxPerMessage: Int = DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE,
+    val mimeTypes: List<String> = emptyList(),
+) {
+    companion object {
+        const val DEFAULT_MAX_ATTACHMENT_BYTES = 8L * 1024 * 1024
+        const val DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE = 8
+    }
+}
+
+/** An image stored on the VM for a tab, referenced by messages through its [id]. */
+@JsonClass(generateAdapter = true)
+data class MessageAttachment(
+    val id: String,
+    val name: String = "",
+    val mimeType: String = "",
+    val bytes: Long = 0L,
+    val path: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class UploadAttachmentResponse(
+    val attachment: MessageAttachment,
+)
+
+/** Images can be attached when the daemon supports them and the tab runs an agent, not a shell. */
+fun attachmentLimitsForTab(serverInfo: ServerInfo?, tab: TabRecord?): AttachmentLimits? =
+    serverInfo?.attachments?.takeIf { tab != null && tab.agent != "shell" }
+
+fun formatAttachmentCount(count: Int): String = if (count == 1) "1 image" else "$count images"
 
 @JsonClass(generateAdapter = true)
 data class AgentSessionRef(
@@ -308,6 +343,7 @@ data class QueuedMessage(
     val text: String,
     val overridePermissionMode: String? = null,
     val createdAt: Long = 0L,
+    val attachments: List<MessageAttachment> = emptyList(),
 )
 
 /** What a tab is doing from the user's point of view. Every tab is in exactly one of these. */
@@ -404,6 +440,7 @@ data class ChatMessage(
     val usage: UsageStats? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
+    val attachments: List<MessageAttachment> = emptyList(),
 )
 
 @JsonClass(generateAdapter = true)
@@ -739,6 +776,8 @@ data class UpdateTabRequest(
 data class SendMessageRequest(
     val text: String,
     val overridePermissionMode: String? = null,
+    /** Ids of uploaded attachments; left out entirely when there are none. */
+    val attachments: List<String>? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -755,6 +794,7 @@ data class InterruptTabRequest(
     val processQueue: Boolean = false,
     val text: String? = null,
     val overridePermissionMode: String? = null,
+    val attachments: List<String>? = null,
 )
 
 @JsonClass(generateAdapter = true)
