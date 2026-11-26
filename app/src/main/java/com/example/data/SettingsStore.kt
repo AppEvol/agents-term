@@ -13,20 +13,54 @@ interface ConnectionSettings {
 }
 
 class SettingsStore(context: Context) : ConnectionSettings {
-    private val prefs = context.getSharedPreferences("herdr_mobile_prefs", Context.MODE_PRIVATE)
+    /** Non-secret preferences eligible for Android Auto Backup across reinstalls. */
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    /** Device-local pairing credentials excluded from Android Auto Backup. */
+    private val localPrefs = context.getSharedPreferences(LOCAL_PREFS_NAME, Context.MODE_PRIVATE)
+
+    init {
+        migrateLegacyConnectionIfNeeded()
+    }
+
+    private fun migrateLegacyConnectionIfNeeded() {
+        val hasLegacy = prefs.contains(KEY_HOST) || prefs.contains(KEY_PORT) || prefs.contains(KEY_TOKEN)
+        if (!hasLegacy) return
+
+        val legacyHost = prefs.getString(KEY_HOST, "").orEmpty().trim()
+        val legacyPort = prefs.getInt(KEY_PORT, DEFAULT_DAEMON_PORT)
+        val legacyToken = prefs.getString(KEY_TOKEN, "").orEmpty().trim()
+
+        if (legacyHost.isNotEmpty() && !localPrefs.contains(KEY_HOST)) {
+            localPrefs.edit {
+                putString(KEY_HOST, legacyHost)
+                putInt(KEY_PORT, legacyPort)
+                putString(KEY_TOKEN, legacyToken)
+            }
+        }
+
+        prefs.edit {
+            if (legacyHost.isNotEmpty() && prefs.getString(KEY_SSH_HOST, null).isNullOrBlank()) {
+                putString(KEY_SSH_HOST, legacyHost)
+            }
+            remove(KEY_HOST)
+            remove(KEY_PORT)
+            remove(KEY_TOKEN)
+        }
+    }
 
     override fun loadConnection(): ConnectionConfig = ConnectionConfig(
-        host = prefs.getString(KEY_HOST, "").orEmpty(),
-        port = prefs.getInt(KEY_PORT, 7501),
-        token = prefs.getString(KEY_TOKEN, "").orEmpty(),
+        host = localPrefs.getString(KEY_HOST, "").orEmpty(),
+        port = localPrefs.getInt(KEY_PORT, DEFAULT_DAEMON_PORT),
+        token = localPrefs.getString(KEY_TOKEN, "").orEmpty(),
     )
 
     override fun saveConnection(config: ConnectionConfig) {
-        prefs.edit()
-            .putString(KEY_HOST, config.host.trim())
-            .putInt(KEY_PORT, config.port)
-            .putString(KEY_TOKEN, config.token.trim())
-            .apply()
+        localPrefs.edit {
+            putString(KEY_HOST, config.host.trim())
+            putInt(KEY_PORT, config.port)
+            putString(KEY_TOKEN, config.token.trim())
+        }
     }
 
     override fun loadLastTabId(): String? = prefs.getString(KEY_LAST_TAB, null)
@@ -63,14 +97,15 @@ class SettingsStore(context: Context) : ConnectionSettings {
      */
     fun loadSshProfile(): SshProfile {
         val host = prefs.getString(KEY_SSH_HOST, null)
-            ?: prefs.getString(KEY_HOST, "").orEmpty()
+            ?.takeIf { it.isNotBlank() }
+            ?: localPrefs.getString(KEY_HOST, "").orEmpty()
         val normalizedHost = cleanHost(host)
         return SshProfile(
             host = host,
             sshPort = prefs.getInt(KEY_SSH_PORT, 22),
             username = prefs.getString(KEY_SSH_USERNAME, "").orEmpty(),
             authMethod = SshAuthMethod.fromStorageKey(prefs.getString(KEY_SSH_AUTH_METHOD, null)),
-            daemonPort = prefs.getInt(KEY_SSH_DAEMON_PORT, 7501),
+            daemonPort = prefs.getInt(KEY_SSH_DAEMON_PORT, DEFAULT_DAEMON_PORT),
             isBootstrapped = normalizedHost.isNotBlank() && isHostBootstrapped(normalizedHost),
         )
     }
@@ -162,6 +197,9 @@ class SettingsStore(context: Context) : ConnectionSettings {
     private fun lastCwdPrefKey(normalizedHost: String): String = "${KEY_LAST_CWD_PREFIX}$normalizedHost"
 
     companion object {
+        const val PREFS_NAME = "herdr_mobile_prefs"
+        const val LOCAL_PREFS_NAME = "herdr_mobile_local_prefs"
+        private const val DEFAULT_DAEMON_PORT = 7501
         private const val KEY_HOST = "vm_host"
         private const val KEY_PORT = "vm_port"
         private const val KEY_TOKEN = "vm_token"

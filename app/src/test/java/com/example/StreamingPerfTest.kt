@@ -83,7 +83,7 @@ class StreamingPerfTest {
             config: ConnectionConfig,
             onOpen: () -> Unit,
             onEvent: (WsServerEnvelope) -> Unit,
-            onClosed: (String?) -> Unit,
+            onClosed: (String?, Int?) -> Unit,
         ): WebSocket = FakeWebSocket(onOpen, onEvent).also { sockets.add(it) }
     }
 

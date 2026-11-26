@@ -78,7 +78,7 @@ class RecentlyClosedTabsTest {
             config: ConnectionConfig,
             onOpen: () -> Unit,
             onEvent: (WsServerEnvelope) -> Unit,
-            onClosed: (String?) -> Unit,
+            onClosed: (String?, Int?) -> Unit,
         ): WebSocket {
             lastOnEvent = onEvent
             onOpen()

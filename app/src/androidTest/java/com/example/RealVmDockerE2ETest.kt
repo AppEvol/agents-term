@@ -99,6 +99,10 @@ class RealVmDockerE2ETest {
             .edit()
             .clear()
             .commit()
+        context.getSharedPreferences("herdr_mobile_local_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
     }
 
     @After

@@ -19,6 +19,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 const val MAX_OPEN_TABS = 10
 const val MAX_CLOSED_TABS = 50
 const val CLOSED_TAB_RETENTION_MS = 24L * 60L * 60L * 1000L
+private const val DEFAULT_RECONNECT_BASE_DELAY_MS = 1_500L
+private const val DEFAULT_RECONNECT_MAX_DELAY_MS = 15_000L
+private const val DEFAULT_DELTA_FLUSH_INTERVAL_MS = 60L
+private const val FOREGROUND_CONNECT_GRACE_MS = 2_000L
 
 data class WorkspaceState(
     val config: ConnectionConfig = ConnectionConfig(),
@@ -245,7 +249,7 @@ suspend fun resolveInitialDirectoryListing(
 
     suspend fun loadWithRetry(path: String?): Result<FsListResponse> {
         var result = listDirectories(path)
-        if (result.isFailure) {
+        if (result.isFailure && result.exceptionOrNull()?.isAuthError != true) {
             result = listDirectories(path)
         }
         return result
@@ -257,6 +261,9 @@ suspend fun resolveInitialDirectoryListing(
 
     val initialResult = loadWithRetry(candidate)
     if (initialResult.isFailure) {
+        if (initialResult.exceptionOrNull()?.isAuthError == true) {
+            return initialResult.map { ResolvedDirectoryListing(it, fellBackToHome = false) }
+        }
         if (normalizedCandidate != null && normalizedCandidate != normalizedHome) {
             return loadHomeFallback()
         }
@@ -376,6 +383,79 @@ private fun applyRefreshedAgentModels(
     return state.copy(serverInfo = info.copy(agents = updatedAgents))
 }
 
+private enum class ForegroundAction {
+    NONE,
+    RECONNECT,
+    REFRESH_ACTIVE_TAB,
+}
+
+private fun resolveForegroundAction(
+    connectionState: ConnectionState,
+    shouldStayConnected: Boolean,
+    hasActiveSocket: Boolean,
+    msSinceConnectAttempt: Long,
+    graceMs: Long,
+): ForegroundAction {
+    val withinConnectGrace = connectionState == ConnectionState.CONNECTING &&
+        hasActiveSocket &&
+        msSinceConnectAttempt < graceMs
+    return when {
+        !shouldStayConnected -> ForegroundAction.NONE
+        connectionState == ConnectionState.AUTH_ERROR -> ForegroundAction.NONE
+        connectionState == ConnectionState.CONNECTED -> ForegroundAction.REFRESH_ACTIVE_TAB
+        withinConnectGrace -> ForegroundAction.NONE
+        else -> ForegroundAction.RECONNECT
+    }
+}
+
+private data class EnvelopeTransition(
+    val nextState: WorkspaceState,
+    val selectedBefore: String?,
+    val selectedAfter: String?,
+    val unreadVisibleTabId: String?,
+)
+
+private fun applyWorkspaceEnvelope(
+    current: WorkspaceState,
+    pendingDeltas: PendingDeltaBuffer,
+    envelope: WsServerEnvelope,
+    preferredTabId: String?,
+): EnvelopeTransition {
+    val prepped = pendingDeltas.prepareStateForEvent(current, envelope)
+    val reduced = reduceWorkspaceEvent(prepped, envelope, preferredTabId = preferredTabId)
+    val visibleId = reduced.activeTab?.takeIf { it.unread }?.id
+    val next = if (visibleId == null) {
+        reduced
+    } else {
+        // Cleared locally too, so later events do not ask again while the
+        // daemon's own update is still on its way.
+        reduced.copy(tabs = reduced.tabs.map { if (it.id == visibleId) it.copy(unread = false) else it })
+    }
+    return EnvelopeTransition(
+        nextState = next,
+        selectedBefore = current.selectedTabId,
+        selectedAfter = reduced.selectedTabId,
+        unreadVisibleTabId = visibleId,
+    )
+}
+
+private fun applySocketClosed(
+    state: WorkspaceState,
+    stayConnected: Boolean,
+    isAuthFailure: Boolean,
+    reason: String?,
+): WorkspaceState {
+    val nextState = when {
+        !stayConnected -> ConnectionState.DISCONNECTED
+        isAuthFailure -> ConnectionState.AUTH_ERROR
+        else -> ConnectionState.ERROR
+    }
+    return state.copy(
+        connectionState = nextState,
+        connectionError = reason ?: "Disconnected from VM",
+    )
+}
+
 class HerdrRepository(
     private val api: HerdrApiClient,
     private val settings: ConnectionSettings,
@@ -405,6 +485,7 @@ class HerdrRepository(
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
     private var shouldStayConnected = false
+    private var isInForeground = true
     private var reconnectAttempt = 0
     private var socketGeneration = 0L
     private var lastConnectAttemptMs = 0L
@@ -475,7 +556,7 @@ class HerdrRepository(
     }.onFailure { err ->
         _state.update {
             it.copy(
-                connectionState = ConnectionState.ERROR,
+                connectionState = if (err.isAuthError) ConnectionState.AUTH_ERROR else ConnectionState.ERROR,
                 connectionError = err.message ?: "Unable to reach VM",
             )
         }
@@ -509,21 +590,29 @@ class HerdrRepository(
         socketToClose?.close(1000, "User disconnected")
     }
 
+    fun onBackground() {
+        synchronized(socketLock) {
+            isInForeground = false
+            reconnectJob?.cancel()
+            reconnectJob = null
+        }
+    }
+
     fun ensureConnectedOnForeground() {
         val s = _state.value
-        if (!s.config.isValid) return
+        if (!s.config.isValid) {
+            synchronized(socketLock) { isInForeground = true }
+            return
+        }
         val action = synchronized(socketLock) {
-            when {
-                !shouldStayConnected -> ForegroundAction.NONE
-
-                s.connectionState == ConnectionState.CONNECTED -> ForegroundAction.REFRESH_ACTIVE_TAB
-
-                s.connectionState == ConnectionState.CONNECTING &&
-                    webSocket != null &&
-                    (clockMs() - lastConnectAttemptMs) < FOREGROUND_CONNECT_GRACE_MS -> ForegroundAction.NONE
-
-                else -> ForegroundAction.RECONNECT
-            }
+            isInForeground = true
+            resolveForegroundAction(
+                connectionState = s.connectionState,
+                shouldStayConnected = shouldStayConnected,
+                hasActiveSocket = webSocket != null,
+                msSinceConnectAttempt = clockMs() - lastConnectAttemptMs,
+                graceMs = FOREGROUND_CONNECT_GRACE_MS,
+            )
         }
         when (action) {
             ForegroundAction.RECONNECT -> connect(s.config)
@@ -540,7 +629,7 @@ class HerdrRepository(
         val generation: Long
         synchronized(socketLock) {
             if (!shouldStayConnected) return
-            if (expectedGeneration != null && expectedGeneration != socketGeneration) return
+            if (expectedGeneration != null && (expectedGeneration != socketGeneration || !isInForeground)) return
             reconnectJob?.cancel()
             reconnectJob = null
             pendingDeltas.clear()
@@ -586,62 +675,38 @@ class HerdrRepository(
                     handleMessageDelta(envelope, generation)
                     return@openWebSocket
                 }
-                var selectedBefore: String? = null
-                var selectedAfter: String? = null
-                var unreadVisibleTabId: String? = null
-                val applied = synchronized(socketLock) {
-                    if (generation != socketGeneration || !shouldStayConnected) {
-                        false
-                    } else {
+                var transition: EnvelopeTransition? = null
+                synchronized(socketLock) {
+                    if (generation == socketGeneration && shouldStayConnected) {
                         _state.update { current ->
-                            selectedBefore = current.selectedTabId
-                            val prepped = pendingDeltas.prepareStateForEvent(current, envelope)
-                            val next = reduceWorkspaceEvent(prepped, envelope, preferredTabId = lastSavedTabId)
-                            selectedAfter = next.selectedTabId
-                            val visibleId = next.activeTab?.takeIf { it.unread }?.id
-                            unreadVisibleTabId = visibleId
-                            if (visibleId == null) {
-                                next
-                            } else {
-                                // Cleared locally too, so later events do not ask again while the
-                                // daemon's own update is still on its way.
-                                next.copy(tabs = next.tabs.map { if (it.id == visibleId) it.copy(unread = false) else it })
-                            }
+                            applyWorkspaceEnvelope(current, pendingDeltas, envelope, lastSavedTabId)
+                                .also { transition = it }
+                                .nextState
                         }
-                        true
                     }
                 }
-                if (applied && envelope.type == "snapshot") {
+                val applied = transition ?: return@openWebSocket
+                if (envelope.type == "snapshot") {
                     // The daemon sends `snapshot` first on every connection, so this is where the
                     // app announces its reporter status (the socket is assigned by then).
                     sendAppHello()
-                    selectedAfter?.let { tabId ->
-                        refreshTabMessages(tabId)
-                    }
-                } else if (applied && envelope.type == "tab_created" && selectedBefore == null) {
-                    selectedAfter?.let { tabId ->
-                        refreshTabMessages(tabId)
-                    }
+                    applied.selectedAfter?.let { refreshTabMessages(it) }
+                } else if (envelope.type == "tab_created" && applied.selectedBefore == null) {
+                    applied.selectedAfter?.let { refreshTabMessages(it) }
                 }
-                if (applied) {
-                    // The daemon flags a tab unread whenever its turn ends, including the tab on
-                    // screen. Clear it here, or it shows up as unread once the user switches away.
-                    unreadVisibleTabId?.let { markTabRead(config, it) }
-                }
+                // The daemon flags a tab unread whenever its turn ends, including the tab on
+                // screen. Clear it here, or it shows up as unread once the user switches away.
+                applied.unreadVisibleTabId?.let { markTabRead(config, it) }
             },
-            onClosed = { reason ->
+            onClosed = { reason, httpStatusCode ->
                 if (!socketClosed.compareAndSet(false, true)) return@openWebSocket
                 val shouldReconnect = synchronized(socketLock) {
                     if (generation != socketGeneration) return@openWebSocket
                     webSocket = null
+                    val isAuthFailure = httpStatusCode == HTTP_UNAUTHORIZED
                     val stayConnected = shouldStayConnected
-                    _state.update {
-                        it.copy(
-                            connectionState = if (stayConnected) ConnectionState.ERROR else ConnectionState.DISCONNECTED,
-                            connectionError = reason ?: "Disconnected from VM",
-                        )
-                    }
-                    stayConnected
+                    _state.update { applySocketClosed(it, stayConnected, isAuthFailure, reason) }
+                    stayConnected && !isAuthFailure && isInForeground
                 }
                 if (shouldReconnect) {
                     scheduleReconnect(config, expectedGeneration = generation)
@@ -700,7 +765,7 @@ class HerdrRepository(
         expectedGeneration: Long,
     ) {
         synchronized(socketLock) {
-            if (expectedGeneration != socketGeneration || !shouldStayConnected) return
+            if (expectedGeneration != socketGeneration || !shouldStayConnected || !isInForeground) return
             reconnectJob?.cancel()
             val delayMs = (reconnectBaseDelayMs * (1 shl reconnectAttempt.coerceAtMost(4)))
                 .coerceAtMost(reconnectMaxDelayMs)
@@ -710,12 +775,6 @@ class HerdrRepository(
                 openSocketNow(config, expectedGeneration = expectedGeneration)
             }
         }
-    }
-
-    private enum class ForegroundAction {
-        NONE,
-        RECONNECT,
-        REFRESH_ACTIVE_TAB,
     }
 
     fun selectTab(tabId: String) {
@@ -1027,10 +1086,6 @@ class HerdrRepository(
     }
 
     companion object {
-        private const val DEFAULT_RECONNECT_BASE_DELAY_MS = 1_500L
-        private const val DEFAULT_RECONNECT_MAX_DELAY_MS = 15_000L
-        private const val DEFAULT_DELTA_FLUSH_INTERVAL_MS = 60L
-        private const val FOREGROUND_CONNECT_GRACE_MS = 2_000L
         const val APP_STATE_REQUEST_TYPE = "app_state_request"
     }
 }

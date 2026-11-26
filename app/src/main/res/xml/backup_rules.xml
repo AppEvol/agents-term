@@ -6,6 +6,7 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!-- Preserve non-secret VM connection and SSH profile settings across reinstalls -->
+    <!-- Preserve non-secret SSH profile and app settings across reinstalls.
+         Device-local VM pairing credentials (herdr_mobile_local_prefs.xml) are excluded. -->
     <include domain="sharedpref" path="herdr_mobile_prefs.xml" />
 </full-backup-content>

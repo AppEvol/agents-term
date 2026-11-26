@@ -65,12 +65,19 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         ForegroundActivityTracker.onResumed(this)
-        viewModel.onForeground()
+        viewModel.onForegroundChanged(inForeground = true)
     }
 
     override fun onPause() {
         ForegroundActivityTracker.onPaused(this)
         super.onPause()
+    }
+
+    override fun onStop() {
+        if (!isChangingConfigurations) {
+            viewModel.onForegroundChanged(inForeground = false)
+        }
+        super.onStop()
     }
 
     private fun handleIntent(intent: Intent?) {

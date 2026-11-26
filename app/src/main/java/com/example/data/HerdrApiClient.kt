@@ -15,6 +15,16 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
+const val HTTP_UNAUTHORIZED = 401
+
+class HttpStatusException(
+    val statusCode: Int,
+    message: String,
+) : IOException(message)
+
+val Throwable.isAuthError: Boolean
+    get() = this is HttpStatusException && statusCode == HTTP_UNAUTHORIZED
+
 open class HerdrApiClient(
     private val debugRecorder: DebugRecorder? = null,
 ) {
@@ -55,7 +65,7 @@ open class HerdrApiClient(
                         detail = "$endpoint -> ${resp.code} (${durationMs}ms): $errMsg",
                         payload = if (logPayload) bodyStr else null,
                     )
-                    throw IOException(errMsg)
+                    throw HttpStatusException(resp.code, errMsg)
                 }
                 debugRecorder?.record(
                     category = "http",
@@ -64,15 +74,15 @@ open class HerdrApiClient(
                 )
                 bodyStr
             }
+        } catch (err: HttpStatusException) {
+            throw err
         } catch (err: Throwable) {
             val durationMs = System.currentTimeMillis() - startMs
-            if (err !is IOException || err.message?.startsWith("HTTP ") != true) {
-                debugRecorder?.record(
-                    category = "http",
-                    event = "http_exception",
-                    detail = "$endpoint failed (${durationMs}ms): ${err.message ?: err::class.java.simpleName}",
-                )
-            }
+            debugRecorder?.record(
+                category = "http",
+                event = "http_exception",
+                detail = "$endpoint failed (${durationMs}ms): ${err.message ?: err::class.java.simpleName}",
+            )
             throw err
         }
     }
@@ -243,7 +253,7 @@ open class HerdrApiClient(
             .get()
             .build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}: ${resp.message}")
+            if (!resp.isSuccessful) throw HttpStatusException(resp.code, "HTTP ${resp.code}: ${resp.message}")
             resp.body?.bytes() ?: throw IOException("Empty attachment response")
         }
     }
@@ -325,7 +335,7 @@ open class HerdrApiClient(
         config: ConnectionConfig,
         onOpen: () -> Unit,
         onEvent: (WsServerEnvelope) -> Unit,
-        onClosed: (String?) -> Unit,
+        onClosed: (reason: String?, httpStatusCode: Int?) -> Unit,
     ): WebSocket {
         val req = Request.Builder()
             .url(config.wsUrl())
@@ -340,9 +350,9 @@ open class HerdrApiClient(
 
         val closedNotified = AtomicBoolean(false)
         val deltaLogAggregator = WsDeltaLogAggregator(debugRecorder)
-        fun notifyClosedOnce(reason: String?) {
+        fun notifyClosedOnce(reason: String?, httpStatusCode: Int? = null) {
             if (closedNotified.compareAndSet(false, true)) {
-                onClosed(reason)
+                onClosed(reason, httpStatusCode)
             }
         }
 
@@ -426,7 +436,7 @@ open class HerdrApiClient(
                         event = "ws_failure",
                         detail = "WebSocket failure: $reason",
                     )
-                    notifyClosedOnce(reason)
+                    notifyClosedOnce(reason, response?.code)
                 }
             },
         )

@@ -7,8 +7,10 @@ import com.example.data.ConnectionState
 import com.example.data.CreateTabRequest
 import com.example.data.FsDirectoryEntry
 import com.example.data.FsListResponse
+import com.example.data.HTTP_UNAUTHORIZED
 import com.example.data.HerdrApiClient
 import com.example.data.HerdrRepository
+import com.example.data.HttpStatusException
 import com.example.data.ServerInfo
 import com.example.data.TabMessagesResponse
 import com.example.data.TabRecord
@@ -63,7 +65,7 @@ class HerdrRepositoryReconnectTest {
         val index: Int,
         private val onOpenCb: () -> Unit,
         private val onEventCb: (WsServerEnvelope) -> Unit,
-        private val onClosedCb: (String?) -> Unit,
+        private val onClosedCb: (String?, Int?) -> Unit,
         private val fireClosedOnCancel: Boolean,
         private val cancelReason: String = "Canceled",
     ) : WebSocket {
@@ -75,7 +77,7 @@ class HerdrRepositoryReconnectTest {
 
         fun emitOpen() = onOpenCb()
         fun emitEvent(envelope: WsServerEnvelope) = onEventCb(envelope)
-        fun emitClosed(reason: String?) = onClosedCb(reason)
+        fun emitClosed(reason: String?, httpStatusCode: Int? = null) = onClosedCb(reason, httpStatusCode)
 
         override fun request(): Request = Request.Builder().url("http://100.71.219.26:7501/ws").build()
         override fun queueSize(): Long = 0L
@@ -92,7 +94,7 @@ class HerdrRepositoryReconnectTest {
         override fun cancel() {
             cancelled = true
             if (fireClosedOnCancel) {
-                onClosedCb(cancelReason)
+                onClosedCb(cancelReason, null)
             }
         }
     }
@@ -115,7 +117,7 @@ class HerdrRepositoryReconnectTest {
             config: ConnectionConfig,
             onOpen: () -> Unit,
             onEvent: (WsServerEnvelope) -> Unit,
-            onClosed: (String?) -> Unit,
+            onClosed: (String?, Int?) -> Unit,
         ): WebSocket {
             val handle = FakeWebSocketHandle(
                 index = sockets.size + 1,
@@ -620,5 +622,125 @@ class HerdrRepositoryReconnectTest {
         assertEquals("logs", env.command)
         assertEquals(5.0, env.args?.get("limit"))
         assertEquals(listOf("http"), env.args?.get("categories"))
+    }
+
+    @Test
+    fun authFailureStopsReconnectLoopAndIgnoresForegroundResumeUntilRepaired() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val api = FakeApiClient(fireClosedOnCancel = false)
+        val settings = InMemorySettings(connection = testConfig)
+        val repo = HerdrRepository(
+            api = api,
+            settings = settings,
+            ioDispatcher = dispatcher,
+        )
+
+        repo.connect(testConfig)
+        assertEquals(1, api.sockets.size)
+
+        // Daemon rejects the saved bearer token with HTTP 401
+        api.sockets[0].emitClosed("HTTP 401: Unauthorized", httpStatusCode = HTTP_UNAUTHORIZED)
+        assertEquals(ConnectionState.AUTH_ERROR, repo.state.value.connectionState)
+        assertEquals("HTTP 401: Unauthorized", repo.state.value.connectionError)
+
+        // Must not spin in a backoff reconnect loop
+        advanceTimeBy(60_000L)
+        runCurrent()
+        assertEquals(1, api.sockets.size)
+        assertEquals(ConnectionState.AUTH_ERROR, repo.state.value.connectionState)
+
+        // Returning to foreground must also not retry the rejected token
+        repo.ensureConnectedOnForeground()
+        runCurrent()
+        assertEquals(1, api.sockets.size)
+        assertEquals(ConnectionState.AUTH_ERROR, repo.state.value.connectionState)
+
+        // Re-pairing with a fresh token connects cleanly
+        val repairedConfig = testConfig.copy(token = "tok_fresh")
+        repo.connect(repairedConfig)
+        assertEquals(2, api.sockets.size)
+        api.sockets[1].emitOpen()
+        assertEquals(ConnectionState.CONNECTED, repo.state.value.connectionState)
+        assertNull(repo.state.value.connectionError)
+    }
+
+    @Test
+    fun backgroundPausesReconnectRetriesUntilForegroundResume() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val api = FakeApiClient(fireClosedOnCancel = false)
+        val settings = InMemorySettings(connection = testConfig)
+        val repo = HerdrRepository(
+            api = api,
+            settings = settings,
+            ioDispatcher = dispatcher,
+        )
+
+        repo.connect(testConfig)
+        api.sockets[0].emitOpen()
+        assertEquals(ConnectionState.CONNECTED, repo.state.value.connectionState)
+
+        // App moves to background; active socket is kept until Android aborts it
+        repo.onBackground()
+        assertFalse(api.sockets[0].cancelled)
+        assertEquals(ConnectionState.CONNECTED, repo.state.value.connectionState)
+
+        // Android freezes the process and aborts the socket
+        api.sockets[0].emitClosed("Software caused connection abort")
+        assertEquals(ConnectionState.ERROR, repo.state.value.connectionState)
+
+        // No doomed background reconnect attempts should fire while backgrounded
+        advanceTimeBy(60_000L)
+        runCurrent()
+        assertEquals(1, api.sockets.size)
+
+        // Returning to foreground reconnects immediately
+        repo.ensureConnectedOnForeground()
+        assertEquals(2, api.sockets.size)
+        api.sockets[1].emitOpen()
+        assertEquals(ConnectionState.CONNECTED, repo.state.value.connectionState)
+    }
+
+    @Test
+    fun backgroundCancelsAlreadyScheduledReconnectTimer() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val api = FakeApiClient(fireClosedOnCancel = false)
+        val settings = InMemorySettings(connection = testConfig)
+        val repo = HerdrRepository(
+            api = api,
+            settings = settings,
+            ioDispatcher = dispatcher,
+        )
+
+        repo.connect(testConfig)
+        api.sockets[0].emitOpen()
+        api.sockets[0].emitClosed("connection lost")
+        assertEquals(ConnectionState.ERROR, repo.state.value.connectionState)
+
+        // Move to background before the 1.5s retry timer fires
+        advanceTimeBy(500L)
+        repo.onBackground()
+
+        advanceTimeBy(30_000L)
+        runCurrent()
+        assertEquals(1, api.sockets.size)
+
+        // Resuming foreground triggers immediate reconnect
+        repo.ensureConnectedOnForeground()
+        assertEquals(2, api.sockets.size)
+    }
+
+    @Test
+    fun resolveInitialDirectoryDoesNotRetryOrFallbackOnAuthError() = runTest {
+        var attempts = 0
+        val result = resolveInitialDirectoryListing(
+            preferredPath = "/home/ned/projects",
+            homeCwd = "/home/ned",
+        ) {
+            attempts++
+            Result.failure(HttpStatusException(HTTP_UNAUTHORIZED, "Invalid bearer token"))
+        }
+
+        assertTrue(result.isFailure)
+        assertEquals(1, attempts)
     }
 }

@@ -224,7 +224,7 @@ fun SettingsScreen(
                             val dotColor = when (workspaceState.connectionState) {
                                 ConnectionState.CONNECTED -> AppTheme.colors.success
                                 ConnectionState.CONNECTING -> AppTheme.colors.info
-                                ConnectionState.ERROR -> AppTheme.colors.danger
+                                ConnectionState.ERROR, ConnectionState.AUTH_ERROR -> AppTheme.colors.danger
                                 ConnectionState.DISCONNECTED -> AppTheme.colors.idle
                             }
                             Box(

@@ -4,6 +4,7 @@
    for details.
 -->
 <data-extraction-rules>
+    <!-- Preserve non-secret SSH profile and app settings only; exclude herdr_mobile_local_prefs.xml. -->
     <cloud-backup>
         <include domain="sharedpref" path="herdr_mobile_prefs.xml" />
     </cloud-backup>

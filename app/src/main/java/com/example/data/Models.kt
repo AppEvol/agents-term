@@ -837,6 +837,7 @@ enum class ConnectionState {
     CONNECTING,
     CONNECTED,
     ERROR,
+    AUTH_ERROR,
 }
 
 @JsonClass(generateAdapter = true)

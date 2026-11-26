@@ -67,7 +67,12 @@
     <string name="status_connected_to">Connected to %1$s</string>
     <string name="status_connecting_to">Connecting to %1$s…</string>
     <string name="status_disconnected_default">Disconnected — check Tailscale</string>
+    <string name="status_auth_error">Pairing token rejected — re-pair with your VM</string>
+    <string name="status_auth_required_title">Re-pair required for %1$s</string>
+    <string name="action_repair_connection">Re-pair</string>
+    <string name="action_repair_vm">Re-pair VM</string>
     <string name="empty_workspace_description">Create a persistent tab to control Antigravity, Claude Code, Codex, or Shell. Agents stay alive on your VM even when you leave the app.</string>
+    <string name="empty_workspace_auth_error_description">The saved pairing token was rejected by this VM. Re-pair over SSH or paste a new pairing URI to reconnect.</string>
     <string name="composer_reconnecting">Reconnecting to VM…</string>
     <string name="composer_shell_placeholder">Run a command in %1$s…</string>
     <string name="composer_agent_placeholder">Message %1$s…</string>
