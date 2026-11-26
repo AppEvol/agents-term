@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -66,6 +68,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -130,10 +133,23 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
+// Keep the editors composed while their tabs are open, including while Settings covers the workspace.
+@Composable
+private fun rememberActiveDraft(state: WorkspaceState): TextFieldState? {
+    var activeDraft: TextFieldState? = null
+    val selectedId = state.activeTab?.id
+    for (tab in state.tabs) {
+        val draft = key(state.config.host, state.config.port, tab.id) { rememberTextFieldState() }
+        if (tab.id == selectedId) activeDraft = draft
+    }
+    return activeDraft
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HerdrApp(viewModel: MainViewModel) {
     val state by viewModel.chromeState.collectAsStateWithLifecycle()
+    val activeDraft = rememberActiveDraft(state)
     val showConnect by viewModel.showConnectScreen.collectAsStateWithLifecycle()
     val showSettings by viewModel.showSettingsScreen.collectAsStateWithLifecycle()
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
@@ -369,6 +385,7 @@ fun HerdrApp(viewModel: MainViewModel) {
             WorkspaceScaffold(
                 state = state,
                 activeMessagesFlow = viewModel.activeMessages,
+                activeDraft = activeDraft,
                 isExpanded = isExpanded,
                 debugSharingEnabled = debugSettings.enabled,
                 snackbarHostState = snackbarHostState,
@@ -948,6 +965,7 @@ internal fun WorkspaceScaffold(
     onRetryFullAccess: () -> Unit,
     activeMessagesFlow: StateFlow<List<ChatMessage>>? = null,
     composerAttachments: ComposerAttachments? = null,
+    activeDraft: TextFieldState? = rememberActiveDraft(state),
 ) {
     val activeTab = state.activeTab
     val finishedTabIds = state.finishedTabIds
@@ -1310,6 +1328,7 @@ internal fun WorkspaceScaffold(
         } else {
             ActiveTabChatContent(
                 tab = activeTab,
+                draft = requireNotNull(activeDraft),
                 activeMessagesFlow = activeMessagesFlow,
                 fallbackMessages = state.activeMessages,
                 isLoading = activeTab.id in state.loadingTabIds,
@@ -1371,6 +1390,7 @@ private fun ActiveTabSummaryBanner(
 @Composable
 private fun ActiveTabChatContent(
     tab: TabRecord,
+    draft: TextFieldState,
     activeMessagesFlow: StateFlow<List<ChatMessage>>?,
     fallbackMessages: List<ChatMessage>,
     isLoading: Boolean,
@@ -1393,6 +1413,7 @@ private fun ActiveTabChatContent(
     }
     ChatWorkspace(
         tab = tab,
+        draft = draft,
         messages = messages,
         isLoading = isLoading,
         isConnected = isConnected,

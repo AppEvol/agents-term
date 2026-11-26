@@ -12,6 +12,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
 import com.example.data.ConnectionState
@@ -144,6 +145,26 @@ class TabSummaryUiTest {
                 onRetryFullAccess = {},
             )
         }
+    }
+
+    @Test
+    fun switchingTabsRestoresEachDraftAndSendingClearsOnlyItsTab() {
+        composeRule.setContent {
+            TestWorkspaceHost(tabs = listOf(tabA, tabB), initialSelectedId = tabA.id)
+        }
+        val input = composeRule.onNodeWithTag("composer_input")
+        val first = "Review this change.\nKeep the second line too."
+        input.performTextInput(first)
+        composeRule.onNodeWithTag("quick_tab_tab_b").performClick()
+        input.performTextInput("Follow up")
+        composeRule.onNodeWithTag("quick_tab_tab_a").performClick()
+        input.assertTextEquals(first)
+        composeRule.onNodeWithTag("send_button").performClick()
+        composeRule.onNodeWithTag("quick_tab_tab_b").performClick()
+        input.assertTextEquals("Follow up")
+        composeRule.onNodeWithTag("quick_tab_tab_a").performClick()
+        input.performTextInput("New message")
+        input.assertTextEquals("New message")
     }
 
     @Test
