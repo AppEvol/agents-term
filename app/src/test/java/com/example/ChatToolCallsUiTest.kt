@@ -19,6 +19,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.height
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.ChatMessage
+import com.example.data.DeniedAction
 import com.example.data.MessageSegment
 import com.example.data.TabRecord
 import com.example.data.ToolCallItem
@@ -442,5 +443,107 @@ class ChatToolCallsUiTest {
         composeRule.onNodeWithText("git status").assertIsDisplayed()
         composeRule.onNodeWithText("Bash").performClick()
         composeRule.onNodeWithText("On branch main\nnothing to commit").assertIsDisplayed()
+    }
+
+    @Test
+    fun fullAccessDeniedActionsShowAgentSettingsNoticeWithoutRetryButton() {
+        val message = ChatMessage(
+            id = "msg_full_access_denied",
+            tabId = "tab_1",
+            role = "assistant",
+            text = "Toolchain install didn't happen because curl was denied.",
+            deniedActions = listOf(
+                DeniedAction("Bash", "Bash", "Check sudo and install Rust toolchain via rustup"),
+                DeniedAction("Bash", "Bash", "Download the official rustup installer binary"),
+            ),
+            // Null permissionMode verifies fallback to tab.permissionMode for older daemon messages.
+            permissionMode = null,
+            status = "complete",
+        )
+
+        composeRule.setContent {
+            HerdrTheme {
+                ChatWorkspace(
+                    tab = testTab.copy(agent = "claude", permissionMode = "full-access", status = "idle"),
+                    messages = listOf(message),
+                    isLoading = false,
+                    isConnected = true,
+                    onSendMessage = {},
+                    onInterrupt = {},
+                    onRetryFullAccess = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Denied by Agent Settings").assertIsDisplayed()
+        composeRule.onNodeWithText("~/.claude/settings.json", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Bash (Check sudo and install Rust toolchain via rustup)", substring = true)
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("Bash (Download the official rustup installer binary)", substring = true)
+            .assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithText("Permission Required").fetchSemanticsNodes().isEmpty())
+        assertTrue(composeRule.onAllNodesWithTag("allow_full_access_button").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun restrictedModeDeniedActionsShowRetryOnlyOnLatestNonWorkingMessage() {
+        var retried = 0
+        val firstUser = ChatMessage(
+            id = "msg_u1",
+            tabId = "tab_1",
+            role = "user",
+            text = "Run tests",
+            status = "complete",
+        )
+        val blockedAssistant = ChatMessage(
+            id = "msg_a1",
+            tabId = "tab_1",
+            role = "assistant",
+            text = "Need permission.",
+            deniedActions = listOf(DeniedAction("Bash", "Bash", "gradle test")),
+            permissionMode = "default",
+            status = "complete",
+        )
+        var currentMessages by mutableStateOf(listOf(firstUser, blockedAssistant))
+
+        composeRule.setContent {
+            HerdrTheme {
+                ChatWorkspace(
+                    tab = testTab.copy(permissionMode = "default", status = "blocked"),
+                    messages = currentMessages,
+                    isLoading = false,
+                    isConnected = true,
+                    onSendMessage = {},
+                    onInterrupt = {},
+                    onRetryFullAccess = { retried++ },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Permission Required").assertIsDisplayed()
+        composeRule.onNodeWithText("Bash (gradle test)", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("allow_full_access_button").assertIsDisplayed().performClick()
+        assertEquals(1, retried)
+
+        // Once a follow-up turn arrives (e.g. a full-access override that still hits a deny rule),
+        // the older message drops its stale retry button and the full-access message shows the policy notice.
+        currentMessages = listOf(
+            firstUser,
+            blockedAssistant,
+            ChatMessage(id = "msg_u2", tabId = "tab_1", role = "user", text = "Run tests", status = "complete"),
+            ChatMessage(
+                id = "msg_a2",
+                tabId = "tab_1",
+                role = "assistant",
+                text = "Still denied by deny rule.",
+                deniedActions = listOf(DeniedAction("Bash", "Bash", "curl https://example.com")),
+                permissionMode = "full-access",
+                status = "complete",
+            ),
+        )
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Denied by Agent Settings").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithTag("allow_full_access_button").fetchSemanticsNodes().isEmpty())
     }
 }
