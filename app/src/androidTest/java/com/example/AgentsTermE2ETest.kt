@@ -127,6 +127,21 @@ class AgentsTermE2ETest {
         }
     }
 
+    private fun formatTimeoutDiagnostics(header: String): String {
+        val reqs = daemon?.recordedRequests?.joinToString("\n  ") ?: "(no daemon)"
+        val dbg = com.example.ui.MainViewModel.latestDebugRecorder
+            ?.snapshot()
+            ?.takeLast(30)
+            ?.joinToString("\n  ") { "[${it.category}] ${it.event}: ${it.detail}" }
+            ?: "(no debug events)"
+        val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString(maxDepth = Int.MAX_VALUE) }
+            .getOrElse { it.toString() }
+        return "$header\n" +
+            "Daemon requests:\n  $reqs\n" +
+            "App debug events:\n  $dbg\n" +
+            "Compose roots:\n$roots"
+    }
+
     private fun waitForText(text: String, substring: Boolean = false, timeoutMs: Long = 10_000L) {
         try {
             composeRule.waitUntil(timeoutMillis = timeoutMs) {
@@ -135,19 +150,23 @@ class AgentsTermE2ETest {
                     .isNotEmpty()
             }
         } catch (e: Throwable) {
-            val reqs = daemon?.recordedRequests?.joinToString("\n  ") ?: "(no daemon)"
-            val dbg = com.example.ui.MainViewModel.latestDebugRecorder
-                ?.snapshot()
-                ?.takeLast(30)
-                ?.joinToString("\n  ") { "[${it.category}] ${it.event}: ${it.detail}" }
-                ?: "(no debug events)"
-            val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString(maxDepth = Int.MAX_VALUE) }
-                .getOrElse { it.toString() }
             throw AssertionError(
-                "Timed out waiting for text='$text' (substring=$substring).\n" +
-                    "Daemon requests:\n  $reqs\n" +
-                    "App debug events:\n  $dbg\n" +
-                    "Compose roots:\n$roots",
+                formatTimeoutDiagnostics("Timed out waiting for text='$text' (substring=$substring)."),
+                e,
+            )
+        }
+    }
+
+    private fun waitForTextGone(text: String, substring: Boolean = false, timeoutMs: Long = 10_000L) {
+        try {
+            composeRule.waitUntil(timeoutMillis = timeoutMs) {
+                composeRule.onAllNodesWithText(text, substring = substring)
+                    .fetchSemanticsNodes()
+                    .isEmpty()
+            }
+        } catch (e: Throwable) {
+            throw AssertionError(
+                formatTimeoutDiagnostics("Timed out waiting for text='$text' (substring=$substring) to disappear."),
                 e,
             )
         }
@@ -161,22 +180,28 @@ class AgentsTermE2ETest {
                     .isNotEmpty()
             }
         } catch (e: Throwable) {
-            val reqs = daemon?.recordedRequests?.joinToString("\n  ") ?: "(no daemon)"
-            val dbg = com.example.ui.MainViewModel.latestDebugRecorder
-                ?.snapshot()
-                ?.takeLast(30)
-                ?.joinToString("\n  ") { "[${it.category}] ${it.event}: ${it.detail}" }
-                ?: "(no debug events)"
-            val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString(maxDepth = Int.MAX_VALUE) }
-                .getOrElse { it.toString() }
-            throw AssertionError(
-                "Timed out waiting for tag='$tag'.\n" +
-                    "Daemon requests:\n  $reqs\n" +
-                    "App debug events:\n  $dbg\n" +
-                    "Compose roots:\n$roots",
-                e,
-            )
+            throw AssertionError(formatTimeoutDiagnostics("Timed out waiting for tag='$tag'."), e)
         }
+    }
+
+    private fun waitForTagGone(tag: String, timeoutMs: Long = 10_000L, useUnmergedTree: Boolean = false) {
+        try {
+            composeRule.waitUntil(timeoutMillis = timeoutMs) {
+                composeRule.onAllNodesWithTag(tag, useUnmergedTree = useUnmergedTree)
+                    .fetchSemanticsNodes()
+                    .isEmpty()
+            }
+        } catch (e: Throwable) {
+            throw AssertionError(formatTimeoutDiagnostics("Timed out waiting for tag='$tag' to disappear."), e)
+        }
+    }
+
+    /** Submits the open NewTabSheet and waits for the sheet to close before matching [expectedTitle]. */
+    private fun submitNewTab(expectedTitle: String) {
+        Espresso.closeSoftKeyboard()
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+        waitForTagGone("create_tab_button")
+        waitForText(expectedTitle)
     }
 
     private fun connectDirectlyThroughUi(targetDaemon: FakeAgentsTermDaemon, token: String = targetDaemon.token) {
@@ -249,12 +274,9 @@ class AgentsTermE2ETest {
         // Pick Claude agent, enter a custom tab title, and create the tab
         composeRule.onNodeWithTag("agent_option_claude").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("E2E Claude Tab")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
-
-        // Workspace transitions to the newly created tab (subtitle appears in both top bar and tab drawer)
-        waitForText("E2E Claude Tab")
+        submitNewTab("E2E Claude Tab")
         waitForText("Claude · projects")
+        waitForTag("composer_input")
 
         // Send a prompt and verify streamed reasoning, tool call, markdown text, and usage stats
         composeRule.onNodeWithTag("composer_input").performTextInput("Summarize the repo")
@@ -396,6 +418,7 @@ class AgentsTermE2ETest {
         waitForText("PERSISTENT TABS (9)")
         composeRule.onNodeWithTag("drawer_new_tab_button").assertIsEnabled().performClick()
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().assertIsEnabled().performClick()
+        waitForTagGone("create_tab_button")
         waitForTag("quick_tab_tab_11")
         composeRule.onNodeWithTag("top_new_tab_button").assertIsNotEnabled()
     }
@@ -435,10 +458,7 @@ class AgentsTermE2ETest {
         waitForText("New Persistent Agent Tab")
         composeRule.onNodeWithTag("agent_option_shell").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Build Shell")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
-
-        waitForText("Build Shell")
+        submitNewTab("Build Shell")
 
         // Quick tab strip appears with 2 tabs; switch back to tab_1 and verify its summary & transcript load
         waitForTag("quick_tab_tab_1")
@@ -461,6 +481,7 @@ class AgentsTermE2ETest {
         waitForText("Rename Tab")
         composeRule.onNode(hasSetTextAction() and hasText("Build Shell")).performTextReplacement("Renamed Shell")
         composeRule.onNodeWithText("Save").performClick()
+        waitForTextGone("Rename Tab")
         waitForText("Renamed Shell")
 
         // Open VM Connection Settings and navigate back to workspace
@@ -782,10 +803,7 @@ class AgentsTermE2ETest {
         waitForText("New Persistent Agent Tab")
         composeRule.onNodeWithTag("agent_option_agy").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("SSH Agy Tab")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
-
-        waitForText("SSH Agy Tab")
+        submitNewTab("SSH Agy Tab")
         waitForTag("composer_input")
         composeRule.onNodeWithTag("composer_input").performTextInput("Diagnose phone glitch")
         composeRule.onNodeWithTag("send_button").performClick()
@@ -927,10 +945,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("agent_option_claude").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_model_claude-sonnet-5-5").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Claude Model Tab")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
-
-        waitForText("Claude Model Tab")
+        submitNewTab("Claude Model Tab")
         waitForTag("model_picker_chip")
         composeRule.onNodeWithTag("model_picker_chip").assertTextContains("Sonnet 5.5")
         assertEquals("claude-sonnet-5-5", activeDaemon.tabModel("tab_1"))
@@ -980,10 +995,8 @@ class AgentsTermE2ETest {
         waitForText("New Persistent Agent Tab")
         composeRule.onNodeWithTag("agent_option_shell").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Plain Shell")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
-
-        waitForText("Plain Shell")
+        submitNewTab("Plain Shell")
+        composeRule.waitForIdle()
         assertTrue(
             "Shell tab should not show model picker chip",
             composeRule.onAllNodesWithTag("model_picker_chip").fetchSemanticsNodes().isEmpty(),
@@ -1013,9 +1026,7 @@ class AgentsTermE2ETest {
                 .isNotEmpty()
         }
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Worktree Tab")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
-        waitForText("Worktree Tab")
+        submitNewTab("Worktree Tab")
 
         // 2) Close the tab (returning to empty workspace) and open New Tab: must remember last folder
         composeRule.onNodeWithTag("overflow_menu_button").performClick()
@@ -1101,11 +1112,7 @@ class AgentsTermE2ETest {
         waitForText("New Persistent Agent Tab")
         composeRule.onNodeWithTag("agent_option_claude").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Default Prompt Tab")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
-
-        waitForText("Default Prompt Tab")
-        // The name is on screen as soon as it is typed, so also wait for the daemon to have the tab.
+        submitNewTab("Default Prompt Tab")
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.hasTab("tab_1") }
         val defaultSaved = activeDaemon.tabSystemPrompt("tab_1")
         assertTrue(
@@ -1148,11 +1155,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("agent_option_claude").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_permission_plan").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Plan Prompt Tab")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
-
-        waitForText("Plan Prompt Tab")
-        // The name is on screen as soon as it is typed, so also wait for the daemon to have the tab.
+        submitNewTab("Plan Prompt Tab")
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.hasTab("tab_2") }
         val planSaved = activeDaemon.tabSystemPrompt("tab_2")
         assertTrue(
@@ -1168,11 +1171,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("agent_option_agy").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_system_prompt_switch").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("Empty Prompt Tab")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
-
-        waitForText("Empty Prompt Tab")
-        // The name is on screen as soon as it is typed, so also wait for the daemon to have the tab.
+        submitNewTab("Empty Prompt Tab")
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.hasTab("tab_3") }
         assertNull(activeDaemon.tabSystemPrompt("tab_3"))
 
