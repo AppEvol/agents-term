@@ -25,6 +25,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=../docs/live-debugging.md");
+    println!("cargo:rerun-if-changed=../docs/agents_debugging_tips.md");
 
     if let Ok(override_hash) = env::var("AGENTSTERM_DAEMON_BUILD_HASH") {
         let trimmed = override_hash.trim();
@@ -41,6 +42,7 @@ fn main() {
         "Cargo.lock",
         "build.rs",
         "../docs/live-debugging.md",
+        "../docs/agents_debugging_tips.md",
     ] {
         let p = manifest_dir.join(rel);
         if p.is_file() {
