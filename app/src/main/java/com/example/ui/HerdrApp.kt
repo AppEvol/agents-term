@@ -7,12 +7,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -22,7 +24,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -43,6 +47,7 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,18 +65,24 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,6 +105,8 @@ import com.example.data.resolveTabLatestDetail
 import com.example.data.resolveTabTaskSummary
 import com.example.data.shareDebugBundleFile
 import com.example.ui.theme.AppTheme
+import com.example.ui.theme.LunaTabBorder
+import com.example.ui.theme.LunaTabPageBorder
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.ThemedAlertDialog
 import com.example.ui.theme.ThemedButton
@@ -104,15 +117,15 @@ import com.example.ui.theme.ThemedTextField
 import com.example.ui.theme.TitleBarBackground
 import com.example.ui.theme.TitleBarIconButton
 import com.example.ui.theme.isLunaControls
-import com.example.ui.theme.lunaTab
-import com.example.ui.theme.lunaTabBaseline
 import com.example.ui.theme.statusColor
 import com.example.ui.theme.statusLabel
 import com.example.ui.theme.themedCorner
 import com.example.ui.theme.titleBarColors
 import com.example.ui.theme.titleBarTitleStyle
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1501,93 +1514,218 @@ private fun TabTaskSummaryCard(
     }
 }
 
+internal fun computeQuickTabScrollTarget(
+    tabLeft: Int,
+    tabRight: Int,
+    viewportWidth: Int,
+    currentScroll: Int,
+    maxScroll: Int,
+    edgeMarginPx: Int = 0,
+): Int? {
+    if (viewportWidth <= 0 || maxScroll <= 0) return null
+    val visibleStart = currentScroll
+    val visibleEnd = currentScroll + viewportWidth
+    val effectiveStart = if (currentScroll > 0) visibleStart + edgeMarginPx else visibleStart
+    val effectiveEnd = if (currentScroll < maxScroll) visibleEnd - edgeMarginPx else visibleEnd
+    if (tabLeft >= effectiveStart && tabRight <= effectiveEnd) {
+        return null
+    }
+    return ((tabLeft + tabRight) / 2 - viewportWidth / 2).coerceIn(0, maxScroll)
+}
+
 @Composable
-private fun QuickTabStrip(
+internal fun QuickTabStrip(
     tabs: List<TabRecord>,
     activeTabId: String?,
     finishedTabIds: Set<String> = emptySet(),
     onSelect: (String) -> Unit,
 ) {
+    val luna = isLunaControls
+    val scrollState = rememberScrollState()
+    val tabBounds = remember { mutableStateMapOf<String, Pair<Int, Int>>() }
+    var hasAutoScrolled by remember { mutableStateOf(false) }
+    val tabIds = remember(tabs) { tabs.map { it.id } }
+    val density = LocalDensity.current
+    val horizontalPaddingPx = remember(density) { with(density) { 12.dp.roundToPx() } }
+
+    LaunchedEffect(tabIds) {
+        tabBounds.keys.retainAll(tabIds.toSet())
+    }
+
+    LaunchedEffect(activeTabId, tabIds, scrollState.viewportSize) {
+        val targetId = activeTabId ?: return@LaunchedEffect
+        val (bounds, viewport, maxScroll) = snapshotFlow {
+            Triple(tabBounds[targetId], scrollState.viewportSize, scrollState.maxValue)
+        }.first { (bounds, viewport, maxScroll) ->
+            bounds != null && viewport > 0 && bounds.second <= viewport + maxScroll
+        }
+        val (tabLeft, tabRight) = bounds ?: return@LaunchedEffect
+        val targetScroll = computeQuickTabScrollTarget(
+            tabLeft = tabLeft,
+            tabRight = tabRight,
+            viewportWidth = viewport,
+            currentScroll = scrollState.value,
+            maxScroll = maxScroll,
+            edgeMarginPx = horizontalPaddingPx,
+        )
+        if (targetScroll != null) {
+            if (!hasAutoScrolled) {
+                scrollState.scrollTo(targetScroll)
+            } else {
+                scrollState.animateScrollTo(targetScroll)
+            }
+        }
+        hasAutoScrolled = true
+    }
+
+    val stripBackground = if (luna) {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val baselineColor = if (luna) {
+        LunaTabPageBorder
+    } else {
+        MaterialTheme.colorScheme.outlineVariant
+    }
+
     Surface(
-        color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth(),
+        color = stripBackground,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("quick_tab_strip"),
     ) {
-        // In the XP look the strip is a row of tabs standing on a line; elsewhere, a row of pills.
-        val luna = isLunaControls
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(if (luna) Modifier.lunaTabBaseline() else Modifier)
-                .horizontalScroll(rememberScrollState())
-                .padding(
-                    start = 12.dp,
-                    end = 12.dp,
-                    top = 6.dp,
-                    bottom = if (luna) 0.dp else 6.dp,
-                ),
-            horizontalArrangement = Arrangement.spacedBy(if (luna) 2.dp else 8.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            for (tab in tabs) {
-                val selected = tab.id == activeTabId
-                val finished = tab.id in finishedTabIds
-                Surface(
-                    shape = if (luna) RectangleShape else themedCorner(20.dp),
-                    color = when {
-                        luna -> Color.Transparent
-                        selected -> MaterialTheme.colorScheme.primaryContainer
-                        finished -> AppTheme.colors.success.copy(alpha = 0.10f)
-                        else -> MaterialTheme.colorScheme.surfaceContainer
-                    },
-                    border = when {
-                        luna -> null
-                        selected -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
-                        finished -> BorderStroke(1.dp, AppTheme.colors.success.copy(alpha = 0.45f))
-                        else -> BorderStroke(1.dp, Color.Transparent)
-                    },
-                    modifier = Modifier
-                        .then(if (luna) Modifier.lunaTab(selected) else Modifier.clip(themedCorner(20.dp)))
-                        .clickable { onSelect(tab.id) }
-                        .testTag("quick_tab_${tab.id}"),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(
-                            horizontal = 12.dp,
-                            vertical = if (luna && !selected) 6.dp else 8.dp,
-                        ),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        if (finished) {
-                            Icon(
-                                imageVector = Icons.Rounded.CheckCircle,
-                                contentDescription = statusLabel("done"),
-                                tint = AppTheme.colors.success,
-                                modifier = Modifier
-                                    .size(14.dp)
-                                    .testTag("quick_tab_done_icon_${tab.id}"),
-                            )
-                        } else {
-                            TabStatusDot(
-                                status = tab.status,
-                                dotSize = 8.dp,
-                            )
-                        }
-                        Text(
-                            text = tab.title,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (selected || tab.unread || finished) FontWeight.SemiBold else FontWeight.Normal,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.width(105.dp),
-                        )
-                        if (tab.unread && !selected) {
-                            UnreadDot(modifier = Modifier.testTag("quick_tab_unread_${tab.id}"))
-                        }
-                    }
+        Box(modifier = Modifier.fillMaxWidth()) {
+            HorizontalDivider(
+                thickness = 1.dp,
+                color = baselineColor,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(scrollState)
+                    .padding(start = 12.dp, end = 12.dp, top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                for (tab in tabs) {
+                    val selected = tab.id == activeTabId
+                    val finished = tab.id in finishedTabIds
+                    QuickTabItem(
+                        tab = tab,
+                        selected = selected,
+                        finished = finished,
+                        luna = luna,
+                        onSelect = { onSelect(tab.id) },
+                        modifier = Modifier.onPlaced { coordinates ->
+                            val left = horizontalPaddingPx + coordinates.positionInParent().x.roundToInt()
+                            val right = left + coordinates.size.width
+                            val nextBounds = left to right
+                            if (tabBounds[tab.id] != nextBounds) {
+                                tabBounds[tab.id] = nextBounds
+                            }
+                        },
+                    )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun QuickTabItem(
+    tab: TabRecord,
+    selected: Boolean,
+    finished: Boolean,
+    luna: Boolean,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tabShape = themedCorner(10.dp)
+    val indicatorShape = if (luna) {
+        RoundedCornerShape(topStart = 1.dp, topEnd = 1.dp)
+    } else {
+        RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp)
+    }
+    val containerColor = when {
+        selected -> MaterialTheme.colorScheme.primaryContainer
+        finished -> AppTheme.colors.success.copy(alpha = 0.10f)
+        else -> MaterialTheme.colorScheme.surfaceContainer
+    }
+    val borderStroke = when {
+        selected -> BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+        finished -> BorderStroke(1.dp, AppTheme.colors.success.copy(alpha = 0.45f))
+        luna -> BorderStroke(1.dp, LunaTabBorder)
+        else -> BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
+    }
+    val textColor = when {
+        selected -> MaterialTheme.colorScheme.onPrimaryContainer
+        tab.unread || finished -> MaterialTheme.colorScheme.onSurface
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .width(IntrinsicSize.Max)
+            .semantics { this.selected = selected }
+            .clickable(onClick = onSelect)
+            .testTag("quick_tab_${tab.id}"),
+    ) {
+        Surface(
+            shape = tabShape,
+            color = containerColor,
+            border = borderStroke,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (finished) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = statusLabel("done"),
+                        tint = AppTheme.colors.success,
+                        modifier = Modifier
+                            .size(14.dp)
+                            .testTag("quick_tab_done_icon_${tab.id}"),
+                    )
+                } else {
+                    TabStatusDot(
+                        status = tab.status,
+                        dotSize = 8.dp,
+                    )
+                }
+                Text(
+                    text = tab.title,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = when {
+                        selected -> FontWeight.Bold
+                        tab.unread || finished -> FontWeight.SemiBold
+                        else -> FontWeight.Normal
+                    },
+                    color = textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(min = 52.dp, max = 128.dp),
+                )
+                if (tab.unread && !selected) {
+                    UnreadDot(modifier = Modifier.testTag("quick_tab_unread_${tab.id}"))
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 2.dp)
+                .height(3.5.dp)
+                .clip(indicatorShape)
+                .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                .then(if (selected) Modifier.testTag("quick_tab_indicator_${tab.id}") else Modifier),
+        )
     }
 }
 
