@@ -118,3 +118,5 @@ Previously, all open tabs, recently closed tabs (up to 50 retained for 24 hours)
   - `messages.json` — Normalized AgentsTerm chat history for that tab; streaming updates rewrite only this tab's file.
   - Optional diagnostic/trajectory artifacts (e.g., raw CLI stdout/stderr stream logs and references to the underlying CLI's native session/trajectory via `sessionRef`).
   - **Lifecycle pruning:** When a closed tab ages past retention (24 hours or >50 archived tabs), deleting `agents_tabs/<tab_id>/` reclaims all of its storage in one operation.
+
+<!-- CI probe: docs-only pull request, not for merging -->
