@@ -326,8 +326,10 @@ data class UploadAttachmentResponse(
 )
 
 /** Images can be attached when the daemon supports them and the tab runs an agent, not a shell. */
-fun attachmentLimitsForTab(serverInfo: ServerInfo?, tab: TabRecord?): AttachmentLimits? =
-    serverInfo?.attachments?.takeIf { tab != null && tab.agent != "shell" }
+fun attachmentLimitsForTab(serverInfo: ServerInfo?, tab: TabRecord?): AttachmentLimits? {
+    if (tab == null || tab.agent == "shell") return null
+    return serverInfo?.attachments
+}
 
 fun formatAttachmentCount(count: Int): String = if (count == 1) "1 image" else "$count images"
 

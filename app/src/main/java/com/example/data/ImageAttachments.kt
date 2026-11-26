@@ -6,9 +6,11 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
 import android.util.LruCache
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
+import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -118,7 +120,7 @@ object ImageAttachmentPreparer {
     fun scaleToFit(bitmap: Bitmap, maxEdge: Int): Bitmap {
         val (w, h) = targetSize(bitmap.width, bitmap.height, maxEdge)
         if (w == bitmap.width && h == bitmap.height) return bitmap
-        return Bitmap.createScaledBitmap(bitmap, w, h, true)
+        return bitmap.scale(w, h)
     }
 
     private fun readCapped(input: InputStream): ByteArray {
@@ -179,7 +181,7 @@ object ImageAttachmentPreparer {
     /** JPEG has no transparency; without this, transparent areas would turn black. */
     private fun flattenOnWhite(bitmap: Bitmap): Bitmap {
         if (!bitmap.hasAlpha()) return bitmap
-        val flat = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+        val flat = createBitmap(bitmap.width, bitmap.height)
         Canvas(flat).apply {
             drawColor(Color.WHITE)
             drawBitmap(bitmap, 0f, 0f, null)
@@ -213,8 +215,7 @@ class AttachmentImageStore(
         return decoded
     }
 
-    suspend fun fullImage(tabId: String, attachmentId: String): Bitmap? =
-        load(tabId, attachmentId, ImageAttachmentPreparer.MAX_EDGE_PX)
+    suspend fun fullImage(tabId: String, attachmentId: String): Bitmap? = load(tabId, attachmentId, ImageAttachmentPreparer.MAX_EDGE_PX)
 
     private suspend fun load(tabId: String, attachmentId: String, maxEdge: Int): Bitmap? {
         val bytes = bytesFor(tabId, attachmentId) ?: return null

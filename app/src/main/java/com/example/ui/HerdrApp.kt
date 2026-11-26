@@ -89,13 +89,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.data.attachmentLimitsForTab
 import com.example.data.AgentUsageUiState
 import com.example.data.ChatMessage
 import com.example.data.ConnectionState
 import com.example.data.ModelSlashCommand
 import com.example.data.TabRecord
 import com.example.data.WorkspaceState
+import com.example.data.attachmentLimitsForTab
 import com.example.data.captureWindowScreenshotBase64
 import com.example.data.formatModelChipLabel
 import com.example.data.parseModelSlashCommand
@@ -153,8 +153,8 @@ fun HerdrApp(viewModel: MainViewModel) {
             ComposerAttachments(
                 limits = limits,
                 pending = pendingAttachments[tab?.id].orEmpty(),
-                onAttach = viewModel::attachImages,
-                onRemove = viewModel::removePendingAttachment,
+                onAttach = { uris -> tab?.let { viewModel.attachments.attach(it.id, uris, limits) } },
+                onRemove = { localId -> tab?.let { viewModel.attachments.remove(it.id, localId) } },
             )
         }
     }

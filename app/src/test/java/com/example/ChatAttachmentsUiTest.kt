@@ -63,8 +63,7 @@ class ChatAttachmentsUiTest {
     private val attached = mutableListOf<Uri>()
     private val removed = mutableListOf<String>()
 
-    private fun thumbnail(): Bitmap =
-        Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+    private fun thumbnail(): Bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
 
     private fun pending(
         localId: String,

@@ -920,8 +920,7 @@ class HerdrRepository(
         debugRecorder?.record(
             "ui",
             "send_message",
-            "Sending message to tab=$tabId len=${text.length} images=${attachmentIds.size} " +
-                "overrideMode=${overridePermissionMode ?: "none"}",
+            "Sending message to tab=$tabId len=${text.length} overrideMode=${overridePermissionMode ?: "none"}",
             payload = text.take(500),
         )
         return runCatching {
@@ -931,17 +930,6 @@ class HerdrRepository(
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to send message")
         }
-    }
-
-    suspend fun uploadAttachment(tabId: String, bytes: ByteArray, mimeType: String): Result<MessageAttachment> {
-        val cfg = _state.value.config
-        debugRecorder?.record("ui", "upload_attachment", "Uploading image to tab=$tabId bytes=${bytes.size} type=$mimeType")
-        return runCatching { api.uploadAttachment(cfg, tabId, bytes, mimeType) }
-    }
-
-    suspend fun downloadAttachment(tabId: String, attachmentId: String): Result<ByteArray> {
-        val cfg = _state.value.config
-        return runCatching { api.downloadAttachment(cfg, tabId, attachmentId) }
     }
 
     suspend fun interruptTab(
@@ -955,8 +943,7 @@ class HerdrRepository(
         debugRecorder?.record(
             "ui",
             "interrupt_tab",
-            "Interrupting tab=$tabId processQueue=$processQueue hasText=${!text.isNullOrBlank()} " +
-                "images=${attachmentIds.size}",
+            "Interrupting tab=$tabId processQueue=$processQueue hasText=${!text.isNullOrBlank()}",
         )
         runCatching {
             api.interruptTab(

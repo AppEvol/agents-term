@@ -390,6 +390,24 @@ class BaseDockerVmTest(unittest.TestCase):
                     payload = raw.decode("utf-8", "replace")
                 return err.code, payload
 
+    def api_bytes(
+        self, method: str, path: str, body: Optional[bytes] = None, token: Optional[str] = "default"
+    ) -> Tuple[int, str, bytes]:
+        """Raw request for image uploads and downloads: returns status, content type and body."""
+        req = urllib.request.Request(self.base_url + path, data=body, method=method)
+        if token == "default":
+            token = self.token
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        if body is not None:
+            req.add_header("Content-Type", "application/octet-stream")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.status, resp.headers.get("Content-Type", ""), resp.read()
+        except urllib.error.HTTPError as err:
+            with err:
+                return err.code, err.headers.get("Content-Type", ""), err.read()
+
     def wait_for_daemon_healthy(self, token: Optional[str] = "default", timeout: float = 15.0) -> Dict[str, Any]:
         deadline = time.time() + timeout
         last_err = ""
@@ -1028,6 +1046,101 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
                 self.assertIn("perms=1", retry_msgs[-1]["text"])
             finally:
                 self.api("DELETE", f"/api/tabs/{perm_tab}")
+
+    def test_07b_image_attachments_reach_the_agent_and_stay_private(self) -> None:
+        self.ensure_bootstrapped()
+
+        st, info = self.api("GET", "/api/info")
+        self.assertEqual(st, 200)
+        self.assertEqual(info["attachments"]["maxBytes"], 8 * 1024 * 1024)
+        self.assertIn("image/png", info["attachments"]["mimeTypes"])
+
+        # "default" permission mode is the hard case: the agent may only read what it is given.
+        st, created = self.api(
+            "POST",
+            "/api/tabs",
+            {"agent": "claude", "title": "E2E images", "cwd": "/home/vmuser", "permissionMode": "default"},
+        )
+        self.assertEqual(st, 200, created)
+        tab_id = created["tab"]["id"]
+        attachments_path = f"/api/tabs/{tab_id}/attachments"
+
+        png = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 20
+        jpeg = b"\xff\xd8\xff\xe0" + b"photo-bytes" * 300
+        st, _, raw = self.api_bytes("POST", attachments_path, png)
+        self.assertEqual(st, 200, raw)
+        first = json.loads(raw)["attachment"]
+        st, _, raw = self.api_bytes("POST", attachments_path, jpeg)
+        self.assertEqual(st, 200, raw)
+        second = json.loads(raw)["attachment"]
+        self.assertEqual(first["mimeType"], "image/png")
+        self.assertEqual(second["mimeType"], "image/jpeg")
+
+        # Stored in the tab's own folder under ~/.agents-term, readable by the VM user only.
+        folder = f"/home/vmuser/.agents-term/agents_tabs/{tab_id}/attachments"
+        self.assertEqual(first["path"], f"{folder}/{first['id']}.png")
+        self.assertEqual(second["path"], f"{folder}/{second['id']}.jpg")
+        listing = self.docker_exec(f"stat -c '%a %s %n' {folder} {folder}/*").stdout.split("\n")
+        self.assertTrue(listing[0].startswith("700 "), listing)
+        self.assertIn(f"600 {len(png)} {first['path']}", listing)
+        self.assertIn(f"600 {len(jpeg)} {second['path']}", listing)
+
+        # Refused uploads leave nothing behind.
+        st, _, raw = self.api_bytes("POST", attachments_path, b"#!/bin/sh\necho pwned\n")
+        self.assertEqual(st, 415, raw)
+        st, _, raw = self.api_bytes("POST", attachments_path, png, token="wrong-token")
+        self.assertEqual(st, 401, raw)
+        st, _, raw = self.api_bytes("POST", attachments_path, b"\x89PNG\r\n\x1a\n" + b"0" * (8 * 1024 * 1024))
+        self.assertEqual(st, 413, raw)
+        self.assertEqual(self.docker_exec(f"ls {folder} | wc -l").stdout.strip(), "2")
+
+        # The transcript can download each image back, byte for byte.
+        st, content_type, body = self.api_bytes("GET", f"{attachments_path}/{first['id']}")
+        self.assertEqual((st, content_type, body), (200, "image/png", png))
+        st, _, _ = self.api_bytes("GET", f"{attachments_path}/{first['id']}", token=None)
+        self.assertEqual(st, 401)
+        st, _, _ = self.api_bytes("GET", f"{attachments_path}/..%2F..%2F..%2Fconfig.json")
+        self.assertEqual(st, 404)
+
+        # Sending: the agent is handed both paths, is allowed to read them, and opens the files.
+        st, sent = self.api(
+            "POST",
+            f"/api/tabs/{tab_id}/messages",
+            {"text": "What is wrong in these screenshots?", "attachments": [first["id"], second["id"]]},
+        )
+        self.assertEqual(st, 200, sent)
+        self.assertEqual([a["id"] for a in sent["userMessage"]["attachments"]], [first["id"], second["id"]])
+        self.assertEqual(sent["userMessage"]["text"], "What is wrong in these screenshots?")
+        _, messages = self.wait_for_tab_idle(tab_id, min_messages=2)
+        reply = messages[-1]["text"]
+        self.assertIn(f"image={first['id']}.png:{len(png)}", reply)
+        self.assertIn(f"image={second['id']}.jpg:{len(jpeg)}", reply)
+        self.assertNotIn("image-unreadable", reply)
+        self.assertNotIn("image-outside-add-dir", reply)
+
+        # An image with no text is a complete message, and works on the resumed session too.
+        st, _, raw = self.api_bytes("POST", attachments_path, png + b"third")
+        third = json.loads(raw)["attachment"]
+        st, sent = self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "", "attachments": [third["id"]]})
+        self.assertEqual(st, 200, sent)
+        _, messages = self.wait_for_tab_idle(tab_id, min_messages=4)
+        self.assertIn("resumed=yes", messages[-1]["text"])
+        self.assertIn(f"image={third['id']}.png:{len(png) + 5}", messages[-1]["text"])
+        self.assertEqual(messages[-2]["attachments"][0]["id"], third["id"])
+
+        # An unknown image id fails the send instead of quietly dropping the image.
+        st, err = self.api("POST", f"/api/tabs/{tab_id}/messages", {"text": "x", "attachments": ["att_dead"]})
+        self.assertEqual(st, 400, err)
+        self.assertIn("att_dead", err["error"])
+
+        # Shell tabs take no images.
+        st, shell_tab = self.api("POST", "/api/tabs", {"agent": "shell", "cwd": "/home/vmuser"})
+        self.assertEqual(st, 200)
+        st, _, raw = self.api_bytes("POST", f"/api/tabs/{shell_tab['tab']['id']}/attachments", png)
+        self.assertEqual(st, 400, raw)
+
+        self.api("DELETE", f"/api/tabs/{shell_tab['tab']['id']}")
+        self.api("DELETE", f"/api/tabs/{tab_id}")
 
     def test_08_tab_crud_defaults_and_cwd_normalization(self) -> None:
         self.ensure_bootstrapped()

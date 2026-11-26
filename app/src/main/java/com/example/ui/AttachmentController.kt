@@ -1,13 +1,15 @@
 package com.example.ui
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import com.example.data.AttachmentImageStore
 import com.example.data.AttachmentLimits
 import com.example.data.ImageAttachmentException
+import com.example.data.ImageAttachmentPreparer
 import com.example.data.MessageAttachment
 import com.example.data.PreparedImage
 import com.example.data.formatAttachmentCount
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,25 +74,32 @@ class AttachmentController(
         val source = open(uri, limits)
         jobs[localId] = scope.launch {
             try {
-                val prepared = withContext(workDispatcher) { source() }
+                // Reading and scaling the image is blocking work, so nothing in it can swallow
+                // this coroutine's cancellation.
+                val prepared = withContext(workDispatcher) { runCatching { source() } }
+                    .getOrElse { return@launch fail(tabId, localId, prepareFailure(it)) }
                 replace(tabId, localId) { it.copy(thumbnail = prepared.thumbnail) }
-                val uploaded = upload(tabId, prepared.bytes, prepared.mimeType).getOrThrow()
-                onUploaded(uploaded, prepared.thumbnail)
-                replace(tabId, localId) { it.copy(state = PendingAttachmentState.Ready, uploaded = uploaded) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (err: Exception) {
-                val reason = if (err is ImageAttachmentException) {
-                    err.message ?: "That image could not be attached"
-                } else {
-                    "Image upload failed: ${err.message ?: err::class.java.simpleName}"
-                }
-                replace(tabId, localId) { it.copy(state = PendingAttachmentState.Failed, error = reason) }
-                onError(reason)
+                upload(tabId, prepared.bytes, prepared.mimeType).fold(
+                    onSuccess = { uploaded ->
+                        onUploaded(uploaded, prepared.thumbnail)
+                        replace(tabId, localId) { it.copy(state = PendingAttachmentState.Ready, uploaded = uploaded) }
+                    },
+                    onFailure = { fail(tabId, localId, "Image upload failed: ${it.message ?: it::class.java.simpleName}") },
+                )
             } finally {
                 jobs.remove(localId)
             }
         }
+    }
+
+    private fun prepareFailure(err: Throwable): String = when (err) {
+        is ImageAttachmentException -> err.message ?: "That image could not be attached"
+        else -> "That image could not be attached: ${err.message ?: err::class.java.simpleName}"
+    }
+
+    private fun fail(tabId: String, localId: String, reason: String) {
+        replace(tabId, localId) { it.copy(state = PendingAttachmentState.Failed, error = reason) }
+        onError(reason)
     }
 
     private fun replace(tabId: String, localId: String, change: (PendingAttachment) -> PendingAttachment) {
@@ -123,3 +132,18 @@ class AttachmentController(
         return taken
     }
 }
+
+/** The controller as the app uses it: images are read through the content resolver. */
+fun attachmentControllerFor(
+    context: Context,
+    scope: CoroutineScope,
+    images: AttachmentImageStore,
+    onError: (String) -> Unit,
+    upload: suspend (tabId: String, bytes: ByteArray, mimeType: String) -> Result<MessageAttachment>,
+) = AttachmentController(
+    scope = scope,
+    open = { uri, limits -> ImageAttachmentPreparer.open(context.contentResolver, uri, limits.maxBytes) },
+    upload = upload,
+    onError = onError,
+    onUploaded = { attachment, thumbnail -> images.rememberThumbnail(attachment.id, thumbnail) },
+)

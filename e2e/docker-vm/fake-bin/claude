@@ -7,6 +7,7 @@ session_id=""
 model="default"
 skip_perms=0
 sys_prompt=""
+add_dir=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -29,6 +30,10 @@ while [ $# -gt 0 ]; do
     --append-system-prompt)
       sys_prompt="${2:-}"
       shift 2
+      ;;
+    --add-dir=*)
+      add_dir="${1#--add-dir=}"
+      shift
       ;;
     --output-format|--permission-mode)
       shift 2
@@ -103,7 +108,24 @@ case "$prompt" in
     ;;
 esac
 
-reply="Claude reply [sess=${session_id} resumed=${resumed} model=${model} perms=${skip_perms} sp=${sp_tag}].${done_suffix}"
+# Image attachments arrive as file paths listed in the prompt. Like the real CLI, open each
+# one, and report what was found so tests can tell the image really reached the agent.
+image_note=""
+case "$prompt" in
+  *"Open each file to view it:"*)
+    image_note=$(printf '%s\n' "$prompt" | sed -n 's/^- \(\/.*\)$/\1/p' | while IFS= read -r image; do
+      if [ ! -r "$image" ]; then
+        printf ' image-unreadable=%s' "$(basename "$image")"
+      elif [ "$(dirname "$image")" != "$add_dir" ]; then
+        printf ' image-outside-add-dir=%s' "$(basename "$image")"
+      else
+        printf ' image=%s:%s' "$(basename "$image")" "$(wc -c < "$image" | tr -d ' ')"
+      fi
+    done)
+    ;;
+esac
+
+reply="Claude reply [sess=${session_id} resumed=${resumed} model=${model} perms=${skip_perms} sp=${sp_tag}${image_note}].${done_suffix}"
 printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}}\n' "$session_id"
 printf '{"type":"stream_event","session_id":"%s","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"%s%s"}}}\n' \
   "$session_id" "$summary_prefix" "$reply"

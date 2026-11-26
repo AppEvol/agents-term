@@ -120,14 +120,16 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 
 | Endpoint | Purpose |
 | :--- | :--- |
-| `GET /api/info` | Returns server version, the git `commit` the daemon is running, hostname, Tailscale IP, `defaultCwd`, `defaultSystemPrompt`, `defaultSystemPromptFullAccess`, and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
+| `GET /api/info` | Returns server version, the git `commit` the daemon is running, hostname, Tailscale IP, `defaultCwd`, `defaultSystemPrompt`, `defaultSystemPromptFullAccess`, `attachments` (image upload limits; absent on daemons without attachment support), and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
 | `GET /api/agents/:agent/models` | Returns (and optionally refreshes via `?refresh=1`) available models for an agent CLI (`agy`, `claude`, `codex`). |
 | `GET /api/tabs` | Lists all persistent agent tabs and `activeTabId`. |
 | `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`, optional `systemPrompt`). Returns HTTP 409 when the VM already has 10 or more open tabs. |
 | `PATCH /api/tabs/:id` | Renames a tab, updates its tool `permissionMode`, changes its `model`, updates its `systemPrompt` (pass `""` to clear), or sets its task `status` (`"done"` / `"idle"`). |
 | `DELETE /api/tabs/:id` | Closes a persistent tab. |
 | `GET /api/tabs/:id/messages` | Fetches full message/tool/thinking transcript for a tab. |
-| `POST /api/tabs/:id/messages` | Sends a prompt to the tab (with optional `overridePermissionMode`). |
+| `POST /api/tabs/:id/messages` | Sends a prompt to the tab (with optional `overridePermissionMode` and optional `attachments`, a list of uploaded image ids). `text` may be empty when there are attachments. |
+| `POST /api/tabs/:id/attachments` | Uploads one image (raw request body; PNG, JPEG, GIF, WebP or BMP, at most 8 MB) into `~/.agents-term/agents_tabs/<tabId>/attachments/` and returns `{attachment: {id, name, mimeType, bytes, path}}`. The agent is handed the file paths in its prompt. Not available on shell tabs. |
+| `GET /api/tabs/:id/attachments/:attachmentId` | Downloads an uploaded image, for the chat transcript. |
 | `POST /api/tabs/:id/interrupt` | Sends interrupt (`SIGINT`/`SIGTERM`) to a running agent turn. |
 | `POST /api/tabs/:id/read` | Marks a tab as read. |
 | `GET /api/fs?path=...` | Lists directories on the VM for the New Tab directory browser. |

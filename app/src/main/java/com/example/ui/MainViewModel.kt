@@ -1,7 +1,6 @@
 package com.example.ui
 
 import android.app.Application
-import android.net.Uri
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -32,7 +31,6 @@ import com.example.data.FsListResponse
 import com.example.data.HerdrApiClient
 import com.example.data.HerdrRepository
 import com.example.data.HostKeyMismatchException
-import com.example.data.ImageAttachmentPreparer
 import com.example.data.SettingsStore
 import com.example.data.SshBootstrapClient
 import com.example.data.SshBootstrapConfig
@@ -40,7 +38,6 @@ import com.example.data.SshProfile
 import com.example.data.SshSetupAutofill
 import com.example.data.UpdateTabRequest
 import com.example.data.WorkspaceState
-import com.example.data.attachmentLimitsForTab
 import com.example.data.buildDeviceInfoSummary
 import com.example.data.buildSanitizedWorkspaceJson
 import com.example.data.captureWindowScreenshotBase64
@@ -159,35 +156,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val usageController = AgentUsageController(repo = repo, scope = viewModelScope)
 
-    /** Images of sent messages, shown in the transcript. */
-    val attachmentImages = AttachmentImageStore(
-        cacheDir = application.cacheDir,
-        download = { tabId, attachmentId -> repo.downloadAttachment(tabId, attachmentId) },
-    )
-
-    /** Images attached to each tab's unsent message. */
-    val attachments = AttachmentController(
-        scope = viewModelScope,
-        open = { uri, limits ->
-            ImageAttachmentPreparer.open(application.contentResolver, uri, limits.maxBytes)
-        },
-        upload = { tabId, bytes, mimeType -> repo.uploadAttachment(tabId, bytes, mimeType) },
-        onError = { reason -> repo.showBanner(reason) },
-        onUploaded = { attachment, thumbnail -> attachmentImages.rememberThumbnail(attachment.id, thumbnail) },
-    )
-
-    fun attachImages(uris: List<Uri>) {
-        val current = state.value
-        val tab = current.activeTab ?: return
-        val limits = attachmentLimitsForTab(current.serverInfo, tab) ?: return
-        attachments.attach(tab.id, uris, limits)
+    /** Images of sent messages, for the transcript, and images attached to unsent messages. */
+    val attachmentImages = AttachmentImageStore(application.cacheDir) { tabId, attachmentId ->
+        runCatching { api.downloadAttachment(state.value.config, tabId, attachmentId) }
     }
-
-    fun removePendingAttachment(localId: String) {
-        val tabId = state.value.activeTab?.id ?: return
-        attachments.remove(tabId, localId)
+    val attachments = attachmentControllerFor(application, viewModelScope, attachmentImages, repo::showBanner) { tabId, bytes, mimeType ->
+        runCatching { api.uploadAttachment(state.value.config, tabId, bytes, mimeType) }
     }
-
     private val _isRefreshingClosedTabs = MutableStateFlow(false)
     val isRefreshingClosedTabs: StateFlow<Boolean> = _isRefreshingClosedTabs.asStateFlow()
 
@@ -836,7 +811,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun interruptActiveTab(processQueue: Boolean = false, text: String? = null) {
         val tabId = state.value.activeTab?.id ?: return
-        // "Send now" carries the composed message, images included; a plain stop leaves them.
         val attachmentIds = if (processQueue) attachments.takeReady(tabId).map { it.id } else emptyList()
         viewModelScope.launch {
             repo.interruptTab(tabId, processQueue = processQueue, text = text, attachmentIds = attachmentIds)
