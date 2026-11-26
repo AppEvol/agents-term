@@ -356,6 +356,8 @@ pub struct TaskSummaryStreamFilter {
     buf: String,
     emitted_any: bool,
     strip_post_tag_ws: bool,
+    /// Follow-up turns: only a tag that opens the reply is stripped, and its summary is dropped.
+    strip_only: bool,
     pub summary: Option<String>,
 }
 
@@ -370,7 +372,19 @@ impl TaskSummaryStreamFilter {
             buf: String::new(),
             emitted_any: false,
             strip_post_tag_ws: false,
+            strip_only: false,
             summary: None,
+        }
+    }
+
+    /// Filter for turns that did not ask for a summary. Agents sometimes repeat the tag at the
+    /// start of later replies because the first prompt's request is still in their context, so
+    /// a leading tag is removed without replacing the tab's summary. A tag after visible text is
+    /// left alone, since the reply may be quoting it on purpose.
+    pub fn strip_only() -> Self {
+        Self {
+            strip_only: true,
+            ..Self::new()
         }
     }
 
@@ -426,6 +440,12 @@ impl TaskSummaryStreamFilter {
             if !self.in_tag {
                 if let Some(idx) = data.find(TASK_SUMMARY_OPEN_TAG) {
                     let before = &data[..idx];
+                    if self.strip_only && (self.emitted_any || !before.trim().is_empty()) {
+                        visible.push_str(&data);
+                        self.emitted_any = true;
+                        self.done = true;
+                        break;
+                    }
                     if !before.is_empty() && (self.emitted_any || !before.trim().is_empty()) {
                         visible.push_str(before);
                         self.emitted_any = true;
@@ -469,9 +489,11 @@ impl TaskSummaryStreamFilter {
 
             if let Some(close_idx) = data.find(TASK_SUMMARY_CLOSE_TAG) {
                 let raw_summary = &data[..close_idx];
-                if let Some(cleaned) = summarize_task_prompt(raw_summary, 160) {
-                    self.summary = Some(cleaned.clone());
-                    extracted = Some(cleaned);
+                if !self.strip_only {
+                    if let Some(cleaned) = summarize_task_prompt(raw_summary, 160) {
+                        self.summary = Some(cleaned.clone());
+                        extracted = Some(cleaned);
+                    }
                 }
                 self.in_tag = false;
                 self.done = true;
@@ -496,6 +518,11 @@ impl TaskSummaryStreamFilter {
 
             self.buf = data;
             break;
+        }
+
+        if self.strip_only && self.emitted_any && !self.in_tag && !self.done {
+            visible.push_str(&std::mem::take(&mut self.buf));
+            self.done = true;
         }
 
         (visible, extracted)
@@ -884,6 +911,34 @@ mod tests {
         assert_eq!(s2.as_deref(), Some("Fix rust daemon"));
         assert_eq!(v2, "Hello!");
         assert_eq!(f.flush(), "");
+    }
+
+    #[test]
+    fn strip_only_filter_drops_leading_tag_without_extracting_summary() {
+        let mut f = TaskSummaryStreamFilter::strip_only();
+        let (v1, s1) = f.feed("<tab_task_summary>Retry the publish");
+        assert_eq!(v1, "");
+        assert_eq!(s1, None);
+        let (v2, s2) = f.feed(" step.</tab_task_summary>\nI'll check GitHub access.");
+        assert_eq!(v2, "I'll check GitHub access.");
+        assert_eq!(s2, None);
+        assert_eq!(f.summary, None);
+        assert_eq!(f.flush(), "");
+    }
+
+    #[test]
+    fn strip_only_filter_keeps_tag_quoted_after_visible_text() {
+        let quoted = "The `<tab_task_summary>x</tab_task_summary>` tag leaked.";
+        let mut f = TaskSummaryStreamFilter::strip_only();
+        let (v1, _) = f.feed("The `<tab_task_");
+        let (v2, _) = f.feed("summary>x</tab_task_summary>` tag leaked.");
+        assert_eq!(format!("{v1}{v2}{}", f.flush()), quoted);
+
+        let mut whole = TaskSummaryStreamFilter::strip_only();
+        let (v, s) = whole.feed(quoted);
+        assert_eq!(v, quoted);
+        assert_eq!(s, None);
+        assert_eq!(whole.flush(), "");
     }
 
     #[test]
