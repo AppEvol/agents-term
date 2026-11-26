@@ -66,9 +66,8 @@ class InstallScriptTest(unittest.TestCase):
         self.http_thread.start()
 
         self.env = {
-            **os.environ,
+            **{k: v for k, v in os.environ.items() if not k.startswith("AGENTSTERM_")},
             "HOME": str(self.home),
-            "AGENTSTERM_BIN_DIR": str(self.home / ".local" / "bin"),
             "AGENTSTERM_RELEASE_BASE_URL": f"http://127.0.0.1:{self.http_port}",
         }
 
@@ -121,7 +120,9 @@ class InstallScriptTest(unittest.TestCase):
     def test_checksum_mismatch_rejected_without_overwriting_existing_binary(self) -> None:
         self.publish_fake_binary("good")
         self.assertEqual(self.run_install().returncode, 0)
-        installed = self.home / ".local" / "bin" / "agentsterm-daemon"
+        installed = self.home / ".agents-term" / "bin" / "agentsterm-daemon"
+        self.assertTrue(installed.is_file())
+        self.assertEqual(os.stat(self.home / ".agents-term").st_mode & 0o777, 0o700)
         before = installed.read_bytes()
 
         self.publish_fake_binary("corrupt", bad_sha=True)
@@ -129,6 +130,20 @@ class InstallScriptTest(unittest.TestCase):
         self.assertEqual(bad.returncode, 3)
         self.assertIn("SHA-256 mismatch", bad.stderr)
         self.assertEqual(installed.read_bytes(), before)
+
+    def test_respects_agentsterm_home_override(self) -> None:
+        self.publish_fake_binary("custom")
+        custom_home = self.tmp / "custom-agents-term"
+        res = subprocess.run(
+            ["sh", str(INSTALL_SCRIPT), "--port", "7591"],
+            env={**self.env, "AGENTSTERM_HOME": str(custom_home)},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertTrue((custom_home / "bin" / "agentsterm-daemon").is_file())
+        self.assertFalse((self.home / ".agents-term").exists())
 
     def test_propagates_daemon_install_exit_code(self) -> None:
         self.publish_fake_binary("unhealthy", exit_code=4)

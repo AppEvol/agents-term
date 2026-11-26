@@ -99,15 +99,15 @@ From a checkout on the VM, run the installer over SSH. Restarting the daemon end
 sh daemon-rs/install.sh --port 7501
 ```
 
-The script installs the latest release in `~/.local/bin/agentsterm-daemon`. To install a specific release, set `AGENTSTERM_RELEASE_BASE_URL` to its `https://github.com/nedn/agents-term/releases/download/<tag>` URL.
+The script installs the latest release in `~/.agents-term/bin/agentsterm-daemon`. To install a specific release, set `AGENTSTERM_RELEASE_BASE_URL` to its `https://github.com/nedn/agents-term/releases/download/<tag>` URL.
 
-The installer reuses the token and tab history in `~/.config/herdr-mobile/` and preserves active turns when the requested build is already running. It configures the `herdr-mobile.service` systemd user service when available, otherwise it starts a detached daemon and sets up an `@reboot` crontab entry when possible. It reports whether the daemon will survive a reboot and prints the pairing URI after checking `/api/info`.
+The installer reuses the token and tab history in `~/.agents-term/` (overridable via `AGENTSTERM_HOME`) and preserves active turns when the requested build is already running. It configures the `agentsterm-daemon.service` systemd user service when available, otherwise it starts a detached daemon and sets up an `@reboot` crontab entry when possible. It reports whether the daemon will survive a reboot and prints the pairing URI after checking `/api/info`.
 
 ### Day-to-day
 
 ```sh
-~/.local/bin/agentsterm-daemon pairing   # print the connection details and pairing URI
-~/.local/bin/agentsterm-daemon version   # print the version and build hash
+~/.agents-term/bin/agentsterm-daemon pairing   # print the connection details and pairing URI
+~/.agents-term/bin/agentsterm-daemon version   # print the version and build hash
 ```
 
 From a source checkout, run `cargo test --manifest-path daemon-rs/Cargo.toml` for the daemon and `python3 -m unittest discover -s daemon-rs/tests` for the shell installer.
@@ -131,7 +131,7 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 | `POST /api/tabs/:id/interrupt` | Sends interrupt (`SIGINT`/`SIGTERM`) to a running agent turn. |
 | `POST /api/tabs/:id/read` | Marks a tab as read. |
 | `GET /api/fs?path=...` | Lists directories on the VM for the New Tab directory browser. |
-| `POST /api/debug/dumps` | Uploads an Android debug dump (`events.ndjson`, `state.json`, `logcat.txt`, `crash.txt`, optional `screenshot.png`) into `~/.config/herdr-mobile/debug-dumps/` and updates the `latest` symlink. |
+| `POST /api/debug/dumps` | Uploads an Android debug dump (`events.ndjson`, `state.json`, `logcat.txt`, `crash.txt`, optional `screenshot.png`) into `~/.agents-term/debug-dumps/` and updates the `latest` symlink. |
 | `GET /api/debug/dumps` | Lists recent Android debug dump folders stored on the VM. |
 | `GET /api/app/status` | App state reporter: whether a connected app has remote inspection (`ready`) and remote control (`controlReady`) enabled. |
 | `POST /api/app/command` | App state reporter: relays `{command, args, timeoutMs}` to the app over the WebSocket and returns its result (used by `agents_term_app_cli` / `agentsterm-daemon app`). |
@@ -144,4 +144,4 @@ AgentsTerm communicates with the VM daemon over HTTP and WebSocket inside the Ta
 - If an agent CLI is missing after setup, install it in `~/.local/bin` or `/usr/local/bin` so the daemon can find it.
 - **Phone cannot reach `http://<tailscale-ip>:7501`**: Confirm Tailscale is connected on both phone and VM, the daemon is bound to the Tailscale IPv4 (not `127.0.0.1`), and any host firewall (`ufw`/`iptables`) allows TCP `7501` on the `tailscale0` interface.
 - **Host key mismatch warning in AgentsTerm**: If the VM was rebuilt and generated a new SSH host key, tap **Trust New Host Key & Retry** in the bootstrap console to update the pinned SHA-256 fingerprint.
-- To rotate the bearer token, run `~/.local/bin/agentsterm-daemon rotate-token` over SSH, restart the daemon, and paste the new pairing URI into **VM Connection Settings**.
+- To rotate the bearer token, run `~/.agents-term/bin/agentsterm-daemon rotate-token` over SSH, restart the daemon, and paste the new pairing URI into **VM Connection Settings**.

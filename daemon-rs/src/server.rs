@@ -22,8 +22,8 @@ use tokio::sync::mpsc;
 
 use crate::app_state::{AppStateBroker, DEFAULT_COMMAND_TIMEOUT_MS};
 use crate::config::{
-    build_server_info, daemon_commit, debug_dumps_root, ensure_live_debugging_doc, home_dir,
-    SERVER_VERSION,
+    build_server_info, daemon_commit, debug_dumps_root, ensure_config_dir, ensure_dir_0700,
+    ensure_live_debugging_doc, home_dir, next_atomic_seq, SERVER_VERSION,
 };
 use crate::log::{log_info, log_warn};
 use crate::models::{get_agent_models, warm_agent_models_cache};
@@ -75,9 +75,9 @@ fn nonblank(v: Option<&Value>) -> bool {
 }
 
 pub fn save_debug_dump(payload: &Map<String, Value>) -> Value {
+    let _ = ensure_config_dir();
     let root = debug_dumps_root();
-    let _ = fs::create_dir_all(&root);
-    let _ = fs::set_permissions(&root, fs::Permissions::from_mode(0o700));
+    let _ = ensure_dir_0700(&root);
 
     let created_at = payload
         .get("createdAt")
@@ -252,8 +252,15 @@ pub fn save_debug_dump(payload: &Map<String, Value>) -> Value {
     write_file(&mut files, "summary.md", summary.join("\n").as_bytes());
 
     let latest = root.join("latest");
-    let _ = fs::remove_file(&latest);
-    let _ = std::os::unix::fs::symlink(&remote_dir, &latest);
+    let tmp_link = root.join(format!(
+        ".latest.tmp.{}.{}",
+        std::process::id(),
+        next_atomic_seq()
+    ));
+    let _ = fs::remove_file(&tmp_link);
+    if std::os::unix::fs::symlink(&dir_name, &tmp_link).is_ok() {
+        let _ = fs::rename(&tmp_link, &latest);
+    }
 
     json!({
         "ok": true,

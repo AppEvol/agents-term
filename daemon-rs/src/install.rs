@@ -4,10 +4,11 @@
 
 use serde_json::Value;
 use std::env;
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::TcpListener;
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -15,13 +16,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::{
-    config_dir, daemon_commit, detect_tailscale_ip, ensure_config_dir, ensure_live_debugging_doc,
-    home_dir, load_or_create_config, pairing_uri, save_config, BUILD_HASH, SERVER_VERSION,
+    bin_dir, daemon_commit, daemon_log_path, daemon_pid_path, detect_tailscale_ip,
+    ensure_config_dir, ensure_live_debugging_doc, home_dir, load_or_create_config, next_atomic_seq,
+    pairing_uri, save_config, write_atomic_file, BUILD_HASH, SERVER_VERSION,
 };
 use crate::http_client::http_request;
 
-const UNIT_NAME: &str = "herdr-mobile.service";
+const UNIT_NAME: &str = "agentsterm-daemon.service";
+const LEGACY_UNIT_NAME: &str = "herdr-mobile.service";
 const CRON_MARKER: &str = "# agentsterm-daemon-reboot";
+const MAX_DAEMON_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
 fn log_step(msg: &str) {
     println!(">>> {msg}");
@@ -33,11 +37,18 @@ fn die(code: i32, msg: &str) -> i32 {
 }
 
 fn self_exe() -> PathBuf {
-    env::current_exe().unwrap_or_else(|_| home_dir().join(".local/bin/agentsterm-daemon"))
+    env::current_exe().unwrap_or_else(|_| bin_dir().join("agentsterm-daemon"))
 }
 
 fn env_is_one(key: &str) -> bool {
     env::var(key).map(|v| v.trim() == "1").unwrap_or(false)
+}
+
+fn custom_agents_term_home() -> Option<String> {
+    env::var("AGENTSTERM_HOME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn probe_info(host: &str, port: u16, token: &str) -> Result<Value, String> {
@@ -88,7 +99,7 @@ fn kill_pid_gracefully(pid: i32) {
 }
 
 fn stop_detached() {
-    let pid_file = config_dir().join("daemon.pid");
+    let pid_file = daemon_pid_path();
     if let Ok(raw) = fs::read_to_string(&pid_file) {
         if let Ok(pid) = raw.trim().parse::<i32>() {
             if pid_alive(pid) {
@@ -101,7 +112,9 @@ fn stop_detached() {
 }
 
 fn stop_legacy_daemons() {
-    if env_is_one("AGENTSTERM_KEEP_LEGACY") {
+    if env_is_one("AGENTSTERM_KEEP_LEGACY")
+        || (custom_agents_term_home().is_some() && !env_is_one("AGENTSTERM_STOP_ALL"))
+    {
         return;
     }
     let my_pid = std::process::id() as i32;
@@ -136,18 +149,29 @@ fn stop_legacy_daemons() {
 }
 
 fn ensure_app_cli_symlinks(exe: &Path) {
-    let bin_dir = home_dir().join(".local").join("bin");
-    let _ = fs::create_dir_all(&bin_dir);
-    for name in ["agents_term_app_cli", "app_state_cli"] {
-        let link_path = bin_dir.join(name);
-        if let Ok(meta) = fs::symlink_metadata(&link_path) {
-            if meta.file_type().is_symlink() {
-                let _ = fs::remove_file(&link_path);
-            } else {
-                continue;
-            }
+    let target_bin_dir = bin_dir();
+    let _ = fs::create_dir_all(&target_bin_dir);
+    let link_target: PathBuf = if exe.parent() == Some(target_bin_dir.as_path())
+        && exe.file_name() == Some(OsStr::new("agentsterm-daemon"))
+    {
+        PathBuf::from("agentsterm-daemon")
+    } else {
+        exe.to_path_buf()
+    };
+    let link_path = target_bin_dir.join("agents_term_app_cli");
+    if let Ok(meta) = fs::symlink_metadata(&link_path) {
+        if !meta.file_type().is_symlink() {
+            return;
         }
-        let _ = symlink(exe, &link_path);
+    }
+    let tmp_link = target_bin_dir.join(format!(
+        ".agents_term_app_cli.tmp.{}.{}",
+        std::process::id(),
+        next_atomic_seq()
+    ));
+    let _ = fs::remove_file(&tmp_link);
+    if symlink(&link_target, &tmp_link).is_ok() {
+        let _ = fs::rename(&tmp_link, &link_path);
     }
 }
 
@@ -326,8 +350,13 @@ fn install_cron_reboot(exe: &Path, host: &str, port: u16) -> bool {
         .filter(|l| !l.contains(CRON_MARKER) && !l.contains("herdr-mobile/start-daemon.sh"))
         .map(str::to_string)
         .collect();
+    let env_prefix = match custom_agents_term_home() {
+        Some(dir) => format!("AGENTSTERM_HOME={} ", shell_quote(&dir)),
+        None => String::new(),
+    };
     let entry = format!(
-        "@reboot {} ensure-running --host {} --port {} {}",
+        "@reboot {}{} ensure-running --host {} --port {} {}",
+        env_prefix,
         shell_quote(&exe.to_string_lossy()),
         shell_quote(host),
         port,
@@ -337,14 +366,26 @@ fn install_cron_reboot(exe: &Path, host: &str, port: u16) -> bool {
     write_crontab(&format!("{}\n", lines.join("\n")))
 }
 
+fn rotate_daemon_log_if_needed(log_path: &Path) {
+    if let Ok(meta) = fs::metadata(log_path) {
+        if meta.len() >= MAX_DAEMON_LOG_BYTES {
+            let rotated = log_path.with_file_name("daemon.log.1");
+            let _ = fs::rename(log_path, rotated);
+        }
+    }
+}
+
 fn spawn_detached_daemon(exe: &Path, host: &str, port: u16) -> Result<u32, String> {
     ensure_config_dir().map_err(|e| format!("Failed to create config dir: {e}"))?;
-    let log_path = config_dir().join("daemon.log");
+    let log_path = daemon_log_path();
+    rotate_daemon_log_if_needed(&log_path);
     let log_file = OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(&log_path)
         .map_err(|e| format!("Failed to open {}: {e}", log_path.display()))?;
+    let _ = fs::set_permissions(&log_path, fs::Permissions::from_mode(0o600));
     let log_err = log_file
         .try_clone()
         .map_err(|e| format!("Failed to clone log file descriptor: {e}"))?;
@@ -368,12 +409,12 @@ fn spawn_detached_daemon(exe: &Path, host: &str, port: u16) -> Result<u32, Strin
         .spawn()
         .map_err(|e| format!("Failed to spawn {}: {e}", exe.display()))?;
     let pid = child.id();
-    let _ = fs::write(config_dir().join("daemon.pid"), format!("{pid}\n"));
+    let _ = write_atomic_file(&daemon_pid_path(), format!("{pid}\n").as_bytes(), 0o600);
     Ok(pid)
 }
 
 fn print_tail_diagnostics() {
-    let log_path = config_dir().join("daemon.log");
+    let log_path = daemon_log_path();
     if let Ok(content) = fs::read_to_string(&log_path) {
         let lines: Vec<&str> = content.lines().collect();
         let start = lines.len().saturating_sub(20);
@@ -474,6 +515,10 @@ pub fn run_install(host_arg: Option<String>, port: u16, force_restart: bool) -> 
                 );
             }
             let unit_path = unit_dir.join(UNIT_NAME);
+            let extra_env = match custom_agents_term_home() {
+                Some(dir) => format!("Environment=AGENTSTERM_HOME={dir}\n"),
+                None => String::new(),
+            };
             let unit_body = format!(
                 "[Unit]\n\
 Description=AgentsTerm VM daemon (Rust)\n\
@@ -485,13 +530,15 @@ Type=simple\n\
 ExecStart={} serve --host {} --port {}\n\
 Restart=always\n\
 RestartSec=3\n\
-Environment=PATH=%h/.local/bin:%h/.npm-global/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin\n\
+Environment=PATH=%h/.agents-term/bin:%h/.local/bin:%h/.npm-global/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin\n\
+{}\
 \n\
 [Install]\n\
 WantedBy=default.target\n",
                 exe.display(),
                 host,
-                port
+                port,
+                extra_env
             );
             if let Err(err) = fs::write(&unit_path, unit_body) {
                 return die(
@@ -501,6 +548,13 @@ WantedBy=default.target\n",
             }
             let _ = fs::set_permissions(&unit_path, fs::Permissions::from_mode(0o644));
             log_step(&format!("Installed {}", unit_path.display()));
+            if unit_dir.join(LEGACY_UNIT_NAME).exists() {
+                let _ = Command::new("systemctl")
+                    .args(["--user", "disable", "--now", LEGACY_UNIT_NAME])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
             let _ = Command::new("systemctl")
                 .args(["--user", "daemon-reload"])
                 .status();
@@ -536,7 +590,7 @@ WantedBy=default.target\n",
                 Ok(p) => p,
                 Err(err) => return die(4, &err),
             };
-            let log_path = config_dir().join("daemon.log");
+            let log_path = daemon_log_path();
             if install_cron_reboot(&exe, &host, port) {
                 log_step("Installed @reboot crontab fallback (agentsterm-daemon ensure-running)");
                 mode = format!(

@@ -119,10 +119,10 @@ private class SimulatedDaemonBootstrapCommand(
             try {
                 val lines = listOf(
                     ">>> Checking latest AgentsTerm daemon (agentsterm-daemon-linux-x86_64)...",
-                    ">>> Installed verified binary at /home/ci/.local/bin/agentsterm-daemon",
+                    ">>> Installed verified binary at /home/ci/.agents-term/bin/agentsterm-daemon",
                     ">>> Waiting for the daemon on http://127.0.0.1:$daemonPort ...",
                     ">>> Daemon v0.3.0 (commit abcdef123456) healthy on 127.0.0.1:$daemonPort (hostname ci-test-vm)",
-                    ">>> Running as systemd --user (herdr-mobile.service)",
+                    ">>> Running as systemd --user (agentsterm-daemon.service)",
                     pairingUri,
                 )
                 val stream = out

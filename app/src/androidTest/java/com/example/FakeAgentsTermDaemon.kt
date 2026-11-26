@@ -286,12 +286,12 @@ class FakeAgentsTermDaemon(
         if (method == "POST" && path == "/api/debug/dumps") {
             val req = decodeHerdrJson<DebugDumpUploadRequest>(request.body.readUtf8())
             uploadedDebugDumps.add(req)
-            val remoteDir = "/home/ci/.config/herdr-mobile/debug-dumps/20261124_${req.dumpId}"
+            val remoteDir = "/home/ci/.agents-term/debug-dumps/20261124_${req.dumpId}"
             val resp = DebugDumpUploadResponse(
                 ok = true,
                 dumpId = req.dumpId,
                 remoteDir = remoteDir,
-                latestSymlink = "/home/ci/.config/herdr-mobile/debug-dumps/latest",
+                latestSymlink = "/home/ci/.agents-term/debug-dumps/latest",
                 files = listOf("summary.md", "meta.json", "state.json", "events.ndjson"),
             )
             return jsonResponse(200, encodeHerdrJson(resp))

@@ -16,8 +16,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::config::{
-    daemon_commit, detect_tailscale_ip, load_or_create_config, pairing_uri, rotate_token,
-    save_config, BUILD_HASH, SERVER_VERSION,
+    acquire_daemon_lock, daemon_commit, detect_tailscale_ip, load_or_create_config, pairing_uri,
+    rotate_token, save_config, BUILD_HASH, SERVER_VERSION,
 };
 
 const USAGE: &str = "usage: agentsterm-daemon [serve|install|ensure-running|pairing|rotate-token|version|app] [options]\n\
@@ -48,8 +48,8 @@ fn default_port() -> u16 {
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
-    // Support direct invocation via symlink `~/.local/bin/agents_term_app_cli -> agentsterm-daemon`
-    // (and legacy `~/.local/bin/app_state_cli -> agentsterm-daemon`).
+    // Support direct invocation via symlink `~/.agents-term/bin/agents_term_app_cli -> agentsterm-daemon`
+    // (and legacy `app_state_cli` alias).
     let invoked_name = args
         .first()
         .and_then(|a| Path::new(a).file_name())
@@ -163,6 +163,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "serve" => {
+            let _daemon_lock = match acquire_daemon_lock() {
+                Ok(lock) => lock,
+                Err(err) => {
+                    eprintln!("Failed to acquire daemon lock: {err}");
+                    return ExitCode::from(1);
+                }
+            };
             let mut cfg = load_or_create_config();
             let bind_host = host
                 .or_else(|| {

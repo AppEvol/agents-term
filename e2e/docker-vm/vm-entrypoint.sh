@@ -36,7 +36,7 @@ if [ -d /mnt/release ]; then
   touch /home/vmuser/.profile
   cat >> /home/vmuser/.profile <<EOF
 export AGENTSTERM_RELEASE_BASE_URL="http://127.0.0.1:${RELEASE_HTTP_PORT}"
-export PATH="\$HOME/.local/bin:\$PATH"
+export PATH="\$HOME/.agents-term/bin:\$HOME/.local/bin:\$PATH"
 EOF
   chown vmuser:vmuser /home/vmuser/.profile
 fi

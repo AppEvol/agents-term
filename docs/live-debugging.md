@@ -18,7 +18,7 @@ The daemon passes each command to the app over the WebSocket the app already hol
 
 ## Live Inspection Commands
 
-The static `agentsterm-daemon` binary provides the `app` subcommand and installs the `~/.local/bin/agents_term_app_cli` symlink (plus the legacy `app_state_cli` alias). Connection details are loaded automatically from `~/.config/herdr-mobile/config.json` (override with `--host/--port/--token/--config` or `AGENTS_TERM_HOST/PORT/TOKEN`).
+The static `agentsterm-daemon` binary provides the `app` subcommand and installs the `~/.agents-term/bin/agents_term_app_cli` symlink. Connection details are loaded read-only from `~/.agents-term/config.json` (respecting `AGENTSTERM_HOME`; override with `--host/--port/--token/--config` or `AGENTS_TERM_HOST/PORT/TOKEN`).
 
 ```bash
 agents_term_app_cli status                       # Check connection & opt-in (exit 3 if not ready)
@@ -32,7 +32,7 @@ agents_term_app_cli logcat --lines 800 --raw     # Android logcat for the app pr
 agents_term_app_cli crash --raw                  # Last uncaught exception stack trace, if any
 agents_term_app_cli screenshot -o /tmp/app.png   # Capture PNG of the current app window
 agents_term_app_cli ui --brief                   # List visible Compose UI nodes and centers
-agents_term_app_cli dump --note "repro context"  # Upload full bundle to ~/.config/herdr-mobile/debug-dumps/latest/
+agents_term_app_cli dump --note "repro context"  # Upload full bundle to ~/.agents-term/debug-dumps/latest/
 agents_term_app_cli raw ping --args '{}'         # Send any command by name with a JSON args object
 ```
 
@@ -91,10 +91,10 @@ agents_term_app_cli wait --tag menu_app_settings --gone
 
 ## Uploaded Debug Dumps
 
-When the user taps **Upload Debug Dump to VM** (or the top-bar bug icon, or `agents_term_app_cli dump`), the daemon writes a sanitized bundle to `~/.config/herdr-mobile/debug-dumps/` and updates the symlink:
+When the user taps **Upload Debug Dump to VM** (or the top-bar bug icon, or `agents_term_app_cli dump`), the daemon writes a sanitized bundle to `~/.agents-term/debug-dumps/` and updates the symlink:
 
 ```text
-~/.config/herdr-mobile/debug-dumps/latest/
+~/.agents-term/debug-dumps/latest/
 ├── summary.md      # Overview + user note
 ├── meta.json       # App version, device, timestamps
 ├── state.json      # Sanitized workspace/tab snapshot
@@ -119,4 +119,5 @@ REST: `GET /api/app/status` and `POST /api/app/command` with body `{"command":"l
 - **Screenshots**, `ui`, and control commands require the app to be in the foreground and show a brief toast on the phone. Other commands may time out if Android freezes a backgrounded app.
 - Only drive the app when the task calls for it: the user is holding that phone.
 - **Bearer tokens** are redacted before leaving the phone.
-- **Never restart the running daemon from an AgentsTerm tab:** Agent sessions are child processes of the VM daemon (`herdr-mobile.service`). Running `agentsterm-daemon install` or restarting `herdr-mobile.service` from inside an agent tab kills your own session. Test daemon changes on a scratch port with a temporary `HOME` instead (`HOME=/tmp/test-home agentsterm-daemon serve --host 127.0.0.1 --port 7599`).
+- **Treat `~/.agents-term/` as read-only:** Only `agentsterm-daemon` writes to `~/.agents-term/`. Agents may read state/logs/dumps and execute binaries in `~/.agents-term/bin/`, but must never modify files in `~/.agents-term/` directly.
+- **Never restart the running daemon from an AgentsTerm tab:** Agent sessions are child processes of the VM daemon (`agentsterm-daemon.service`). Running `agentsterm-daemon install` or restarting `agentsterm-daemon.service` from inside an agent tab kills your own session. Test daemon changes on a scratch port with a temporary `AGENTSTERM_HOME` instead (`AGENTSTERM_HOME=$(mktemp -d) agentsterm-daemon serve --host 127.0.0.1 --port 7599`).

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Minimal POSIX bootstrapper for the static Rust AgentsTerm VM daemon.
 # Downloads the prebuilt static musl binary from GitHub Releases, verifies its SHA-256,
-# atomically installs it into ~/.local/bin/agentsterm-daemon, and delegates lifecycle
+# atomically installs it into ~/.agents-term/bin/agentsterm-daemon, and delegates lifecycle
 # management (systemd --user / detached+@reboot / health verification / pairing URI)
 # to `agentsterm-daemon install`.
 #
@@ -13,12 +13,14 @@
 # Environment overrides:
 #   AGENTSTERM_RELEASE_BASE_URL  base URL hosting agentsterm-daemon-linux-<arch>{,.sha256}
 #                                (default: https://github.com/nedn/agents-term/releases/latest/download)
-#   AGENTSTERM_BIN_DIR           install directory (default: $HOME/.local/bin)
+#   AGENTSTERM_HOME              root directory (default: $HOME/.agents-term)
+#   AGENTSTERM_BIN_DIR           install directory (default: $AGENTSTERM_HOME/bin)
 #   AGENTSTERM_HOST              bind address override (default: Tailscale IPv4)
 set -eu
 
 BASE_URL="${AGENTSTERM_RELEASE_BASE_URL:-https://github.com/nedn/agents-term/releases/latest/download}"
-BIN_DIR="${AGENTSTERM_BIN_DIR:-$HOME/.local/bin}"
+APP_HOME="${AGENTSTERM_HOME:-$HOME/.agents-term}"
+BIN_DIR="${AGENTSTERM_BIN_DIR:-$APP_HOME/bin}"
 BIN_PATH="$BIN_DIR/agentsterm-daemon"
 
 die() { code="$1"; shift; printf 'ERROR: %s\n' "$*" >&2; exit "$code"; }
@@ -60,8 +62,9 @@ sha256_of() {
   fi
 }
 
-mkdir -p "$BIN_DIR"
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agentsterm-dl.XXXXXX")"
+mkdir -p "$APP_HOME" "$APP_HOME/tmp" "$BIN_DIR"
+chmod 700 "$APP_HOME" "$APP_HOME/tmp" 2>/dev/null || true
+TMP_DIR="$(mktemp -d "$APP_HOME/tmp/agentsterm-dl.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
 log "Checking latest AgentsTerm daemon (${ASSET})..."
