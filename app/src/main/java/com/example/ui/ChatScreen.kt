@@ -94,7 +94,6 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
@@ -1042,12 +1041,12 @@ private fun ThinkingAccordionCard(
 }
 
 /**
- * A run of consecutive tool calls. A single call is just its row; two or more get a summary header
- * that expands to the full list.
+ * A run of consecutive tool calls. A single call is just its row; two or more collapse to a single
+ * summary header row that expands to the full list on tap.
  *
- * While collapsed, a grouped run keeps a single stable preview row: the latest call in flight, or
- * the most recent call while the turn is still streaming (`isLive`), so parallel bursts and
- * inter-call gaps never bounce the card height or flash its active chrome.
+ * Container chrome (background, border, and collapsed single-row height) stays constant across
+ * running, inter-call gaps, and completion so finishing a run only updates the header icon and
+ * text instead of visually restyling or collapsing the region.
  */
 @Composable
 private fun ToolCallRunCard(
@@ -1057,9 +1056,8 @@ private fun ToolCallRunCard(
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     val isGroup = toolCalls.size > 1
-    val runningCalls = remember(toolCalls) { toolCalls.filter { it.status == "running" } }
-    val hasRunning = runningCalls.isNotEmpty()
-    // Keep active styling steady across brief inter-call gaps while this live run is still open.
+    val hasRunning = remember(toolCalls) { toolCalls.any { it.status == "running" } }
+    // Keep the header icon steady across brief inter-call gaps while this live run is still open.
     val isActive = hasRunning || isLive
     val hasError = remember(toolCalls) { toolCalls.any { it.status == "error" } }
     val hasDenied = remember(toolCalls) { toolCalls.any { it.status == "denied" } }
@@ -1067,20 +1065,12 @@ private fun ToolCallRunCard(
     val totalDurationMs = remember(toolCalls) {
         toolCalls.mapNotNull { it.durationMs }.filter { it > 0L }.sum().takeIf { it > 0L }
     }
-    val collapsedCalls = when {
-        !isGroup -> toolCalls
-        hasRunning -> runningCalls.takeLast(1)
-        isLive -> toolCalls.takeLast(1)
-        else -> emptyList()
-    }
 
     val containerColor = when {
-        isActive -> MaterialTheme.colorScheme.surfaceContainer
         hasError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
         else -> MaterialTheme.colorScheme.surfaceContainerLow
     }
     val borderColor = when {
-        isActive -> AppTheme.colors.info.copy(alpha = 0.45f)
         hasError -> AppTheme.colors.danger.copy(alpha = 0.4f)
         hasDenied -> AppTheme.colors.warning.copy(alpha = 0.45f)
         else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
@@ -1108,7 +1098,7 @@ private fun ToolCallRunCard(
                     onToggle = { expanded = !expanded },
                 )
             }
-            val visibleCalls = if (expanded) toolCalls else collapsedCalls
+            val visibleCalls = if (!isGroup || expanded) toolCalls else emptyList()
             for (tc in visibleCalls) {
                 // Keyed by call so a row keeps its own expanded state as the list around it changes.
                 key(tc.id) {
@@ -1117,12 +1107,9 @@ private fun ToolCallRunCard(
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
                         )
                     }
-                    val isCollapsedPreview = isGroup && !expanded
                     ToolCallRow(
                         toolCall = tc,
                         emphasized = tc.status == "running" || tc.status == "error" || tc.status == "denied",
-                        reserveSummaryLine = isCollapsedPreview,
-                        modifier = if (isCollapsedPreview) Modifier.testTag("tool_run_active_call") else Modifier,
                     )
                 }
             }
@@ -1214,7 +1201,6 @@ private fun ToolCallRow(
     toolCall: ToolCallItem,
     emphasized: Boolean,
     modifier: Modifier = Modifier,
-    reserveSummaryLine: Boolean = false,
 ) {
     var expanded by rememberSaveable(toolCall.id) { mutableStateOf(false) }
     val displaySummary = remember(toolCall.inputSummary, toolCall.inputJson) {
@@ -1280,9 +1266,9 @@ private fun ToolCallRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (displaySummary.isNotBlank() || reserveSummaryLine) {
+                if (displaySummary.isNotBlank()) {
                     Text(
-                        text = displaySummary.ifBlank { " " },
+                        text = displaySummary,
                         style = MaterialTheme.typography.labelSmall,
                         color = if (emphasized) {
                             MaterialTheme.colorScheme.onSurfaceVariant
@@ -1291,7 +1277,6 @@ private fun ToolCallRow(
                         },
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = if (displaySummary.isBlank()) Modifier.clearAndSetSemantics {} else Modifier,
                     )
                 }
             }
