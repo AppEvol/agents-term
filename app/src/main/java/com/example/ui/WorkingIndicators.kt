@@ -20,7 +20,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -158,6 +160,97 @@ fun WorkingPulseDots(
                     .background(color),
             )
         }
+    }
+}
+
+private const val THINKING_ROBOT_MAX_DOTS = 3
+private const val THINKING_ROBOT_STEP_MILLIS = 380
+
+/**
+ * Robot with a thought bubble that fills with zero to three dots, then empties and starts again.
+ * Marks the "agent is thinking" line under a streaming reply, so it reads differently from the
+ * [WorkingPulseDots] in the "Working" badge above it.
+ */
+@Composable
+fun ThinkingRobotIndicator(
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    val steps = THINKING_ROBOT_MAX_DOTS + 1
+    val transition = rememberInfiniteTransition(label = "thinking_robot")
+    val cycle by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = steps.toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = THINKING_ROBOT_STEP_MILLIS * steps, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "thinking_robot_cycle",
+    )
+    // Decorative: the status text beside it already says what the agent is doing.
+    Canvas(modifier = modifier) {
+        drawThinkingRobot(color = color, dots = cycle.toInt().coerceIn(0, THINKING_ROBOT_MAX_DOTS))
+    }
+}
+
+private fun DrawScope.drawThinkingRobot(color: Color, dots: Int) {
+    val w = size.width
+    val h = size.height
+    val stroke = h * 0.075f
+    val outline = Stroke(width = stroke, join = StrokeJoin.Round)
+
+    // Robot head, bottom left: antenna, outlined face, two eyes and a mouth.
+    val headLeft = stroke / 2f
+    val headRight = w * 0.40f
+    val headTop = h * 0.42f
+    val headBottom = h - stroke / 2f
+    val headCenterX = (headLeft + headRight) / 2f
+    val headWidth = headRight - headLeft
+    val headHeight = headBottom - headTop
+    drawRoundRect(
+        color = color,
+        topLeft = Offset(headLeft, headTop),
+        size = Size(headWidth, headHeight),
+        cornerRadius = CornerRadius(h * 0.12f),
+        style = outline,
+    )
+    val antennaTip = Offset(headCenterX, h * 0.22f)
+    drawLine(color, Offset(headCenterX, headTop), antennaTip, strokeWidth = stroke)
+    drawCircle(color, radius = stroke, center = antennaTip)
+    val eyeY = headTop + headHeight * 0.38f
+    for (side in listOf(-1f, 1f)) {
+        drawCircle(color, radius = stroke * 0.9f, center = Offset(headCenterX + side * headWidth * 0.22f, eyeY))
+    }
+    val mouthY = headTop + headHeight * 0.72f
+    drawLine(
+        color = color,
+        start = Offset(headCenterX - headWidth * 0.2f, mouthY),
+        end = Offset(headCenterX + headWidth * 0.2f, mouthY),
+        strokeWidth = stroke * 0.8f,
+        cap = StrokeCap.Round,
+    )
+
+    // Thought bubble, top right, trailing two small puffs down toward the head.
+    val bubbleLeft = w * 0.54f
+    val bubbleRight = w - stroke / 2f
+    val bubbleTop = stroke / 2f
+    val bubbleBottom = h * 0.60f
+    val bubbleHeight = bubbleBottom - bubbleTop
+    drawRoundRect(
+        color = color,
+        topLeft = Offset(bubbleLeft, bubbleTop),
+        size = Size(bubbleRight - bubbleLeft, bubbleHeight),
+        cornerRadius = CornerRadius(bubbleHeight / 2f),
+        style = outline,
+    )
+    drawCircle(color, radius = stroke * 0.95f, center = Offset(w * 0.56f, h * 0.76f))
+    drawCircle(color, radius = stroke * 0.6f, center = Offset(w * 0.47f, h * 0.86f))
+
+    // The progress dots keep fixed slots, so the bubble fills left to right.
+    val slot = (bubbleRight - bubbleLeft) / (THINKING_ROBOT_MAX_DOTS + 1)
+    val dotY = bubbleTop + bubbleHeight / 2f
+    for (i in 0 until dots) {
+        drawCircle(color, radius = stroke * 0.8f, center = Offset(bubbleLeft + slot * (i + 1), dotY))
     }
 }
 
