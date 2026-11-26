@@ -43,9 +43,17 @@ Here is the demo script for you to follow:
      (`remove_queued_<id>`) afterward so it does not trigger an extra turn when
      the demo finishes.
 
-3) **Open a Codex (`GPT-6.2-Astra`) tab for live performance analysis:**
-   Tap `top_new_tab_button`, select **Codex** (`agent_option_codex`), set the
-   working directory to the `agents-term` repo (tap `projects` then
+3) **Show debug permissions, then open a Codex (`GPT-6.2-Astra`) tab for live performance analysis:**
+   First, open **Settings & Debug** (`overflow_menu_button` ->
+   `menu_app_settings`) and scroll down through the **Debug sharing** section
+   with brief pauses (`scroll down --amount 0.65`, stopping once the toggles
+   below `Allow VM agents to control the app` are visible) so viewers can see
+   that VM agents have full access to the app's debug data (logs, screenshots,
+   Android logcat, live inspection, and control) when allowed. Then return to
+   the workspace (`key back` while Settings is open).
+
+   Next, tap `top_new_tab_button`, select **Codex** (`agent_option_codex`), set
+   the working directory to the `agents-term` repo (tap `projects` then
    `agents-term` if the picker starts in your home directory), pick
    **GPT-6.2-Astra** (`new_tab_model_gpt-6.2-astra`), scroll down inside the
    sheet, and tap `create_tab_button`.
