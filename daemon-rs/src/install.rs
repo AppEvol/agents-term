@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{
     bin_dir, daemon_commit, daemon_log_path, daemon_pid_path, detect_tailscale_ip,
-    ensure_config_dir, ensure_live_debugging_doc, home_dir, load_or_create_config, next_atomic_seq,
+    ensure_config_dir, ensure_debugging_docs, home_dir, load_or_create_config, next_atomic_seq,
     pairing_uri, save_config, write_atomic_file, BUILD_HASH, SERVER_VERSION,
 };
 use crate::http_client::http_request;
@@ -451,7 +451,7 @@ pub fn run_install(host_arg: Option<String>, port: u16, force_restart: bool) -> 
     if let Err(err) = ensure_config_dir() {
         return die(1, &format!("Could not create config dir: {err}"));
     }
-    ensure_live_debugging_doc();
+    ensure_debugging_docs();
     ensure_app_cli_symlinks(&exe);
 
     let mut cfg = load_or_create_config();

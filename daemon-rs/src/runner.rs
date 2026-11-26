@@ -11,7 +11,8 @@ use tokio::process::Command;
 
 use crate::attachments::{attachments_label, prompt_with_attachments, remove_attachment_files};
 use crate::config::{
-    enriched_path, resolve_binary, tab_attachments_dir, WORK_DONE_SYSTEM_INSTRUCTION,
+    agents_debugging_tips_path, enriched_path, resolve_binary, tab_attachments_dir,
+    WORK_DONE_SYSTEM_INSTRUCTION,
 };
 use crate::log::{log_error, log_info, log_warn};
 use crate::store::{resolve_abs_path, StateStore, RESTART_INTERRUPTED_REASON};
@@ -53,11 +54,15 @@ fn tab_system_prompt(tab: &Value) -> Option<String> {
 }
 
 fn effective_system_prompt(tab: &Value) -> String {
-    match tab_system_prompt(tab) {
+    let prompt = match tab_system_prompt(tab) {
         Some(sp) if sp.contains(WORK_DONE_SYSTEM_INSTRUCTION) => sp,
         Some(sp) => format!("{sp}\n\n{WORK_DONE_SYSTEM_INSTRUCTION}"),
         None => WORK_DONE_SYSTEM_INSTRUCTION.to_string(),
-    }
+    };
+    format!(
+        "{prompt}\n\nFor help debugging a tab from its on-screen ID, read `{}`.",
+        agents_debugging_tips_path().display()
+    )
 }
 
 fn toml_basic_string(value: &str) -> String {

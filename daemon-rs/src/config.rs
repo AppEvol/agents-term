@@ -216,11 +216,20 @@ pub fn write_atomic_file(path: &Path, content: &[u8], mode: u32) -> std::io::Res
     Ok(())
 }
 
-pub fn ensure_live_debugging_doc() {
+pub fn agents_debugging_tips_path() -> PathBuf {
+    agents_term_home().join("docs/agents_debugging_tips.md")
+}
+
+pub fn ensure_debugging_docs() {
     let _ = ensure_config_dir();
     let _ = write_atomic_file(
         &live_debugging_doc_path(),
         EMBEDDED_LIVE_DEBUGGING_MD.as_bytes(),
+        0o644,
+    );
+    let _ = write_atomic_file(
+        &agents_debugging_tips_path(),
+        include_bytes!("../../docs/agents_debugging_tips.md"),
         0o644,
     );
 }

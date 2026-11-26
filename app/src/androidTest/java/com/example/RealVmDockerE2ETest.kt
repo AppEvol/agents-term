@@ -19,6 +19,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -290,14 +291,8 @@ class RealVmDockerE2ETest {
         waitForReadyAttachments(2)
 
         composeRule.onNodeWithTag("composer_input").performTextInput("What is wrong in these?")
+        Espresso.closeSoftKeyboard()
         composeRule.onNodeWithTag("send_button").performClick()
-
-        // The transcript shows the text and both images; the composer is empty again.
-        waitForText("What is wrong in these?")
-        waitForTag("message_attachments")
-        composeRule.onNodeWithContentDescription("Sent image 1 of 2").assertExists()
-        composeRule.onNodeWithContentDescription("Sent image 2 of 2").assertExists()
-        assertTrue(composeRule.onAllNodesWithTag("pending_attachments_row").fetchSemanticsNodes().isEmpty())
 
         // The agent CLI on the VM opened both files at the paths it was handed. Small
         // screenshots are uploaded untouched, so the sizes it saw are the sizes that were pasted.
@@ -308,6 +303,14 @@ class RealVmDockerE2ETest {
         assertTrue(
             composeRule.onAllNodesWithText("image-outside-add-dir", substring = true).fetchSemanticsNodes().isEmpty(),
         )
+
+        // The transcript shows the text and both images; the composer is empty again.
+        composeRule.onNodeWithTag("chat_message_list").performScrollToIndex(0)
+        waitForText("What is wrong in these?")
+        waitForTag("message_attachments")
+        composeRule.onNodeWithContentDescription("Sent image 1 of 2").assertExists()
+        composeRule.onNodeWithContentDescription("Sent image 2 of 2").assertExists()
+        assertTrue(composeRule.onAllNodesWithTag("pending_attachments_row").fetchSemanticsNodes().isEmpty())
 
         // Tapping a sent image opens it full size, downloaded back from the VM.
         // Opened through its click action rather than a touch at screen coordinates: the list

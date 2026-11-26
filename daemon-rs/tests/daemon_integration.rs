@@ -842,6 +842,7 @@ esac
     let log2 = fs::read_to_string(&args_log).unwrap();
     assert!(log2.contains("Be concise."));
     assert!(log2.contains("<this-work-is-done-172728>"));
+    assert!(log2.contains("docs/agents_debugging_tips.md"));
 
     // 3) Token inside fenced code block is preserved verbatim and does not mark tab done.
     let (st, _) = daemon.api(
@@ -1037,6 +1038,11 @@ fn split_per_tab_storage_rewrites_only_dirty_tab_and_cleans_orphans() {
     assert!(
         !orphan_dir.exists(),
         "Orphaned tab directory should be pruned during startup recovery"
+    );
+
+    assert_eq!(
+        fs::read(custom_app_home.join("docs/agents_debugging_tips.md")).unwrap(),
+        include_bytes!("../../docs/agents_debugging_tips.md").as_slice()
     );
 
     // Verify /api/info system prompt references custom AGENTSTERM_HOME and read-only rule.
