@@ -140,6 +140,7 @@ import com.example.ui.theme.AppTheme
 import com.example.ui.theme.LunaInputBorder
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.ThemedButton
+import com.example.ui.theme.ThemedFilterChip
 import com.example.ui.theme.isLunaControls
 import com.example.ui.theme.themedCorner
 import kotlinx.coroutines.delay
@@ -168,10 +169,16 @@ private data class ChatAutoScrollSignal(
     val lastSegmentCount: Int,
     val lastSegmentTextLength: Int,
     val lastStatus: String?,
+    val lastExitCode: Int?,
     val hasError: Boolean,
     val deniedActionCount: Int,
     val sendGeneration: Int,
 )
+
+private enum class ShellComposerMode {
+    QUEUE,
+    STDIN,
+}
 
 private sealed interface ChatFeedItem {
     val key: String
@@ -263,8 +270,10 @@ private sealed interface ChatFeedItem {
 
     data class AssistantFooter(
         override val key: String,
+        val messageId: String,
         val text: String,
         val usageSummary: String?,
+        val exitCode: Int? = null,
     ) : ChatFeedItem {
         override val contentType: String get() = "assistant_footer"
         override val addMessageGap: Boolean get() = false
@@ -338,9 +347,24 @@ private fun appendAssistantBodyItems(
     if (!message.thinking.isNullOrBlank()) return
     if (isStreaming) {
         items.add(ChatFeedItem.StreamingActivity(key = "${message.id}:activity", statusDetail = tab.statusDetail))
-    } else if (message.status == "complete" && message.error.isNullOrBlank() && message.deniedActions.isEmpty()) {
+    } else if (isEmptyAssistantResponse(message)) {
         items.add(ChatFeedItem.EmptyAssistantResponse(key = "${message.id}:empty"))
     }
+}
+
+private fun isEmptyAssistantResponse(message: ChatMessage): Boolean {
+    if (message.status != "complete") return false
+    return message.error.isNullOrBlank() && message.deniedActions.isEmpty() && message.exitCode == null
+}
+
+internal fun shouldShowAssistantErrorBanner(message: ChatMessage): Boolean {
+    val error = message.error?.trim().orEmpty()
+    if (error.isEmpty()) return false
+    val exitCode = message.exitCode
+    if (exitCode != null && exitCode != 0 && error == "Exited with code $exitCode") {
+        return false
+    }
+    return true
 }
 
 private fun appendAssistantStatusAndFooter(
@@ -366,18 +390,21 @@ private fun appendAssistantStatusAndFooter(
             ),
         )
     }
-    if (!message.error.isNullOrBlank()) {
-        items.add(ChatFeedItem.AssistantError(key = "${message.id}:error", error = message.error))
+    if (shouldShowAssistantErrorBanner(message)) {
+        items.add(ChatFeedItem.AssistantError(key = "${message.id}:error", error = message.error!!))
     } else if (message.status == "interrupted") {
         items.add(ChatFeedItem.AssistantInterrupted(key = "${message.id}:interrupted"))
     }
     val usageSummary = formatUsage(message.usage)
-    if (!isStreaming && (message.text.isNotBlank() || usageSummary != null)) {
+    val hasFooterContent = message.text.isNotBlank() || usageSummary != null || message.exitCode != null
+    if (!isStreaming && hasFooterContent) {
         items.add(
             ChatFeedItem.AssistantFooter(
                 key = "${message.id}:footer",
+                messageId = message.id,
                 text = message.text,
                 usageSummary = usageSummary,
+                exitCode = message.exitCode,
             ),
         )
     }
@@ -435,6 +462,7 @@ fun ChatWorkspace(
     hasCustomModel: Boolean = false,
     onOpenModelPicker: (() -> Unit)? = null,
     onSendMessage: (String) -> Unit,
+    onSendStdin: ((data: String?, eof: Boolean) -> Unit)? = null,
     onInterrupt: () -> Unit,
     onForceInterrupt: (String?) -> Unit = { onInterrupt() },
     onRemoveQueuedMessage: (String) -> Unit = {},
@@ -471,6 +499,14 @@ fun ChatWorkspace(
         markdownCache.flushPending(messages.mapTo(HashSet(messages.size)) { it.id })
     }
     val isWorking = tab.status == "working"
+    val showShellStdinControls = tab.agent == "shell" && isWorking && onSendStdin != null
+    var shellComposerMode by remember(tab.id) { mutableStateOf(ShellComposerMode.QUEUE) }
+    LaunchedEffect(tab.id, isWorking) {
+        if (!isWorking) {
+            shellComposerMode = ShellComposerMode.QUEUE
+        }
+    }
+    val isShellStdinActive = showShellStdinControls && shellComposerMode == ShellComposerMode.STDIN
     val latestMessages by rememberUpdatedState(messages)
     val latestFeedItemCount by rememberUpdatedState(feedItems.size)
 
@@ -540,6 +576,7 @@ fun ChatWorkspace(
         lastSegmentCount = lastMessage?.segments?.size ?: 0,
         lastSegmentTextLength = lastMessage?.segments?.lastOrNull()?.text?.length ?: 0,
         lastStatus = lastMessage?.status,
+        lastExitCode = lastMessage?.exitCode,
         hasError = !lastMessage?.error.isNullOrBlank(),
         deniedActionCount = lastMessage?.deniedActions?.size ?: 0,
         sendGeneration = sendGeneration,
@@ -670,6 +707,9 @@ fun ChatWorkspace(
             tabId = tab.id,
             draft = draft,
             placeholder = when {
+                isShellStdinActive ->
+                    stringResource(R.string.shell_stdin_placeholder)
+
                 isWorking && tab.agent == "shell" ->
                     stringResource(R.string.composer_queue_shell_placeholder)
 
@@ -690,13 +730,25 @@ fun ChatWorkspace(
             hasCustomModel = hasCustomModel,
             onOpenModelPicker = onOpenModelPicker,
             attachments = attachments,
+            showShellStdinControls = showShellStdinControls,
+            shellComposerMode = shellComposerMode,
+            onSelectShellMode = { shellComposerMode = it },
+            onSendEof = { onSendStdin?.invoke(null, true) },
             onSend = {
-                val text = draft.text.toString().trim()
-                if (text.isNotEmpty() || attachments?.hasReady == true) {
+                if (isShellStdinActive) {
+                    val rawText = draft.text.toString()
                     draft.setTextAndPlaceCursorAtEnd("")
                     autoScrollPinned = true
                     sendGeneration += 1
-                    onSendMessage(text)
+                    onSendStdin("$rawText\n", false)
+                } else {
+                    val text = draft.text.toString().trim()
+                    if (text.isNotEmpty() || attachments?.hasReady == true) {
+                        draft.setTextAndPlaceCursorAtEnd("")
+                        autoScrollPinned = true
+                        sendGeneration += 1
+                        onSendMessage(text)
+                    }
                 }
             },
             onForceInterrupt = { draftText ->
@@ -873,8 +925,10 @@ private fun ChatFeedItemContent(
         )
 
         is ChatFeedItem.AssistantFooter -> AssistantMessageFooter(
+            messageId = item.messageId,
             text = item.text,
             usageSummary = item.usageSummary,
+            exitCode = item.exitCode,
         )
     }
 }
@@ -985,8 +1039,10 @@ private fun AssistantErrorBanner(error: String) {
 
 @Composable
 private fun AssistantMessageFooter(
+    messageId: String,
     text: String,
     usageSummary: String?,
+    exitCode: Int? = null,
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
@@ -1003,15 +1059,26 @@ private fun AssistantMessageFooter(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        if (usageSummary != null) {
-            Text(
-                text = usageSummary,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = MonoFontFamily,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
-            )
-        } else {
-            Spacer(Modifier.width(1.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (exitCode != null) {
+                ShellExitCodeBadge(
+                    messageId = messageId,
+                    exitCode = exitCode,
+                )
+            }
+            if (usageSummary != null) {
+                Text(
+                    text = usageSummary,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = MonoFontFamily,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+                )
+            } else if (exitCode == null) {
+                Spacer(Modifier.width(1.dp))
+            }
         }
         if (text.isNotBlank()) {
             IconButton(
@@ -1028,6 +1095,37 @@ private fun AssistantMessageFooter(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ShellExitCodeBadge(
+    messageId: String,
+    exitCode: Int,
+) {
+    val isSuccess = exitCode == 0
+    val tint = if (isSuccess) AppTheme.colors.success else MaterialTheme.colorScheme.error
+    val containerColor = if (isSuccess) {
+        AppTheme.colors.success.copy(alpha = 0.14f)
+    } else {
+        MaterialTheme.colorScheme.errorContainer
+    }
+    Surface(
+        shape = themedCorner(8.dp),
+        color = containerColor,
+        border = BorderStroke(1.dp, tint.copy(alpha = 0.45f)),
+        modifier = Modifier
+            .semantics(mergeDescendants = true) {}
+            .testTag("shell_exit_code_$messageId"),
+    ) {
+        Text(
+            text = stringResource(R.string.shell_exit_code, exitCode),
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = MonoFontFamily,
+            fontWeight = FontWeight.SemiBold,
+            color = tint,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+        )
     }
 }
 
@@ -1657,6 +1755,65 @@ private fun QueuedMessagesTray(
 }
 
 @Composable
+private fun ShellRunningControlRow(
+    mode: ShellComposerMode,
+    isConnected: Boolean,
+    onSelectMode: (ShellComposerMode) -> Unit,
+    onSendEof: () -> Unit,
+) {
+    val eofDescription = stringResource(R.string.action_send_stdin_eof)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp)
+            .testTag("shell_running_controls"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ThemedFilterChip(
+            selected = mode == ShellComposerMode.QUEUE,
+            onClick = { onSelectMode(ShellComposerMode.QUEUE) },
+            label = {
+                Text(
+                    text = stringResource(R.string.shell_mode_queue),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            },
+            modifier = Modifier.testTag("shell_composer_mode_queue"),
+        )
+        ThemedFilterChip(
+            selected = mode == ShellComposerMode.STDIN,
+            onClick = { onSelectMode(ShellComposerMode.STDIN) },
+            label = {
+                Text(
+                    text = stringResource(R.string.shell_mode_stdin),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            },
+            modifier = Modifier.testTag("shell_composer_mode_stdin"),
+        )
+        if (mode == ShellComposerMode.STDIN) {
+            Spacer(Modifier.weight(1f))
+            AssistChip(
+                onClick = onSendEof,
+                enabled = isConnected,
+                label = {
+                    Text(
+                        text = stringResource(R.string.shell_stdin_eof),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = MonoFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                },
+                modifier = Modifier
+                    .semantics { contentDescription = eofDescription }
+                    .testTag("shell_stdin_eof_button"),
+            )
+        }
+    }
+}
+
+@Composable
 private fun ChatComposer(
     tabId: String,
     draft: TextFieldState,
@@ -1669,6 +1826,10 @@ private fun ChatComposer(
     hasCustomModel: Boolean = false,
     onOpenModelPicker: (() -> Unit)? = null,
     attachments: ComposerAttachments? = null,
+    showShellStdinControls: Boolean = false,
+    shellComposerMode: ShellComposerMode = ShellComposerMode.QUEUE,
+    onSelectShellMode: (ShellComposerMode) -> Unit = {},
+    onSendEof: () -> Unit = {},
     onSend: () -> Unit,
     onForceInterrupt: (String?) -> Unit,
     onRemoveQueuedMessage: (String) -> Unit = {},
@@ -1698,10 +1859,14 @@ private fun ChatComposer(
     }
 
     val currentDraft by rememberUpdatedState(draft)
+    val isShellStdinActive = showShellStdinControls && shellComposerMode == ShellComposerMode.STDIN
     // There is something to send once there is text or an uploaded image. Sending waits for
     // images that are still uploading, so a message never leaves without one of its images.
     val hasContent = (draft.text.isNotBlank() || attachments?.hasReady == true) && attachments?.isUploading != true
+    val canSendWhileWorking = hasContent || isShellStdinActive
     val currentHasContent by rememberUpdatedState(hasContent)
+    val currentCanSendWhileWorking by rememberUpdatedState(canSendWhileWorking)
+    val currentIsShellStdinActive by rememberUpdatedState(isShellStdinActive)
     val currentHasQueued by rememberUpdatedState(queuedMessages.isNotEmpty())
     val currentOnSend by rememberUpdatedState(onSend)
     val currentOnForceInterrupt by rememberUpdatedState(onForceInterrupt)
@@ -1876,6 +2041,15 @@ private fun ChatComposer(
                     )
                 }
 
+                if (showShellStdinControls) {
+                    ShellRunningControlRow(
+                        mode = shellComposerMode,
+                        isConnected = isConnected,
+                        onSelectMode = onSelectShellMode,
+                        onSendEof = onSendEof,
+                    )
+                }
+
                 Surface(
                     shape = themedCorner(26.dp),
                     color = if (isLunaControls) Color.White else MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -1912,11 +2086,11 @@ private fun ChatComposer(
                         val hasDraft = hasContent
                         val hasQueued = queuedMessages.isNotEmpty()
                         val canSendIdle = !isWorking && (hasDraft || hasQueued) && isConnected
-                        val showStopIcon = isWorking && !hasDraft && !hasQueued
+                        val showStopIcon = isWorking && !canSendWhileWorking && !hasQueued
                         val buttonBg = when {
                             !isConnected -> MaterialTheme.colorScheme.surfaceContainerHighest
                             isWorking && isHolding -> AppTheme.colors.danger.copy(alpha = 0.22f + 0.78f * holdProgress.value)
-                            isWorking && hasDraft -> MaterialTheme.colorScheme.primary
+                            isWorking && canSendWhileWorking -> MaterialTheme.colorScheme.primary
                             isWorking && hasQueued -> MaterialTheme.colorScheme.primaryContainer
                             isWorking -> AppTheme.colors.danger.copy(alpha = 0.14f)
                             canSendIdle -> MaterialTheme.colorScheme.primary
@@ -1925,10 +2099,10 @@ private fun ChatComposer(
                         val buttonBorder = when {
                             !isConnected -> null
 
-                            isWorking && !isHolding && !hasDraft && hasQueued ->
+                            isWorking && !isHolding && !canSendWhileWorking && hasQueued ->
                                 BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
 
-                            isWorking && !isHolding && !hasDraft && !hasQueued ->
+                            isWorking && !isHolding && !canSendWhileWorking && !hasQueued ->
                                 BorderStroke(1.dp, AppTheme.colors.danger.copy(alpha = 0.45f))
 
                             else -> null
@@ -1936,13 +2110,14 @@ private fun ChatComposer(
                         val iconTint = when {
                             !isConnected -> MaterialTheme.colorScheme.onSurfaceVariant
                             isWorking && isHolding -> if (holdProgress.value > 0.35f) Color.White else AppTheme.colors.danger
-                            isWorking && hasDraft -> MaterialTheme.colorScheme.onPrimary
+                            isWorking && canSendWhileWorking -> MaterialTheme.colorScheme.onPrimary
                             isWorking && hasQueued -> MaterialTheme.colorScheme.onPrimaryContainer
                             isWorking -> AppTheme.colors.danger
                             canSendIdle -> MaterialTheme.colorScheme.onPrimary
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         }
                         val buttonDescription = when {
+                            isShellStdinActive -> stringResource(R.string.action_send_stdin)
                             isWorking && hasDraft -> stringResource(R.string.action_queue_message)
                             isWorking && hasQueued -> stringResource(R.string.action_hold_interrupt_queue)
                             isWorking -> stringResource(R.string.action_stop_agent)
@@ -1972,7 +2147,7 @@ private fun ChatComposer(
                                                 } else {
                                                     false
                                                 }
-                                            } else if (currentHasContent) {
+                                            } else if (currentCanSendWhileWorking) {
                                                 currentOnSend()
                                                 true
                                             } else {
@@ -1982,7 +2157,11 @@ private fun ChatComposer(
                                         }
                                         if (isWorking) {
                                             onLongClick(label = holdActionLabel) {
-                                                val textToInclude = currentDraft.text.toString().trim().takeIf { it.isNotEmpty() }
+                                                val textToInclude = if (currentIsShellStdinActive) {
+                                                    null
+                                                } else {
+                                                    currentDraft.text.toString().trim().takeIf { it.isNotEmpty() }
+                                                }
                                                 currentOnForceInterrupt(textToInclude)
                                                 true
                                             }
@@ -2040,13 +2219,17 @@ private fun ChatComposer(
                                         when (releasedBeforeTimeout) {
                                             null -> {
                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                val textToInclude = currentDraft.text.toString().trim().takeIf { it.isNotEmpty() }
+                                                val textToInclude = if (currentIsShellStdinActive) {
+                                                    null
+                                                } else {
+                                                    currentDraft.text.toString().trim().takeIf { it.isNotEmpty() }
+                                                }
                                                 currentOnForceInterrupt(textToInclude)
                                                 waitForUpOrCancellation()
                                             }
 
                                             true -> {
-                                                if (currentHasContent) {
+                                                if (currentCanSendWhileWorking) {
                                                     currentOnSend()
                                                 } else {
                                                     currentOnShowHoldHint()

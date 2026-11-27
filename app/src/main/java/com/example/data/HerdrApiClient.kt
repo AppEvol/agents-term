@@ -253,6 +253,21 @@ open class HerdrApiClient(
         return executeJson(req)
     }
 
+    open suspend fun sendStdin(
+        config: ConnectionConfig,
+        tabId: String,
+        data: String? = null,
+        eof: Boolean = false,
+    ) {
+        val json = encodeHerdrJson(SendStdinRequest(data = data, eof = eof))
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/tabs/$tabId/stdin")
+            .withAuth(config)
+            .post(json.toRequestBody(jsonMediaType))
+            .build()
+        executeRawJson(req)
+    }
+
     /** Stores an image on the VM for [tabId]; a message then refers to it by the returned id. */
     open suspend fun uploadAttachment(
         config: ConnectionConfig,

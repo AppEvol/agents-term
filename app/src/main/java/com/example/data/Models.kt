@@ -444,6 +444,7 @@ data class ChatMessage(
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
     val attachments: List<MessageAttachment> = emptyList(),
+    val exitCode: Int? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -781,6 +782,12 @@ data class SendMessageRequest(
     val overridePermissionMode: String? = null,
     /** Ids of uploaded attachments; left out entirely when there are none. */
     val attachments: List<String>? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class SendStdinRequest(
+    val data: String? = null,
+    val eof: Boolean = false,
 )
 
 @JsonClass(generateAdapter = true)
