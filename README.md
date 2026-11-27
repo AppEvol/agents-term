@@ -78,8 +78,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ### Automatic Verified Releases (GitHub Actions)
 Every push to `main` that passes `Static Checks`, `Build APK & Unit Tests`, the VM daemon tests, and `End-to-End Android Instrumented Tests` automatically publishes a new versioned GitHub Release (`v0.3.<run_number>-<short_sha>`) with auto-generated release notes, incrementing Android `versionCode` / `versionName`, and both `AgentsTerm-debug.apk` and `AgentsTerm-v0.3.<run_number>-<short_sha>-debug.apk` attached.
 
-- **Always-latest verified APK:** `https://github.com/nedn/agents-term/releases/latest/download/AgentsTerm-debug.apk`
-- **Legacy rolling tag link (also kept in sync):** `https://github.com/nedn/agents-term/releases/download/latest/AgentsTerm-debug.apk`
+- **Always-latest verified APK:** `https://github.com/AppEvol/agents-term/releases/latest/download/AgentsTerm-debug.apk`
+- **Legacy rolling tag link (also kept in sync):** `https://github.com/AppEvol/agents-term/releases/download/latest/AgentsTerm-debug.apk`
 
 ---
 
@@ -100,7 +100,7 @@ From a checkout on the VM, run the installer over SSH. Restarting the daemon end
 sh daemon-rs/install.sh --port 7501
 ```
 
-The script installs the latest release in `~/.agents-term/bin/agentsterm-daemon`. To install a specific release, set `AGENTSTERM_RELEASE_BASE_URL` to its `https://github.com/nedn/agents-term/releases/download/<tag>` URL.
+The script installs the latest release in `~/.agents-term/bin/agentsterm-daemon`. To install a specific release, set `AGENTSTERM_RELEASE_BASE_URL` to its `https://github.com/AppEvol/agents-term/releases/download/<tag>` URL.
 
 The installer reuses the token and tab history in `~/.agents-term/` (overridable via `AGENTSTERM_HOME`) and preserves active turns when the requested build is already running. It configures the `agentsterm-daemon.service` systemd user service when available, otherwise it starts a detached daemon and sets up an `@reboot` crontab entry when possible. It reports whether the daemon will survive a reboot and prints the pairing URI after checking `/api/info`.
 

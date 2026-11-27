@@ -12,13 +12,13 @@
 #
 # Environment overrides:
 #   AGENTSTERM_RELEASE_BASE_URL  base URL hosting agentsterm-daemon-linux-<arch>{,.sha256}
-#                                (default: https://github.com/nedn/agents-term/releases/latest/download)
+#                                (default: https://github.com/AppEvol/agents-term/releases/latest/download)
 #   AGENTSTERM_HOME              root directory (default: $HOME/.agents-term)
 #   AGENTSTERM_BIN_DIR           install directory (default: $AGENTSTERM_HOME/bin)
 #   AGENTSTERM_HOST              bind address override (default: Tailscale IPv4)
 set -eu
 
-BASE_URL="${AGENTSTERM_RELEASE_BASE_URL:-https://github.com/nedn/agents-term/releases/latest/download}"
+BASE_URL="${AGENTSTERM_RELEASE_BASE_URL:-https://github.com/AppEvol/agents-term/releases/latest/download}"
 APP_HOME="${AGENTSTERM_HOME:-$HOME/.agents-term}"
 BIN_DIR="${AGENTSTERM_BIN_DIR:-$APP_HOME/bin}"
 BIN_PATH="$BIN_DIR/agentsterm-daemon"
