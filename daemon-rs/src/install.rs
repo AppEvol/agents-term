@@ -22,7 +22,7 @@ use crate::config::{
 };
 use crate::http_client::http_request;
 
-const UNIT_NAME: &str = "agentsterm-daemon.service";
+pub(crate) const UNIT_NAME: &str = "agentsterm-daemon.service";
 const LEGACY_UNIT_NAME: &str = "herdr-mobile.service";
 const CRON_MARKER: &str = "# agentsterm-daemon-reboot";
 const MAX_DAEMON_LOG_BYTES: u64 = 5 * 1024 * 1024;
@@ -40,7 +40,7 @@ fn self_exe() -> PathBuf {
     env::current_exe().unwrap_or_else(|_| bin_dir().join("agentsterm-daemon"))
 }
 
-fn env_is_one(key: &str) -> bool {
+pub(crate) fn env_is_one(key: &str) -> bool {
     env::var(key).map(|v| v.trim() == "1").unwrap_or(false)
 }
 
@@ -51,7 +51,7 @@ fn custom_agents_term_home() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn probe_info(host: &str, port: u16, token: &str) -> Result<Value, String> {
+pub(crate) fn probe_info(host: &str, port: u16, token: &str) -> Result<Value, String> {
     let resp = http_request(
         "GET",
         host,
@@ -70,7 +70,8 @@ fn probe_info(host: &str, port: u16, token: &str) -> Result<Value, String> {
 fn running_matches_target(info: &Value, expected_commit: &str) -> bool {
     let commit = info.get("commit").and_then(Value::as_str).unwrap_or("");
     let build_hash = info.get("buildHash").and_then(Value::as_str).unwrap_or("");
-    commit == expected_commit || (!build_hash.is_empty() && build_hash == BUILD_HASH)
+    commit == expected_commit
+        || (expected_commit == BUILD_HASH && !build_hash.is_empty() && build_hash == BUILD_HASH)
 }
 
 fn pid_alive(pid: i32) -> bool {
@@ -80,7 +81,7 @@ fn pid_alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
-fn kill_pid_gracefully(pid: i32) {
+pub(crate) fn kill_pid_gracefully(pid: i32) {
     if !pid_alive(pid) || pid == std::process::id() as i32 {
         return;
     }
@@ -148,7 +149,7 @@ fn stop_legacy_daemons() {
     }
 }
 
-fn ensure_app_cli_symlinks(exe: &Path) {
+pub(crate) fn ensure_app_cli_symlinks(exe: &Path) {
     let target_bin_dir = bin_dir();
     let _ = fs::create_dir_all(&target_bin_dir);
     let link_target: PathBuf = if exe.parent() == Some(target_bin_dir.as_path())
@@ -191,7 +192,7 @@ fn current_username() -> String {
         .unwrap_or_else(|| "root".to_string())
 }
 
-fn cmd_exists(name: &str) -> bool {
+pub(crate) fn cmd_exists(name: &str) -> bool {
     Command::new("sh")
         .args(["-c", &format!("command -v {name} >/dev/null 2>&1")])
         .status()
@@ -375,7 +376,7 @@ fn rotate_daemon_log_if_needed(log_path: &Path) {
     }
 }
 
-fn spawn_detached_daemon(exe: &Path, host: &str, port: u16) -> Result<u32, String> {
+pub(crate) fn spawn_detached_daemon(exe: &Path, host: &str, port: u16) -> Result<u32, String> {
     ensure_config_dir().map_err(|e| format!("Failed to create config dir: {e}"))?;
     let log_path = daemon_log_path();
     rotate_daemon_log_if_needed(&log_path);
