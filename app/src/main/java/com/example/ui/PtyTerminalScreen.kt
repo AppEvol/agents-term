@@ -3,6 +3,7 @@ package com.example.ui
 import android.content.Context
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.os.Build
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
@@ -85,6 +86,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.res.ResourcesCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.TabRecord
@@ -96,6 +99,7 @@ import com.example.terminal.PtyConnectionState
 import com.example.terminal.PtyPasteOutcome
 import com.example.terminal.PtyTabSession
 import com.example.terminal.PtyTabUiState
+import com.example.terminal.TerminalCell
 import com.example.terminal.TerminalFrame
 import com.example.terminal.TerminalThemePalette
 import com.example.ui.theme.AppTheme
@@ -103,6 +107,7 @@ import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.ThemedAlertDialog
 import com.example.ui.theme.ThemedTextButton
 import com.example.ui.theme.themedCorner
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -113,6 +118,7 @@ private const val DEFAULT_TERMINAL_FONT_SP = 13f
 private const val MIN_TERMINAL_FONT_SP = 9f
 private const val MAX_TERMINAL_FONT_SP = 22f
 private const val TERMINAL_PADDING_DP = 6
+private const val RESIZE_DEBOUNCE_MS = 120L
 
 @Composable
 fun rememberTerminalThemePalette(): TerminalThemePalette {
@@ -188,12 +194,24 @@ fun PtyTerminalWorkspace(
             val mods = consumeLatchedMods()
             session.sendText(committed, latchedMods = mods)
         },
-        onSpecialKey = { key, mods, codepoint ->
+        onSpecialKey = { key, mods, codepoint, utf8 ->
             val combinedMods = mods or consumeLatchedMods()
-            session.sendKey(key = key, mods = combinedMods, unshiftedCodepoint = codepoint)
+            session.sendKey(
+                key = key,
+                mods = combinedMods,
+                utf8 = utf8,
+                unshiftedCodepoint = codepoint,
+            )
         },
         onToolbarKey = { key, mods, codepoint ->
             sendToolbarKey(key = key, extraMods = mods, unshiftedCodepoint = codepoint)
+        },
+        onAltScreenScrollKey = { isUp ->
+            session.sendKey(
+                key = if (isUp) GhosttyKey.ARROW_UP else GhosttyKey.ARROW_DOWN,
+                mods = GhosttyMods.NONE,
+                unshiftedCodepoint = 0,
+            )
         },
         onResize = { cols, rows, cw, ch ->
             session.resize(cols = cols, rows = rows, cellWidthPx = cw, cellHeightPx = ch)
@@ -209,6 +227,7 @@ fun PtyTerminalWorkspace(
         onToggleKeyboard = { inputViewRef?.toggleKeyboard() },
         onRequestKeyboard = { inputViewRef?.focusAndShowKeyboard() },
         onInputViewBound = { inputViewRef = it },
+        sessionKey = tab.id,
         modifier = modifier,
     )
 
@@ -271,7 +290,7 @@ internal fun PtyTerminalContent(
     onToggleCtrl: () -> Unit,
     onToggleAlt: () -> Unit,
     onCommitText: (String) -> Unit,
-    onSpecialKey: (key: Int, mods: Int, unshiftedCodepoint: Int) -> Unit,
+    onSpecialKey: (key: Int, mods: Int, unshiftedCodepoint: Int, utf8: String?) -> Unit,
     onToolbarKey: (key: Int, mods: Int, unshiftedCodepoint: Int) -> Unit,
     onResize: (cols: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) -> Unit,
     onScrollLines: (Int) -> Unit,
@@ -286,6 +305,14 @@ internal fun PtyTerminalContent(
     onRequestKeyboard: () -> Unit,
     onInputViewBound: (TerminalImeInputView?) -> Unit,
     modifier: Modifier = Modifier,
+    sessionKey: Any = Unit,
+    onAltScreenScrollKey: (isUp: Boolean) -> Unit = { isUp ->
+        onToolbarKey(
+            if (isUp) GhosttyKey.ARROW_UP else GhosttyKey.ARROW_DOWN,
+            GhosttyMods.NONE,
+            0,
+        )
+    },
 ) {
     val bgColor = remember(uiState.frame?.defaultBgArgb, palette) {
         Color(uiState.frame?.defaultBgArgb ?: (0xFF000000.toInt() or palette.backgroundRgb))
@@ -324,16 +351,11 @@ internal fun PtyTerminalContent(
                 frame = uiState.frame,
                 fallbackBgColor = bgColor,
                 fontSizeSp = fontSizeSp,
+                resizeKey = sessionKey,
                 onResize = onResize,
                 onTapTerminal = onRequestKeyboard,
                 onScrollLines = onScrollLines,
-                onAltScreenScrollKey = { isUp ->
-                    onToolbarKey(
-                        if (isUp) GhosttyKey.ARROW_UP else GhosttyKey.ARROW_DOWN,
-                        GhosttyMods.NONE,
-                        0,
-                    )
-                },
+                onAltScreenScrollKey = onAltScreenScrollKey,
                 modifier = Modifier.fillMaxSize(),
             )
 
@@ -575,6 +597,7 @@ private fun TerminalGridCanvas(
     frame: TerminalFrame?,
     fallbackBgColor: Color,
     fontSizeSp: Float,
+    resizeKey: Any,
     onResize: (cols: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) -> Unit,
     onTapTerminal: () -> Unit,
     onScrollLines: (Int) -> Unit,
@@ -585,6 +608,7 @@ private fun TerminalGridCanvas(
     val density = LocalDensity.current
     val padPx = with(density) { TERMINAL_PADDING_DP.dp.toPx() }
     val latestOnResize by rememberUpdatedState(onResize)
+    val latestOnTapTerminal by rememberUpdatedState(onTapTerminal)
     val latestFrame by rememberUpdatedState(frame)
     val latestScrollLines by rememberUpdatedState(onScrollLines)
     val latestAltScroll by rememberUpdatedState(onAltScreenScrollKey)
@@ -606,7 +630,7 @@ private fun TerminalGridCanvas(
         modifier = modifier
             .background(fallbackBgColor)
             .pointerInput(Unit) {
-                detectTapGestures(onTap = { onTapTerminal() })
+                detectTapGestures(onTap = { latestOnTapTerminal() })
             }
             .pointerInput(metrics.cellHeightPx) {
                 var accumPx = 0f
@@ -647,13 +671,17 @@ private fun TerminalGridCanvas(
         val computedRows = floor((availHeightPx / metrics.cellHeightPx).toDouble()).toInt()
             .coerceIn(PtyTabSession.MIN_ROWS, PtyTabSession.MAX_ROWS)
 
-        LaunchedEffect(computedCols, computedRows, metrics.cellWidthPx, metrics.cellHeightPx) {
-            latestOnResize(
-                computedCols,
-                computedRows,
-                metrics.cellWidthPx.roundToInt().coerceAtLeast(1),
-                metrics.cellHeightPx.roundToInt().coerceAtLeast(1),
-            )
+        var hasSentInitialResize by remember(resizeKey) { mutableStateOf(false) }
+        val cellWidthPxInt = metrics.cellWidthPx.roundToInt().coerceAtLeast(1)
+        val cellHeightPxInt = metrics.cellHeightPx.roundToInt().coerceAtLeast(1)
+        LaunchedEffect(resizeKey, computedCols, computedRows, cellWidthPxInt, cellHeightPxInt) {
+            if (!hasSentInitialResize) {
+                hasSentInitialResize = true
+                latestOnResize(computedCols, computedRows, cellWidthPxInt, cellHeightPxInt)
+            } else {
+                delay(RESIZE_DEBOUNCE_MS)
+                latestOnResize(computedCols, computedRows, cellWidthPxInt, cellHeightPxInt)
+            }
         }
 
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -728,7 +756,7 @@ private fun TerminalGridCanvas(
                     }
                     textPaint.color = if (cell.isFaint) applyFaintAlpha(fg) else fg
 
-                    if (cell.wide == GhosttyCellWide.WIDE || cell.text.length > 1) {
+                    if (!cell.isCoalescableAscii()) {
                         if (hasText) {
                             canvas.drawText(cell.text, padPx + startCol * cw, baselineY, textPaint)
                         }
@@ -782,9 +810,12 @@ private fun TerminalGridCanvas(
             // Pass 3: cursor.
             val cur = f.cursor
             if (cur.visible && cur.inViewport && cur.y in f.grid.indices) {
-                val cx = padPx + cur.x * cw
+                val cursorCol = if (cur.wideTail) (cur.x - 1).coerceAtLeast(0) else cur.x
+                val isWideCursor = cur.wideTail ||
+                    f.grid[cur.y].cells.getOrNull(cursorCol)?.wide == GhosttyCellWide.WIDE
+                val cx = padPx + cursorCol * cw
                 val cy = padPx + cur.y * ch
-                val cursorWidth = if (cur.wideTail) cw * 2f else cw
+                val cursorWidth = if (isWideCursor) cw * 2f else cw
                 val stroke = max(2f, cw * 0.14f)
                 when (cur.style) {
                     GhosttyCursorStyle.BAR -> {
@@ -829,10 +860,12 @@ private data class CellDecorationBounds(
     val cellHeight: Float,
 )
 
-private fun com.example.terminal.TerminalCell.canCoalesceWith(fg: Int, flags: Int): Boolean {
-    val sameStyle = fgArgb == fg && styleFlags == flags
-    return sameStyle && wide == GhosttyCellWide.NARROW && !isInvisible && text.length <= 1
+private fun TerminalCell.isCoalescableAscii(): Boolean {
+    val singleAscii = text.isEmpty() || (text.length == 1 && text[0] in ' '..'~')
+    return wide == GhosttyCellWide.NARROW && !isInvisible && singleAscii
 }
+
+private fun TerminalCell.canCoalesceWith(fg: Int, flags: Int): Boolean = fgArgb == fg && styleFlags == flags && isCoalescableAscii()
 
 private fun drawCellDecorations(
     canvas: android.graphics.Canvas,
@@ -1070,26 +1103,28 @@ private fun PtyIconKeyCap(
 @Composable
 private fun TerminalImeInputAnchor(
     onCommitText: (String) -> Unit,
-    onSpecialKey: (key: Int, mods: Int, unshiftedCodepoint: Int) -> Unit,
+    onSpecialKey: (key: Int, mods: Int, unshiftedCodepoint: Int, utf8: String?) -> Unit,
     onBound: (TerminalImeInputView?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val latestCommit by rememberUpdatedState(onCommitText)
     val latestSpecial by rememberUpdatedState(onSpecialKey)
+    val latestOnBound by rememberUpdatedState(onBound)
 
     AndroidView(
         factory = { ctx ->
             TerminalImeInputView(ctx).also { view ->
                 view.onCommitText = { latestCommit(it) }
-                view.onSpecialKey = { k, m, cp -> latestSpecial(k, m, cp) }
-                onBound(view)
+                view.onSpecialKey = { k, m, cp, u -> latestSpecial(k, m, cp, u) }
+                latestOnBound(view)
             }
         },
         update = { view ->
             view.onCommitText = { latestCommit(it) }
-            view.onSpecialKey = { k, m, cp -> latestSpecial(k, m, cp) }
+            view.onSpecialKey = { k, m, cp, u -> latestSpecial(k, m, cp, u) }
+            latestOnBound(view)
         },
-        onRelease = { onBound(null) },
+        onRelease = { latestOnBound(null) },
         modifier = modifier,
     )
 }
@@ -1101,7 +1136,8 @@ private fun TerminalImeInputAnchor(
  */
 class TerminalImeInputView(context: Context) : View(context) {
     var onCommitText: (String) -> Unit = {}
-    var onSpecialKey: (key: Int, mods: Int, unshiftedCodepoint: Int) -> Unit = { _, _, _ -> }
+    var onSpecialKey: (key: Int, mods: Int, unshiftedCodepoint: Int, utf8: String?) -> Unit = { _, _, _, _ -> }
+    private val handledKeyCodes = mutableSetOf<Int>()
 
     init {
         isFocusable = true
@@ -1114,7 +1150,11 @@ class TerminalImeInputView(context: Context) : View(context) {
         outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
             InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
             InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_ACTION_NONE
+        var imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_ACTION_NONE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            imeOptions = imeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+        }
+        outAttrs.imeOptions = imeOptions
         return TerminalInputConnection(this)
     }
 
@@ -1127,11 +1167,12 @@ class TerminalImeInputView(context: Context) : View(context) {
     fun toggleKeyboard() {
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             ?: return
-        if (!hasFocus()) {
-            focusAndShowKeyboard()
+        val imeVisible = ViewCompat.getRootWindowInsets(this)
+            ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+        if (imeVisible) {
+            imm.hideSoftInputFromWindow(windowToken, 0)
         } else {
-            @Suppress("DEPRECATION")
-            imm.toggleSoftInput(InputMethodManager.SHOW_IMPLICIT, 0)
+            focusAndShowKeyboard()
         }
     }
 
@@ -1140,31 +1181,44 @@ class TerminalImeInputView(context: Context) : View(context) {
         return super.onKeyDown(keyCode, event)
     }
 
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (consumeHandledKeyUp(event)) return true
+        return super.onKeyUp(keyCode, event)
+    }
+
+    internal fun consumeHandledKeyUp(event: KeyEvent): Boolean = event.action == KeyEvent.ACTION_UP && handledKeyCodes.remove(event.keyCode)
+
     internal fun dispatchAndroidKeyEvent(event: KeyEvent): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN) return false
         val mods = androidMetaToGhosttyMods(event.metaState)
         val special = mapAndroidSpecialKey(event.keyCode)
         if (special != null) {
-            onSpecialKey(special, mods, 0)
+            handledKeyCodes.add(event.keyCode)
+            onSpecialKey(special, mods, 0, null)
             return true
         }
+        if (dispatchModifiedAsciiKey(event, mods)) return true
         val unicode = event.unicodeChar
-        if (mods != GhosttyMods.NONE && (mods and (GhosttyMods.CTRL or GhosttyMods.ALT)) != 0) {
-            val baseChar = event.getUnicodeChar(0)
-            if (baseChar in 1..127) {
-                val ch = baseChar.toChar()
-                val gKey = GhosttyKey.fromAsciiChar(ch)
-                if (gKey != GhosttyKey.UNIDENTIFIED) {
-                    onSpecialKey(gKey, mods, ch.lowercaseChar().code)
-                    return true
-                }
-            }
-        }
         if (unicode != 0 && (unicode and android.view.KeyCharacterMap.COMBINING_ACCENT) == 0) {
+            handledKeyCodes.add(event.keyCode)
             onCommitText(String(Character.toChars(unicode)))
             return true
         }
         return false
+    }
+
+    private fun dispatchModifiedAsciiKey(event: KeyEvent, mods: Int): Boolean {
+        if ((mods and (GhosttyMods.CTRL or GhosttyMods.ALT)) == 0) return false
+        val baseChar = event.getUnicodeChar(0)
+        if (baseChar !in 1..127) return false
+        val ch = baseChar.toChar()
+        val gKey = GhosttyKey.fromAsciiChar(ch)
+        if (gKey == GhosttyKey.UNIDENTIFIED) return false
+        val shiftedChar = event.getUnicodeChar(event.metaState and KeyEvent.META_SHIFT_MASK)
+        val effectiveChar = if (shiftedChar in 1..127) shiftedChar.toChar() else ch
+        handledKeyCodes.add(event.keyCode)
+        onSpecialKey(gKey, mods, ch.lowercaseChar().code, effectiveChar.toString())
+        return true
     }
 
     private class TerminalInputConnection(
@@ -1190,14 +1244,38 @@ class TerminalImeInputView(context: Context) : View(context) {
         }
 
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-            val count = beforeLength.coerceAtLeast(1)
-            if (composingText.isNotEmpty()) {
-                val drop = count.coerceAtMost(composingText.length)
-                composingText = composingText.dropLast(drop)
+            if (beforeLength > 0) {
+                val backspaces = dropTrailingCharsFromComposing(beforeLength)
+                repeat(backspaces) {
+                    target.onSpecialKey(GhosttyKey.BACKSPACE, GhosttyMods.NONE, 0, null)
+                }
             }
-            repeat(count) {
-                target.onSpecialKey(GhosttyKey.BACKSPACE, GhosttyMods.NONE, 0)
+            if (afterLength > 0) {
+                repeat(afterLength) {
+                    target.onSpecialKey(GhosttyKey.DELETE, GhosttyMods.NONE, 0, null)
+                }
             }
+            return true
+        }
+
+        override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+            if (beforeLength > 0) {
+                dropTrailingCodePointsFromComposing(beforeLength)
+                repeat(beforeLength) {
+                    target.onSpecialKey(GhosttyKey.BACKSPACE, GhosttyMods.NONE, 0, null)
+                }
+            }
+            if (afterLength > 0) {
+                repeat(afterLength) {
+                    target.onSpecialKey(GhosttyKey.DELETE, GhosttyMods.NONE, 0, null)
+                }
+            }
+            return true
+        }
+
+        override fun performEditorAction(editorAction: Int): Boolean {
+            composingText = ""
+            target.onSpecialKey(GhosttyKey.ENTER, GhosttyMods.NONE, 0, null)
             return true
         }
 
@@ -1205,22 +1283,81 @@ class TerminalImeInputView(context: Context) : View(context) {
             if (event.action == KeyEvent.ACTION_DOWN && target.dispatchAndroidKeyEvent(event)) {
                 return true
             }
+            if (target.consumeHandledKeyUp(event)) {
+                return true
+            }
             return super.sendKeyEvent(event)
         }
 
+        private fun dropTrailingCharsFromComposing(charCount: Int): Int {
+            if (composingText.isEmpty()) return charCount
+            if (charCount >= composingText.length) {
+                val composingCodePoints = composingText.codePointCount(0, composingText.length)
+                val extraChars = charCount - composingText.length
+                composingText = ""
+                return composingCodePoints + extraChars
+            }
+            var cutIdx = composingText.length - charCount
+            if (cutIdx > 0 && Character.isLowSurrogate(composingText[cutIdx]) &&
+                Character.isHighSurrogate(composingText[cutIdx - 1])
+            ) {
+                cutIdx--
+            }
+            val removedCodePoints = composingText.codePointCount(cutIdx, composingText.length)
+            composingText = composingText.substring(0, cutIdx)
+            return removedCodePoints
+        }
+
+        private fun dropTrailingCodePointsFromComposing(codePointCount: Int) {
+            if (composingText.isEmpty()) return
+            val totalCodePoints = composingText.codePointCount(0, composingText.length)
+            if (codePointCount >= totalCodePoints) {
+                composingText = ""
+            } else {
+                val keepCodePoints = totalCodePoints - codePointCount
+                val cutIdx = composingText.offsetByCodePoints(0, keepCodePoints)
+                composingText = composingText.substring(0, cutIdx)
+            }
+        }
+
+        private fun emitCommittedText(text: String) {
+            var start = 0
+            var i = 0
+            while (i < text.length) {
+                val ch = text[i]
+                if (ch == '\r' || ch == '\n') {
+                    if (i > start) {
+                        target.onCommitText(text.substring(start, i))
+                    }
+                    target.onSpecialKey(GhosttyKey.ENTER, GhosttyMods.NONE, 0, null)
+                    if (ch == '\r' && i + 1 < text.length && text[i + 1] == '\n') {
+                        i++
+                    }
+                    start = i + 1
+                }
+                i++
+            }
+            if (start < text.length) {
+                target.onCommitText(text.substring(start))
+            }
+        }
+
         private fun replaceComposingWith(next: String, keepComposing: Boolean) {
-            var common = 0
-            val maxCommon = minOf(composingText.length, next.length)
-            while (common < maxCommon && composingText[common] == next[common]) {
-                common++
+            var idx = 0
+            val maxLen = minOf(composingText.length, next.length)
+            while (idx < maxLen) {
+                val cp1 = composingText.codePointAt(idx)
+                val cp2 = next.codePointAt(idx)
+                if (cp1 != cp2) break
+                idx += Character.charCount(cp1)
             }
-            val backspaces = composingText.length - common
+            val backspaces = composingText.codePointCount(idx, composingText.length)
             repeat(backspaces) {
-                target.onSpecialKey(GhosttyKey.BACKSPACE, GhosttyMods.NONE, 0)
+                target.onSpecialKey(GhosttyKey.BACKSPACE, GhosttyMods.NONE, 0, null)
             }
-            val suffix = next.substring(common)
+            val suffix = next.substring(idx)
             if (suffix.isNotEmpty()) {
-                target.onCommitText(suffix)
+                emitCommittedText(suffix)
             }
             composingText = if (keepComposing) next else ""
         }

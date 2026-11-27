@@ -10,8 +10,10 @@ import okhttp3.mockwebserver.MockWebServer
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -220,6 +222,267 @@ class PtySessionManagerTest {
         } finally {
             session.close()
             secondSocket?.close(1000, null)
+        }
+    }
+
+    @Test
+    fun serverErrorFramePreservesErrorWithoutReconnectLoop() {
+        val opened = CountDownLatch(1)
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        webSocket.send("""{"type":"error","error":"PTY spawn failed"}""")
+                        webSocket.close(1000, "spawn error")
+                        opened.countDown()
+                    }
+                },
+            ),
+        )
+
+        val config = ConnectionConfig(host = server.hostName, port = server.port, token = "tok_test")
+        val session = PtyTabSession(
+            tabId = "tab_pty_err",
+            initialConfig = config,
+            initialPalette = TerminalThemePalette.Dark,
+            socketClient = OkHttpPtySocketClient(),
+            frameFlushIntervalMs = 5L,
+            reconnectBaseDelayMs = 30L,
+            reconnectMaxDelayMs = 60L,
+        )
+
+        try {
+            session.connect()
+            assertTrue(opened.await(5, TimeUnit.SECONDS))
+            waitUntil {
+                session.uiState.value.connectionState == PtyConnectionState.ERROR &&
+                    session.uiState.value.errorMessage == "PTY spawn failed"
+            }
+            // Wait well past reconnectBaseDelayMs to verify no reconnect attempt fires.
+            Thread.sleep(200)
+            assertEquals(PtyConnectionState.ERROR, session.uiState.value.connectionState)
+            assertEquals("PTY spawn failed", session.uiState.value.errorMessage)
+            assertEquals(1, server.requestCount)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun httpNotFoundUpgradeIsNonRetryableError() {
+        server.enqueue(MockResponse().setResponseCode(404).setBody("Not Found"))
+
+        val config = ConnectionConfig(host = server.hostName, port = server.port, token = "tok_test")
+        val session = PtyTabSession(
+            tabId = "tab_pty_404",
+            initialConfig = config,
+            initialPalette = TerminalThemePalette.Dark,
+            socketClient = OkHttpPtySocketClient(),
+            reconnectBaseDelayMs = 30L,
+            reconnectMaxDelayMs = 60L,
+        )
+
+        try {
+            session.connect()
+            waitUntil { session.uiState.value.connectionState == PtyConnectionState.ERROR }
+            Thread.sleep(150)
+            assertEquals(PtyConnectionState.ERROR, session.uiState.value.connectionState)
+            assertEquals(1, server.requestCount)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun restartWhileDisconnectedSendsRestartPayloadAndSpawnsFreshSession() {
+        val firstClosed = CountDownLatch(1)
+        val secondRestartReceived = CountDownLatch(1)
+        var secondSocket: WebSocket? = null
+        val secondTexts = CopyOnWriteArrayList<String>()
+
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        webSocket.send(
+                            """{"type":"ready","sessionId":"sess_dead","cols":80,"rows":24,""" +
+                                """"baseSeq":0,"nextSeq":0,"replayFrom":0,"truncated":false,"running":false,"exitCode":0}""",
+                        )
+                        webSocket.send("""{"type":"replay_end","seq":0}""")
+                        webSocket.close(1000, "idle exit")
+                    }
+
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        firstClosed.countDown()
+                    }
+                },
+            ),
+        )
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        secondSocket = webSocket
+                        // Daemon initially reattaches to the old exited session before reading client restart.
+                        webSocket.send(
+                            """{"type":"ready","sessionId":"sess_dead","cols":80,"rows":24,""" +
+                                """"baseSeq":0,"nextSeq":0,"replayFrom":0,"truncated":false,"running":false,"exitCode":0}""",
+                        )
+                        webSocket.send("""{"type":"replay_end","seq":0}""")
+                    }
+
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        secondTexts.add(text)
+                        if (text.contains("\"type\":\"restart\"")) {
+                            webSocket.send(
+                                """{"type":"ready","sessionId":"sess_fresh","cols":80,"rows":24,""" +
+                                    """"baseSeq":0,"nextSeq":5,"replayFrom":0,"truncated":true,"running":true}""",
+                            )
+                            webSocket.send(packOutput(0L, "FRESH"))
+                            webSocket.send("""{"type":"replay_end","seq":5}""")
+                            secondRestartReceived.countDown()
+                        }
+                    }
+
+                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                        webSocket.close(1000, null)
+                    }
+                },
+            ),
+        )
+
+        val config = ConnectionConfig(host = server.hostName, port = server.port, token = "tok_test")
+        val session = PtyTabSession(
+            tabId = "tab_pty_restart",
+            initialConfig = config,
+            initialPalette = TerminalThemePalette.Dark,
+            socketClient = OkHttpPtySocketClient(),
+            frameFlushIntervalMs = 5L,
+        )
+
+        try {
+            session.connect()
+            assertTrue(firstClosed.await(5, TimeUnit.SECONDS))
+            waitUntil { session.uiState.value.connectionState == PtyConnectionState.EXITED }
+            // Ensure client observed the close before calling restart().
+            Thread.sleep(60)
+
+            session.restart()
+            assertTrue("Expected restart payload on reconnect", secondRestartReceived.await(5, TimeUnit.SECONDS))
+            assertTrue(secondTexts.any { it.contains("\"type\":\"restart\"") })
+            waitUntil {
+                session.uiState.value.connectionState == PtyConnectionState.CONNECTED &&
+                    session.uiState.value.sessionId == "sess_fresh" &&
+                    session.uiState.value.frame?.toPlainText()?.contains("FRESH") == true
+            }
+        } finally {
+            session.close()
+            secondSocket?.close(1000, null)
+        }
+    }
+
+    @Test
+    fun serverSwitchClosesOldSessionsAndDoesNotReconnectToNewHost() {
+        val opened = CountDownLatch(1)
+        val closed = CountDownLatch(1)
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        webSocket.send(
+                            """{"type":"ready","sessionId":"sess_old","cols":80,"rows":24,""" +
+                                """"baseSeq":0,"nextSeq":0,"replayFrom":0,"truncated":false,"running":true}""",
+                        )
+                        webSocket.send("""{"type":"replay_end","seq":0}""")
+                        opened.countDown()
+                    }
+
+                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                        webSocket.close(1000, null)
+                        closed.countDown()
+                    }
+                },
+            ),
+        )
+
+        val manager = PtySessionManager(socketClient = OkHttpPtySocketClient())
+        val cfgA = ConnectionConfig(host = server.hostName, port = server.port, token = "tok_a")
+        val cfgB = ConnectionConfig(host = "127.0.0.1", port = server.port + 1, token = "tok_b")
+
+        try {
+            val oldSession = manager.getOrCreate("tab_switch", cfgA, TerminalThemePalette.Dark)
+            oldSession.ensureConnected()
+            assertTrue(opened.await(5, TimeUnit.SECONDS))
+
+            // Switching server host/port closes the old session instead of reconnecting it.
+            manager.updateConfig(cfgB)
+            assertTrue("Expected old PTY WebSocket to close on server switch", closed.await(5, TimeUnit.SECONDS))
+
+            val newSession = manager.getOrCreate("tab_switch", cfgB, TerminalThemePalette.Dark)
+            assertNotSame(oldSession, newSession)
+        } finally {
+            manager.closeAll()
+        }
+    }
+
+    @Test
+    fun sendTextWithLatchedCtrlEncodesPunctuationAndGuardsClosedSession() {
+        val receivedBytes = CopyOnWriteArrayList<ByteArray>()
+        val opened = CountDownLatch(1)
+        var serverSocket: WebSocket? = null
+
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        serverSocket = webSocket
+                        webSocket.send(
+                            """{"type":"ready","sessionId":"sess_ctrl","cols":80,"rows":24,""" +
+                                """"baseSeq":0,"nextSeq":0,"replayFrom":0,"truncated":false,"running":true}""",
+                        )
+                        webSocket.send("""{"type":"replay_end","seq":0}""")
+                        opened.countDown()
+                    }
+
+                    override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                        receivedBytes.add(bytes.toByteArray())
+                    }
+
+                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                        webSocket.close(1000, null)
+                    }
+                },
+            ),
+        )
+
+        val config = ConnectionConfig(host = server.hostName, port = server.port, token = "tok_test")
+        val session = PtyTabSession(
+            tabId = "tab_pty_ctrl",
+            initialConfig = config,
+            initialPalette = TerminalThemePalette.Dark,
+            socketClient = OkHttpPtySocketClient(),
+        )
+
+        try {
+            session.connect()
+            assertTrue(opened.await(5, TimeUnit.SECONDS))
+            waitUntil { session.uiState.value.connectionState == PtyConnectionState.CONNECTED }
+
+            session.sendText("@", latchedMods = GhosttyMods.CTRL)
+            session.sendText("^", latchedMods = GhosttyMods.CTRL)
+            session.sendText("_", latchedMods = GhosttyMods.CTRL)
+
+            waitUntil { receivedBytes.size >= 3 }
+            assertArrayEquals(byteArrayOf(0x00), receivedBytes[0])
+            assertArrayEquals(byteArrayOf(0x1E), receivedBytes[1])
+            assertArrayEquals(byteArrayOf(0x1F), receivedBytes[2])
+
+            // Calling sendText with latched modifier after close() must be a safe no-op.
+            session.close()
+            session.sendText("c", latchedMods = GhosttyMods.CTRL)
+        } finally {
+            session.close()
+            serverSocket?.close(1000, null)
         }
     }
 }

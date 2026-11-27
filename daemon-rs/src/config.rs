@@ -493,7 +493,17 @@ pub fn detect_available_agents() -> Vec<Value> {
     AGENT_SPECS
         .iter()
         .map(|spec| {
-            let binary_path = resolve_binary(spec.binary);
+            let (binary, binary_path) = if spec.kind == "shell" {
+                if let Some(p) = resolve_binary(spec.binary) {
+                    (spec.binary, Some(p))
+                } else if let Some(p) = resolve_binary("sh") {
+                    ("sh", Some(p))
+                } else {
+                    (spec.binary, None)
+                }
+            } else {
+                (spec.binary, resolve_binary(spec.binary))
+            };
             let available = binary_path.is_some();
             let discovered = if available {
                 get_cached_agent_models(spec.kind)
@@ -504,7 +514,7 @@ pub fn detect_available_agents() -> Vec<Value> {
                 "type": spec.kind,
                 "name": spec.name,
                 "description": spec.description,
-                "binary": spec.binary,
+                "binary": binary,
                 "available": available,
                 "binaryPath": binary_path,
                 "defaultModel": discovered.get("defaultModel").cloned().unwrap_or(Value::Null),

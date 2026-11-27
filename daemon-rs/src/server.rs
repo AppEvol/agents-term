@@ -43,6 +43,7 @@ use crate::usage::get_agent_usage;
 use crate::util::{now_ms, rand_hex};
 
 const PING_INTERVAL: Duration = Duration::from_secs(25);
+const PTY_WS_WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DEBUG_DUMP_BODY: usize = 10 * 1024 * 1024;
 
 fn dump_segment_re() -> &'static Regex {
@@ -706,8 +707,8 @@ async fn delete_tab(
         return unauthorized();
     }
     st.runner.kill_if_running(&tab_id);
-    st.pty.kill_and_remove(&tab_id);
     let closed_tab = st.store.delete_tab(&tab_id);
+    st.pty.kill_and_remove(&tab_id);
     let closed_tabs = st.store.list_closed_tabs();
     st.broadcast_raw(
         json!({
@@ -971,6 +972,12 @@ async fn post_tab_interrupt(
     let Some(tab) = st.store.get_tab(&tab_id) else {
         return json_status(StatusCode::NOT_FOUND, json!({ "error": "Tab not found" }));
     };
+    if is_pty_shell_tab(&tab) {
+        return json_status(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "Interactive PTY tabs use the PTY WebSocket stream" }),
+        );
+    }
     let parsed: Map<String, Value> = serde_json::from_slice::<Value>(&body)
         .ok()
         .and_then(|v| v.as_object().cloned())
@@ -1196,6 +1203,10 @@ async fn pty_ws_handler(
         .get("rows")
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(PTY_DEFAULT_ROWS);
+    let restart_on_connect = matches!(
+        params.get("restart").map(String::as_str),
+        Some("1" | "true")
+    );
 
     ws.on_upgrade(move |socket| {
         handle_pty_ws(
@@ -1207,8 +1218,16 @@ async fn pty_ws_handler(
             after_seq,
             cols,
             rows,
+            restart_on_connect,
         )
     })
+}
+
+async fn ws_send_with_timeout(socket: &mut WebSocket, msg: Message) -> Result<(), ()> {
+    tokio::time::timeout(PTY_WS_WRITE_TIMEOUT, socket.send(msg))
+        .await
+        .map_err(|_| ())?
+        .map_err(|_| ())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1221,22 +1240,62 @@ async fn handle_pty_ws(
     after_seq: u64,
     cols: u16,
     rows: u16,
+    restart_on_connect: bool,
 ) {
-    let mut session = match st.pty.get_or_spawn(&tab_id, &cwd, cols, rows) {
+    let Some(current_tab) = st.store.get_tab(&tab_id).filter(is_pty_shell_tab) else {
+        let _ = ws_send_with_timeout(
+            &mut socket,
+            Message::Text(
+                json!({ "type": "error", "error": "Tab not found" })
+                    .to_string()
+                    .into(),
+            ),
+        )
+        .await;
+        let _ = socket.close().await;
+        return;
+    };
+    let effective_cwd = current_tab
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or(cwd);
+
+    let spawn_result = if restart_on_connect {
+        st.pty.restart(&tab_id, &effective_cwd, cols, rows)
+    } else {
+        st.pty.get_or_spawn(&tab_id, &effective_cwd, cols, rows)
+    };
+    let mut session = match spawn_result {
         Ok(s) => s,
         Err(err) => {
-            let _ = socket
-                .send(Message::Text(
-                    json!({ "type": "error", "error": err }).to_string().into(),
-                ))
-                .await;
+            let _ = ws_send_with_timeout(
+                &mut socket,
+                Message::Text(json!({ "type": "error", "error": err }).to_string().into()),
+            )
+            .await;
             let _ = socket.close().await;
             return;
         }
     };
 
-    let mut snap = session.attach(client_session_id.as_deref(), after_seq);
-    if send_pty_attach_replay(&mut socket, &snap).await.is_err() {
+    // Guard against a concurrent DELETE /api/tabs/:id racing with spawn/insert.
+    if st.store.get_tab(&tab_id).filter(is_pty_shell_tab).is_none() {
+        st.pty.kill_and_remove(&tab_id);
+        let _ = socket.close().await;
+        return;
+    }
+
+    let mut snap = if restart_on_connect {
+        session.attach(None, 0)
+    } else {
+        session.attach(client_session_id.as_deref(), after_seq)
+    };
+    if send_pty_attach_replay(&mut socket, &mut snap)
+        .await
+        .is_err()
+    {
         session.detach(snap.subscriber_id);
         return;
     }
@@ -1250,7 +1309,7 @@ async fn handle_pty_ws(
                 match maybe_ev {
                     Some(PtyServerEvent::Output { start_seq, data }) => {
                         let frame = encode_output_frame(start_seq, &data);
-                        if socket.send(Message::Binary(frame.into())).await.is_err() {
+                        if ws_send_with_timeout(&mut socket, Message::Binary(frame.into())).await.is_err() {
                             break;
                         }
                     }
@@ -1260,7 +1319,7 @@ async fn handle_pty_ws(
                             "exitCode": exit_code,
                             "signal": signal,
                         });
-                        if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
+                        if ws_send_with_timeout(&mut socket, Message::Text(msg.to_string().into())).await.is_err() {
                             break;
                         }
                     }
@@ -1268,7 +1327,7 @@ async fn handle_pty_ws(
                 }
             }
             _ = ping_interval.tick() => {
-                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                if ws_send_with_timeout(&mut socket, Message::Ping(Vec::new().into())).await.is_err() {
                     break;
                 }
             }
@@ -1297,41 +1356,59 @@ async fn handle_pty_ws(
                                 }
                             }
                             Some("restart") => {
+                                let (cur_cols, cur_rows) = session.dimensions();
                                 let new_cols = cmd
                                     .get("cols")
                                     .and_then(Value::as_u64)
                                     .and_then(|v| u16::try_from(v).ok())
-                                    .unwrap_or(snap.cols);
+                                    .unwrap_or(cur_cols);
                                 let new_rows = cmd
                                     .get("rows")
                                     .and_then(Value::as_u64)
                                     .and_then(|v| u16::try_from(v).ok())
-                                    .unwrap_or(snap.rows);
+                                    .unwrap_or(cur_rows);
                                 session.detach(snap.subscriber_id);
-                                let restart_cwd = st
-                                    .store
-                                    .get_tab(&tab_id)
-                                    .and_then(|t| {
-                                        t.get("cwd").and_then(Value::as_str).map(str::to_string)
-                                    })
-                                    .unwrap_or_else(|| cwd.clone());
+                                let Some(tab) = st.store.get_tab(&tab_id).filter(is_pty_shell_tab) else {
+                                    let _ = ws_send_with_timeout(
+                                        &mut socket,
+                                        Message::Text(
+                                            json!({ "type": "error", "error": "Tab not found" })
+                                                .to_string()
+                                                .into(),
+                                        ),
+                                    )
+                                    .await;
+                                    break;
+                                };
+                                let restart_cwd = tab
+                                    .get("cwd")
+                                    .and_then(Value::as_str)
+                                    .filter(|s| !s.trim().is_empty())
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| home_dir().to_string_lossy().to_string());
                                 match st.pty.restart(&tab_id, &restart_cwd, new_cols, new_rows) {
                                     Ok(new_sess) => {
+                                        if st.store.get_tab(&tab_id).filter(is_pty_shell_tab).is_none() {
+                                            st.pty.kill_and_remove(&tab_id);
+                                            break;
+                                        }
                                         session = new_sess;
                                         snap = session.attach(None, 0);
-                                        if send_pty_attach_replay(&mut socket, &snap).await.is_err()
+                                        if send_pty_attach_replay(&mut socket, &mut snap).await.is_err()
                                         {
                                             break;
                                         }
                                     }
                                     Err(err) => {
-                                        let _ = socket
-                                            .send(Message::Text(
+                                        let _ = ws_send_with_timeout(
+                                            &mut socket,
+                                            Message::Text(
                                                 json!({ "type": "error", "error": err })
                                                     .to_string()
                                                     .into(),
-                                            ))
-                                            .await;
+                                            ),
+                                        )
+                                        .await;
                                         break;
                                     }
                                 }
@@ -1352,7 +1429,7 @@ async fn handle_pty_ws(
 
 async fn send_pty_attach_replay(
     socket: &mut WebSocket,
-    snap: &crate::pty::PtyAttachSnapshot,
+    snap: &mut crate::pty::PtyAttachSnapshot,
 ) -> Result<(), ()> {
     let ready = json!({
         "type": "ready",
@@ -1367,35 +1444,23 @@ async fn send_pty_attach_replay(
         "exitCode": snap.exit_code,
         "signal": snap.exit_signal,
     });
-    socket
-        .send(Message::Text(ready.to_string().into()))
-        .await
-        .map_err(|_| ())?;
-    for (chunk_seq, chunk) in &snap.replay_chunks {
-        let frame = encode_output_frame(*chunk_seq, chunk);
-        socket
-            .send(Message::Binary(frame.into()))
-            .await
-            .map_err(|_| ())?;
+    ws_send_with_timeout(socket, Message::Text(ready.to_string().into())).await?;
+    for (chunk_seq, chunk) in std::mem::take(&mut snap.replay_chunks) {
+        let frame = encode_output_frame(chunk_seq, &chunk);
+        ws_send_with_timeout(socket, Message::Binary(frame.into())).await?;
     }
     let replay_end = json!({
         "type": "replay_end",
         "seq": snap.next_seq,
     });
-    socket
-        .send(Message::Text(replay_end.to_string().into()))
-        .await
-        .map_err(|_| ())?;
+    ws_send_with_timeout(socket, Message::Text(replay_end.to_string().into())).await?;
     if !snap.running {
         let exit = json!({
             "type": "exit",
             "exitCode": snap.exit_code,
             "signal": snap.exit_signal,
         });
-        socket
-            .send(Message::Text(exit.to_string().into()))
-            .await
-            .map_err(|_| ())?;
+        ws_send_with_timeout(socket, Message::Text(exit.to_string().into())).await?;
     }
     Ok(())
 }

@@ -85,13 +85,66 @@ class GhosttyVtEngineTest {
             val appUp = engine.encodeKey(GhosttyKey.ARROW_UP)
             assertEquals("\u001bOA", appUp?.decodeToString())
 
-            // Ctrl+C -> ETX (0x03), Tab -> 0x09, Esc -> 0x1b.
+            // Ctrl+C -> ETX (0x03), Tab -> 0x09, Esc -> 0x1b, Enter -> CR (0x0D).
             assertArrayEquals(
                 byteArrayOf(0x03),
-                engine.encodeKey(GhosttyKey.C, mods = GhosttyMods.CTRL, unshiftedCodepoint = 'c'.code),
+                engine.encodeKey(GhosttyKey.C, mods = GhosttyMods.CTRL, utf8 = "c", unshiftedCodepoint = 'c'.code),
             )
             assertArrayEquals(byteArrayOf(0x09), engine.encodeKey(GhosttyKey.TAB))
             assertArrayEquals(byteArrayOf(0x1B), engine.encodeKey(GhosttyKey.ESCAPE))
+            assertArrayEquals(byteArrayOf(0x0D), engine.encodeKey(GhosttyKey.ENTER))
+
+            // Ctrl+@ -> NUL (0x00), Ctrl+^ -> RS (0x1E), Ctrl+_ -> US (0x1F), Ctrl+Shift+- -> US (0x1F).
+            assertEquals(GhosttyKey.DIGIT_2, GhosttyKey.fromAsciiChar('@'))
+            assertEquals(GhosttyKey.DIGIT_6, GhosttyKey.fromAsciiChar('^'))
+            assertEquals(GhosttyKey.MINUS, GhosttyKey.fromAsciiChar('_'))
+            assertArrayEquals(
+                byteArrayOf(0x00),
+                engine.encodeKey(
+                    GhosttyKey.fromAsciiChar('@'),
+                    mods = GhosttyMods.CTRL,
+                    utf8 = "@",
+                    unshiftedCodepoint = '@'.code,
+                ),
+            )
+            assertArrayEquals(
+                byteArrayOf(0x1E),
+                engine.encodeKey(
+                    GhosttyKey.fromAsciiChar('^'),
+                    mods = GhosttyMods.CTRL,
+                    utf8 = "^",
+                    unshiftedCodepoint = '^'.code,
+                ),
+            )
+            assertArrayEquals(
+                byteArrayOf(0x1F),
+                engine.encodeKey(
+                    GhosttyKey.fromAsciiChar('_'),
+                    mods = GhosttyMods.CTRL,
+                    utf8 = "_",
+                    unshiftedCodepoint = '_'.code,
+                ),
+            )
+            assertArrayEquals(
+                byteArrayOf(0x1F),
+                engine.encodeKey(
+                    GhosttyKey.MINUS,
+                    mods = GhosttyMods.CTRL or GhosttyMods.SHIFT,
+                    utf8 = "_",
+                    unshiftedCodepoint = '-'.code,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun jniBoundsChecksRejectInvalidResizeAndWriteVtArgs() {
+        GhosttyTerminalEngine(initialCols = 40, initialRows = 10).use { engine ->
+            assertFalse(engine.resize(cols = 0, rows = 10))
+            assertFalse(engine.resize(cols = 70_000, rows = 10))
+            assertFalse(engine.resize(cols = 40, rows = 70_000))
+            // Overflowing offset + length must be rejected safely without crashing.
+            assertNull(engine.writeVt(byteArrayOf(0x41, 0x42), offset = Int.MAX_VALUE, length = 2))
         }
     }
 

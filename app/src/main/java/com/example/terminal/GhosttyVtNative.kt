@@ -74,6 +74,16 @@ object GhosttyKey {
     fun fromAsciiChar(ch: Char): Int = when (ch.lowercaseChar()) {
         in 'a'..'z' -> A + (ch.lowercaseChar() - 'a')
         in '0'..'9' -> DIGIT_0 + (ch - '0')
+        '!' -> DIGIT_1
+        '@' -> DIGIT_2
+        '#' -> DIGIT_3
+        '$' -> DIGIT_4
+        '%' -> DIGIT_5
+        '^' -> DIGIT_6
+        '&' -> DIGIT_7
+        '*' -> DIGIT_8
+        '(' -> DIGIT_9
+        ')' -> DIGIT_0
         '`', '~' -> BACKQUOTE
         '\\', '|' -> BACKSLASH
         '[', '{' -> BRACKET_LEFT
@@ -243,6 +253,7 @@ class GhosttyTerminalEngine(
     private var cachedRows = initialRows
     private var cachedGrid: Array<TerminalRow> = Array(initialRows) { TerminalRow.EMPTY }
     private var cachedTitle: String? = null
+    private var lastPalette: TerminalThemePalette? = null
     private var frameRevision = 0L
 
     init {
@@ -283,6 +294,7 @@ class GhosttyTerminalEngine(
     fun setThemeColors(palette: TerminalThemePalette) {
         synchronized(lock) {
             if (handle == 0L) return
+            lastPalette = palette
             GhosttyVtNative.nativeSetColors(
                 handle,
                 palette.foregroundRgb,
@@ -336,7 +348,19 @@ class GhosttyTerminalEngine(
 
     fun snapshotDecode(snapshot: ByteArray): Boolean = synchronized(lock) {
         if (handle == 0L || snapshot.isEmpty()) return false
-        GhosttyVtNative.nativeSnapshotDecode(handle, snapshot)
+        val ok = GhosttyVtNative.nativeSnapshotDecode(handle, snapshot)
+        if (ok) {
+            lastPalette?.let { palette ->
+                GhosttyVtNative.nativeSetColors(
+                    handle,
+                    palette.foregroundRgb,
+                    palette.backgroundRgb,
+                    palette.cursorRgb,
+                    palette.ansi16Rgb,
+                )
+            }
+        }
+        ok
     }
 
     /**

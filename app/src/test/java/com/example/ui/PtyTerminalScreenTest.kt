@@ -1,5 +1,7 @@
 package com.example.ui
 
+import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -23,6 +25,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -90,7 +93,7 @@ class PtyTerminalScreenTest {
                     onToggleCtrl = { ctrlLatched = !ctrlLatched },
                     onToggleAlt = {},
                     onCommitText = {},
-                    onSpecialKey = { key, mods, _ -> sentKeys.add(key to mods) },
+                    onSpecialKey = { key, mods, _, _ -> sentKeys.add(key to mods) },
                     onToolbarKey = { key, mods, _ -> sentKeys.add(key to mods) },
                     onResize = { _, _, _, _ -> },
                     onScrollLines = {},
@@ -129,5 +132,77 @@ class PtyTerminalScreenTest {
             ),
             sentKeys,
         )
+    }
+
+    @Test
+    fun imeEnterRoutesToGhosttyEnterAndComposingEmojiUsesCodepointCount() {
+        val view = TerminalImeInputView(RuntimeEnvironment.getApplication())
+        val committed = mutableListOf<String>()
+        val specialKeys = mutableListOf<Int>()
+        view.onCommitText = { committed.add(it) }
+        view.onSpecialKey = { key, _, _, _ -> specialKeys.add(key) }
+
+        val editorInfo = EditorInfo()
+        val ic = view.onCreateInputConnection(editorInfo)
+
+        // API 26+ must disable personalized keyboard learning.
+        assertTrue(
+            (editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) != 0,
+        )
+
+        // Newline commit routes to GhosttyKey.ENTER instead of raw LF.
+        ic.commitText("\n", 1)
+        assertEquals(emptyList<String>(), committed)
+        assertEquals(listOf(GhosttyKey.ENTER), specialKeys)
+
+        // Mixed text + CRLF commits text then GhosttyKey.ENTER.
+        specialKeys.clear()
+        ic.commitText("ls\r\n", 1)
+        assertEquals(listOf("ls"), committed)
+        assertEquals(listOf(GhosttyKey.ENTER), specialKeys)
+
+        // performEditorAction routes to GhosttyKey.ENTER.
+        specialKeys.clear()
+        assertTrue(ic.performEditorAction(EditorInfo.IME_ACTION_DONE))
+        assertEquals(listOf(GhosttyKey.ENTER), specialKeys)
+
+        // Composing text with surrogate-pair emoji diffs and backspaces by codepoint count.
+        committed.clear()
+        specialKeys.clear()
+        ic.setComposingText("a\uD83D\uDE00", 1)
+        assertEquals(listOf("a\uD83D\uDE00"), committed)
+        assertEquals(emptyList<Int>(), specialKeys)
+
+        committed.clear()
+        ic.setComposingText("a\uD83D\uDE02", 1)
+        assertEquals(listOf(GhosttyKey.BACKSPACE), specialKeys)
+        assertEquals(listOf("\uD83D\uDE02"), committed)
+
+        committed.clear()
+        specialKeys.clear()
+        ic.setComposingText("", 1)
+        assertEquals(listOf(GhosttyKey.BACKSPACE, GhosttyKey.BACKSPACE), specialKeys)
+        assertEquals(emptyList<String>(), committed)
+
+        // deleteSurroundingText handles (0, 0) as no-op and afterLength as DELETE.
+        specialKeys.clear()
+        ic.deleteSurroundingText(0, 0)
+        assertEquals(emptyList<Int>(), specialKeys)
+        ic.deleteSurroundingText(0, 1)
+        assertEquals(listOf(GhosttyKey.DELETE), specialKeys)
+
+        // deleteSurroundingTextInCodePoints emits exact counts.
+        specialKeys.clear()
+        ic.deleteSurroundingTextInCodePoints(2, 1)
+        assertEquals(
+            listOf(GhosttyKey.BACKSPACE, GhosttyKey.BACKSPACE, GhosttyKey.DELETE),
+            specialKeys,
+        )
+
+        // Handled ACTION_DOWN consumes its matching ACTION_UP without double dispatch.
+        specialKeys.clear()
+        assertTrue(ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
+        assertEquals(listOf(GhosttyKey.ENTER), specialKeys)
     }
 }

@@ -1,6 +1,7 @@
 #define GHOSTTY_STATIC
 #include <ghostty/vt.h>
 #include <jni.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -18,6 +19,7 @@ typedef struct {
 } ByteBuf;
 
 static bool bytebuf_reserve(ByteBuf* buf, size_t extra) {
+  if (extra > SIZE_MAX - buf->len) return false;
   size_t needed = buf->len + extra;
   if (needed <= buf->cap) return true;
   size_t new_cap = buf->cap == 0 ? 4096 : buf->cap;
@@ -83,6 +85,7 @@ typedef struct {
   GhosttyKeyEvent key_event;
   ByteBuf pty_out;
   ByteBuf frame_buf;
+  size_t max_scrollback_bytes;
   bool suppress_pty_writes;
   bool bell_rung;
   bool title_changed;
@@ -132,7 +135,7 @@ static GhosttyHandle* from_jlong(jlong ptr) {
 }
 
 static jbyteArray bytes_to_jbytearray(JNIEnv* env, const uint8_t* data, size_t len) {
-  if (data == NULL || len == 0) return NULL;
+  if (data == NULL || len == 0 || len > (size_t)INT32_MAX) return NULL;
   jbyteArray arr = (*env)->NewByteArray(env, (jsize)len);
   if (arr == NULL) return NULL;
   (*env)->SetByteArrayRegion(env, arr, 0, (jsize)len, (const jbyte*)data);
@@ -168,6 +171,7 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreate)(JNIEnv* env,
   }
 
   size_t sb = max_scrollback_bytes > 0 ? (size_t)max_scrollback_bytes : (4u * 1024u * 1024u);
+  h->max_scrollback_bytes = sb;
   configure_terminal_callbacks(h, sb);
   return (jlong)(uintptr_t)h;
 }
@@ -206,7 +210,10 @@ JNIEXPORT jboolean JNICALL JNI_FN(nativeResize)(JNIEnv* env,
   (void)env;
   (void)clazz;
   GhosttyHandle* h = from_jlong(handle_ptr);
-  if (h == NULL || h->terminal == NULL || cols <= 0 || rows <= 0) return JNI_FALSE;
+  if (h == NULL || h->terminal == NULL || cols <= 0 || rows <= 0 ||
+      cols > UINT16_MAX || rows > UINT16_MAX) {
+    return JNI_FALSE;
+  }
   uint32_t cw = cell_width_px > 0 ? (uint32_t)cell_width_px : 10u;
   uint32_t ch = cell_height_px > 0 ? (uint32_t)cell_height_px : 20u;
   GhosttyResult res =
@@ -266,7 +273,7 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(nativeWriteVt)(JNIEnv* env,
     return NULL;
   }
   jsize total = (*env)->GetArrayLength(env, data);
-  if (offset + length > total) return NULL;
+  if (offset > total || length > total - offset) return NULL;
 
   jbyte* ptr = (*env)->GetByteArrayElements(env, data, NULL);
   if (ptr == NULL) return NULL;
@@ -327,6 +334,8 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(nativeEncodeKey)(JNIEnv* env,
       ghostty_key_encoder_encode(h->key_encoder, h->key_event, out_buf, sizeof(out_buf), &written);
 
   if (utf8_ptr != NULL) {
+    GhosttyString empty = {0};
+    (void)ghostty_key_event_set_utf8(h->key_event, empty);
     (*env)->ReleaseByteArrayElements(env, utf8_bytes, utf8_ptr, JNI_ABORT);
   }
   if (res != GHOSTTY_SUCCESS || written == 0) return NULL;
@@ -480,7 +489,7 @@ JNIEXPORT jboolean JNICALL JNI_FN(nativeSnapshotDecode)(JNIEnv* env,
     ghostty_terminal_free(h->terminal);
   }
   h->terminal = decoded;
-  configure_terminal_callbacks(h, 0);
+  configure_terminal_callbacks(h, h->max_scrollback_bytes);
   return JNI_TRUE;
 }
 

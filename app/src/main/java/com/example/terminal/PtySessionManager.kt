@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -161,6 +162,8 @@ class PtyTabSession(
     private var desiredCellHeightPx = DEFAULT_CELL_HEIGHT_PX
     private var daemonCols = DEFAULT_COLS
     private var daemonRows = DEFAULT_ROWS
+    private var engineCols = DEFAULT_COLS
+    private var engineRows = DEFAULT_ROWS
 
     private var webSocket: WebSocket? = null
     private var socketGeneration = 0L
@@ -170,6 +173,8 @@ class PtyTabSession(
     private var shouldStayConnected = false
     private var isInForeground = true
     private var closed = false
+    private var pendingRestart = false
+    private var serverErrorReceived = false
 
     private var currentSessionId: String? = null
     private var appliedSeq = 0L
@@ -186,19 +191,21 @@ class PtyTabSession(
         )
         created.setThemeColors(palette)
         engine = created
+        engineCols = desiredCols
+        engineRows = desiredRows
         return created
     }
 
     fun updateConfig(newConfig: ConnectionConfig) {
-        val changed = synchronized(stateLock) {
-            if (config == newConfig) {
+        val shouldReconnect = synchronized(stateLock) {
+            if (closed || config == newConfig) {
                 false
             } else {
                 config = newConfig
-                true
+                shouldStayConnected && newConfig.isValid
             }
         }
-        if (changed && shouldStayConnected && newConfig.isValid) {
+        if (shouldReconnect) {
             connect()
         }
     }
@@ -212,7 +219,7 @@ class PtyTabSession(
             eng.captureFrame(forceFull = true)
         }
         if (frame != null) {
-            _uiState.update { it.copy(frame = frame) }
+            publishFrame(frame)
         }
     }
 
@@ -267,9 +274,11 @@ class PtyTabSession(
         }
     }
 
-    private fun prepareConnectParams(): ConnectParams? = synchronized(stateLock) {
+    private fun prepareConnectParams(): PtyConnectParams? = synchronized(stateLock) {
         if (closed || !config.isValid) return null
         shouldStayConnected = true
+        isReplaying = false
+        serverErrorReceived = false
         ensureEngineLocked()
         reconnectJob?.cancel()
         reconnectJob = null
@@ -283,10 +292,11 @@ class PtyTabSession(
                 } else {
                     PtyConnectionState.CONNECTING
                 },
+                isReplaying = false,
                 errorMessage = null,
             )
         }
-        ConnectParams(
+        PtyConnectParams(
             config = config,
             generation = nextGen,
             afterSeq = appliedSeq,
@@ -299,10 +309,19 @@ class PtyTabSession(
 
     private fun buildSocketListener(gen: Long, socketClosed: AtomicBoolean): WebSocketListener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            synchronized(stateLock) {
+            val restartPayload = synchronized(stateLock) {
                 if (closed || gen != socketGeneration || !shouldStayConnected) return
                 this@PtyTabSession.webSocket = webSocket
                 reconnectAttempt = 0
+                if (pendingRestart) {
+                    pendingRestart = false
+                    PtyRestartPayload(cols = desiredCols, rows = desiredRows)
+                } else {
+                    null
+                }
+            }
+            if (restartPayload != null) {
+                webSocket.send(encodeHerdrJson(restartPayload))
             }
         }
 
@@ -383,7 +402,13 @@ class PtyTabSession(
             eng.reset()
             eng.setThemeColors(palette)
             eng.resize(serverCols, serverRows, desiredCellWidthPx, desiredCellHeightPx)
+            engineCols = serverCols
+            engineRows = serverRows
             appliedSeq = replayFrom
+        } else if (engineCols != serverCols || engineRows != serverRows) {
+            eng.resize(serverCols, serverRows, desiredCellWidthPx, desiredCellHeightPx)
+            engineCols = serverCols
+            engineRows = serverRows
         }
         debugRecorder?.record(
             category = "pty",
@@ -413,6 +438,8 @@ class PtyTabSession(
         msg.seq?.let { if (it > appliedSeq) appliedSeq = it }
         val resizeTarget = if (desiredCols != daemonCols || desiredRows != daemonRows) {
             eng.resize(desiredCols, desiredRows, desiredCellWidthPx, desiredCellHeightPx)
+            engineCols = desiredCols
+            engineRows = desiredRows
             daemonCols = desiredCols
             daemonRows = desiredRows
             desiredCols to desiredRows
@@ -421,11 +448,9 @@ class PtyTabSession(
         }
         val fullFrame = eng.captureFrame(forceFull = true)
         _uiState.update { cur ->
-            cur.copy(
+            cur.withFrameIfNewer(fullFrame).copy(
                 isReplaying = false,
                 appliedSeq = appliedSeq,
-                frame = fullFrame ?: cur.frame,
-                title = fullFrame?.title ?: cur.title,
             )
         }
         return resizeTarget
@@ -439,17 +464,16 @@ class PtyTabSession(
             detail = "tab=$tabId exitCode=${msg.exitCode} signal=${msg.signal}",
         )
         _uiState.update { cur ->
-            cur.copy(
+            cur.withFrameIfNewer(frame).copy(
                 connectionState = PtyConnectionState.EXITED,
                 exitCode = msg.exitCode,
                 exitSignal = msg.signal,
-                frame = frame ?: cur.frame,
-                title = frame?.title ?: cur.title,
             )
         }
     }
 
     private fun handleErrorLocked(msg: PtyServerControlMessage) {
+        serverErrorReceived = true
         val errText = msg.error ?: "PTY error"
         debugRecorder?.record(
             category = "error",
@@ -518,56 +542,49 @@ class PtyTabSession(
         }
     }
 
+    private fun publishFrame(frame: TerminalFrame, seqSnapshot: Long? = null) {
+        _uiState.update { cur -> cur.withFrameIfNewer(frame, seqSnapshot) }
+    }
+
     private fun flushFrameNow() {
-        val frame = synchronized(stateLock) {
+        val snapshot = synchronized(stateLock) {
             if (closed) return
             flushJob = null
-            engine?.captureFrame(forceFull = false)
+            val frame = engine?.captureFrame(forceFull = false) ?: return
+            frame to appliedSeq
         }
-        if (frame != null) {
-            _uiState.update { cur ->
-                cur.copy(
-                    frame = frame,
-                    title = frame.title ?: cur.title,
-                    appliedSeq = appliedSeq,
-                )
-            }
-        }
+        publishFrame(snapshot.first, seqSnapshot = snapshot.second)
     }
 
     private fun handleSocketClosed(generation: Long, reason: String?, httpStatusCode: Int?) {
         val shouldRetry = synchronized(stateLock) {
             if (closed || generation != socketGeneration) return
             webSocket = null
-            val isAuth = isAuthStatusCode(httpStatusCode)
-            val exited = _uiState.value.connectionState == PtyConnectionState.EXITED
-            val retry = shouldStayConnected && isInForeground && !isAuth && !exited
-            val nextState = when {
-                exited -> PtyConnectionState.EXITED
-                !shouldStayConnected -> PtyConnectionState.IDLE
-                isAuth -> PtyConnectionState.ERROR
-                retry -> PtyConnectionState.RECONNECTING
-                else -> PtyConnectionState.IDLE
-            }
-            _uiState.update {
-                it.copy(
-                    connectionState = nextState,
+            isReplaying = false
+            val curState = _uiState.value
+            val outcome = resolveSocketCloseOutcome(
+                PtySocketCloseInput(
+                    currentState = curState,
+                    serverErrorReceived = serverErrorReceived,
+                    shouldStayConnected = shouldStayConnected,
+                    isInForeground = isInForeground,
+                    reason = reason,
+                    httpStatusCode = httpStatusCode,
+                ),
+            )
+            _uiState.update { cur ->
+                cur.copy(
+                    connectionState = outcome.nextState,
                     isReplaying = false,
-                    errorMessage = if (nextState == PtyConnectionState.ERROR) {
-                        reason ?: "Authentication failed"
-                    } else if (nextState == PtyConnectionState.RECONNECTING) {
-                        reason
-                    } else {
-                        null
-                    },
+                    errorMessage = outcome.errorMessage,
                 )
             }
             debugRecorder?.record(
                 category = "pty",
                 event = "pty_closed",
-                detail = "tab=$tabId retry=$retry status=${httpStatusCode ?: 0}",
+                detail = "tab=$tabId retry=${outcome.shouldRetry} status=${httpStatusCode ?: 0}",
             )
-            retry
+            outcome.shouldRetry
         }
 
         if (shouldRetry) {
@@ -608,7 +625,10 @@ class PtyTabSession(
             } else {
                 val activeConn = _uiState.value.connectionState
                 val needsSocket = shouldStayConnected && webSocket == null
-                needsSocket && activeConn != PtyConnectionState.EXITED && activeConn != PtyConnectionState.CONNECTING
+                needsSocket &&
+                    activeConn != PtyConnectionState.EXITED &&
+                    activeConn != PtyConnectionState.CONNECTING &&
+                    activeConn != PtyConnectionState.ERROR
             }
         }
         if (shouldReconnect) {
@@ -631,6 +651,8 @@ class PtyTabSession(
             val eng = engine
             val updatedFrame = if (eng != null && !isReplaying) {
                 eng.resize(clampedCols, clampedRows, desiredCellWidthPx, desiredCellHeightPx)
+                engineCols = clampedCols
+                engineRows = clampedRows
                 daemonCols = clampedCols
                 daemonRows = clampedRows
                 eng.captureFrame(forceFull = true)
@@ -641,7 +663,7 @@ class PtyTabSession(
             shouldSend to updatedFrame
         }
         if (frame != null) {
-            _uiState.update { it.copy(frame = frame) }
+            publishFrame(frame)
         }
         if (sendToDaemon) {
             sendResizeControl(clampedCols, clampedRows)
@@ -656,15 +678,20 @@ class PtyTabSession(
     fun restart() {
         val (ws, cols, rows) = synchronized(stateLock) {
             if (closed) return
-            Triple(webSocket, desiredCols, desiredRows)
+            val currentWs = webSocket
+            if (currentWs != null) {
+                pendingRestart = false
+                Triple(currentWs, desiredCols, desiredRows)
+            } else {
+                pendingRestart = true
+                currentSessionId = null
+                appliedSeq = 0L
+                Triple(null, desiredCols, desiredRows)
+            }
         }
         if (ws != null) {
             ws.send(encodeHerdrJson(PtyRestartPayload(cols = cols, rows = rows)))
         } else {
-            synchronized(stateLock) {
-                currentSessionId = null
-                appliedSeq = 0L
-            }
             connect()
         }
     }
@@ -683,7 +710,7 @@ class PtyTabSession(
             webSocket to updatedFrame
         }
         if (frame != null) {
-            _uiState.update { it.copy(frame = frame) }
+            publishFrame(frame)
         }
         ws?.send(bytes.toByteString())
     }
@@ -696,11 +723,12 @@ class PtyTabSession(
             val key = GhosttyKey.fromAsciiChar(ch)
             if (key != GhosttyKey.UNIDENTIFIED) {
                 val encoded = synchronized(stateLock) {
+                    if (closed) return
                     ensureEngineLocked().encodeKey(
                         key = key,
                         mods = latchedMods,
                         action = GhosttyKeyAction.PRESS,
-                        utf8 = null,
+                        utf8 = text,
                         unshiftedCodepoint = ch.lowercaseChar().code,
                     )
                 }
@@ -758,7 +786,7 @@ class PtyTabSession(
             eng.captureFrame(forceFull = false)
         }
         if (frame != null) {
-            _uiState.update { it.copy(frame = frame) }
+            publishFrame(frame)
         }
     }
 
@@ -770,7 +798,7 @@ class PtyTabSession(
             eng.captureFrame(forceFull = false)
         }
         if (frame != null) {
-            _uiState.update { it.copy(frame = frame) }
+            publishFrame(frame)
         }
     }
 
@@ -779,6 +807,8 @@ class PtyTabSession(
             if (closed) return
             closed = true
             shouldStayConnected = false
+            pendingRestart = false
+            isReplaying = false
             socketGeneration++
             reconnectJob?.cancel()
             reconnectJob = null
@@ -790,18 +820,9 @@ class PtyTabSession(
             engine = null
             ws
         }
+        scope.cancel()
         socketToClose?.close(1000, "Tab closed")
     }
-
-    private data class ConnectParams(
-        val config: ConnectionConfig,
-        val generation: Long,
-        val afterSeq: Long,
-        val sessionId: String?,
-        val cols: Int,
-        val rows: Int,
-        val previousSocket: WebSocket?,
-    )
 
     companion object {
         const val SEQ_HEADER_BYTES = 8
@@ -819,6 +840,102 @@ class PtyTabSession(
     }
 }
 
+private const val HTTP_BAD_REQUEST = 400
+private const val HTTP_NOT_FOUND = 404
+
+private data class PtyConnectParams(
+    val config: ConnectionConfig,
+    val generation: Long,
+    val afterSeq: Long,
+    val sessionId: String?,
+    val cols: Int,
+    val rows: Int,
+    val previousSocket: WebSocket?,
+)
+
+private data class PtySocketCloseInput(
+    val currentState: PtyTabUiState,
+    val serverErrorReceived: Boolean,
+    val shouldStayConnected: Boolean,
+    val isInForeground: Boolean,
+    val reason: String?,
+    val httpStatusCode: Int?,
+)
+
+private data class PtySocketCloseOutcome(
+    val nextState: PtyConnectionState,
+    val errorMessage: String?,
+    val shouldRetry: Boolean,
+)
+
+private fun PtyTabUiState.withFrameIfNewer(
+    nextFrame: TerminalFrame?,
+    seqSnapshot: Long? = null,
+): PtyTabUiState {
+    if (nextFrame == null) return this
+    if (frame != null && nextFrame.revision < frame.revision) return this
+    return copy(
+        frame = nextFrame,
+        title = nextFrame.title ?: title,
+        appliedSeq = seqSnapshot ?: appliedSeq,
+    )
+}
+
+private fun resolveSocketCloseOutcome(input: PtySocketCloseInput): PtySocketCloseOutcome {
+    val isAuth = isAuthStatusCode(input.httpStatusCode)
+    val isNonRetryableHttp = isAuth ||
+        input.httpStatusCode == HTTP_BAD_REQUEST ||
+        input.httpStatusCode == HTTP_NOT_FOUND
+    val exited = input.currentState.connectionState == PtyConnectionState.EXITED
+    val alreadyError = input.serverErrorReceived ||
+        input.currentState.connectionState == PtyConnectionState.ERROR
+    val retry = input.shouldStayConnected &&
+        input.isInForeground &&
+        !isNonRetryableHttp &&
+        !exited &&
+        !alreadyError
+    val nextState = when {
+        exited -> PtyConnectionState.EXITED
+        alreadyError -> PtyConnectionState.ERROR
+        !input.shouldStayConnected -> PtyConnectionState.IDLE
+        isNonRetryableHttp -> PtyConnectionState.ERROR
+        retry -> PtyConnectionState.RECONNECTING
+        else -> PtyConnectionState.IDLE
+    }
+    val errorMessage = resolveSocketCloseErrorMessage(
+        nextState = nextState,
+        alreadyError = alreadyError,
+        existingMessage = input.currentState.errorMessage,
+        isAuth = isAuth,
+        reason = input.reason,
+    )
+    return PtySocketCloseOutcome(
+        nextState = nextState,
+        errorMessage = errorMessage,
+        shouldRetry = retry,
+    )
+}
+
+private fun resolveSocketCloseErrorMessage(
+    nextState: PtyConnectionState,
+    alreadyError: Boolean,
+    existingMessage: String?,
+    isAuth: Boolean,
+    reason: String?,
+): String? = when (nextState) {
+    PtyConnectionState.ERROR -> {
+        if (alreadyError && !existingMessage.isNullOrBlank()) {
+            existingMessage
+        } else {
+            reason ?: if (isAuth) "Authentication failed" else "PTY connection failed"
+        }
+    }
+
+    PtyConnectionState.RECONNECTING -> reason
+
+    else -> null
+}
+
 /** Manages live [PtyTabSession] instances across tab switches and configuration changes. */
 class PtySessionManager(
     private val socketClient: PtySocketClient = OkHttpPtySocketClient(),
@@ -827,6 +944,11 @@ class PtySessionManager(
     private val lock = Any()
     private val sessions = LinkedHashMap<String, PtyTabSession>()
     private var inForeground = true
+    private var lastEndpoint: Pair<String, Int>? = null
+
+    private fun endpointOf(config: ConnectionConfig): Pair<String, Int>? = config.host.trim()
+        .takeIf { it.isNotEmpty() }
+        ?.let { it to config.port }
 
     fun observeWorkspace(scope: CoroutineScope, workspaceState: StateFlow<WorkspaceState>) {
         scope.launch {
@@ -852,28 +974,65 @@ class PtySessionManager(
         tabId: String,
         config: ConnectionConfig,
         palette: TerminalThemePalette,
-    ): PtyTabSession = synchronized(lock) {
-        val existing = sessions[tabId]
-        if (existing != null) {
-            existing.updateConfig(config)
-            existing.updatePalette(palette)
-            return existing
+    ): PtyTabSession {
+        val nextEndpoint = endpointOf(config)
+        var toClose: List<PtyTabSession> = emptyList()
+        val session = synchronized(lock) {
+            val prev = lastEndpoint
+            if (prev != null && nextEndpoint != null && prev != nextEndpoint) {
+                lastEndpoint = nextEndpoint
+                toClose = sessions.values.toList()
+                sessions.clear()
+            } else if (nextEndpoint != null) {
+                lastEndpoint = nextEndpoint
+            }
+            val existing = sessions[tabId]
+            if (existing != null) {
+                existing.updateConfig(config)
+                existing.updatePalette(palette)
+                existing
+            } else {
+                val created = PtyTabSession(
+                    tabId = tabId,
+                    initialConfig = config,
+                    initialPalette = palette,
+                    socketClient = socketClient,
+                    debugRecorder = debugRecorder,
+                )
+                created.onForegroundChanged(inForeground)
+                sessions[tabId] = created
+                created
+            }
         }
-        val created = PtyTabSession(
-            tabId = tabId,
-            initialConfig = config,
-            initialPalette = palette,
-            socketClient = socketClient,
-            debugRecorder = debugRecorder,
-        )
-        created.onForegroundChanged(inForeground)
-        sessions[tabId] = created
-        created
+        for (stale in toClose) {
+            stale.close()
+        }
+        return session
     }
 
     fun updateConfig(config: ConnectionConfig) {
-        val list = synchronized(lock) { sessions.values.toList() }
-        for (session in list) {
+        val nextEndpoint = endpointOf(config)
+        val toClose: List<PtyTabSession>
+        val toUpdate: List<PtyTabSession>
+        synchronized(lock) {
+            val prev = lastEndpoint
+            if (prev != null && nextEndpoint != null && prev != nextEndpoint) {
+                lastEndpoint = nextEndpoint
+                toClose = sessions.values.toList()
+                sessions.clear()
+                toUpdate = emptyList()
+            } else {
+                if (nextEndpoint != null) {
+                    lastEndpoint = nextEndpoint
+                }
+                toClose = emptyList()
+                toUpdate = sessions.values.toList()
+            }
+        }
+        for (session in toClose) {
+            session.close()
+        }
+        for (session in toUpdate) {
             session.updateConfig(config)
         }
     }
@@ -912,6 +1071,7 @@ class PtySessionManager(
 
     fun closeAll() {
         val all = synchronized(lock) {
+            lastEndpoint = null
             val copy = sessions.values.toList()
             sessions.clear()
             copy

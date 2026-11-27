@@ -21,13 +21,78 @@ while [ $# -gt 0 ]; do
     --all) MODE="all" ;;
     --android-only) MODE="android" ;;
     --host-only) MODE="host" ;;
+    --print-ndk-home) MODE="print-ndk-home" ;;
     *)
-      echo "usage: $0 [--all|--android-only|--host-only]" >&2
+      echo "usage: $0 [--all|--android-only|--host-only|--print-ndk-home]" >&2
       exit 2
       ;;
   esac
   shift
 done
+
+ndk_matches_major() {
+  local ndk_dir="$1"
+  local required_major="${ANDROID_NDK_VERSION%%.*}"
+  local rev=""
+  if [ -f "$ndk_dir/source.properties" ]; then
+    rev="$(sed -n 's/^[[:space:]]*Pkg\.Revision[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ndk_dir/source.properties" | head -n 1)"
+  fi
+  if [ -z "$rev" ]; then
+    local base
+    base="$(basename "$ndk_dir")"
+    if [[ "$base" =~ ^([0-9]+)\. ]]; then
+      rev="${BASH_REMATCH[1]}"
+    fi
+  fi
+  [ -n "$rev" ] && [ "$rev" = "$required_major" ]
+}
+
+resolve_ndk_home() {
+  if [ -n "${GHOSTTY_VT_ANDROID_NDK_HOME:-}" ]; then
+    if [ -d "$GHOSTTY_VT_ANDROID_NDK_HOME/toolchains/llvm" ]; then
+      printf '%s\n' "$GHOSTTY_VT_ANDROID_NDK_HOME"
+      return 0
+    fi
+    echo "ERROR: GHOSTTY_VT_ANDROID_NDK_HOME ($GHOSTTY_VT_ANDROID_NDK_HOME) does not contain toolchains/llvm" >&2
+    exit 1
+  fi
+
+  local sdk_dir="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/opt/android-sdk}}"
+  if [ -d "$sdk_dir/ndk/$ANDROID_NDK_VERSION/toolchains/llvm" ]; then
+    printf '%s\n' "$sdk_dir/ndk/$ANDROID_NDK_VERSION"
+    return 0
+  fi
+
+  local env_ndk
+  for env_ndk in "${ANDROID_NDK_HOME:-}" "${ANDROID_NDK_ROOT:-}"; do
+    if [ -n "$env_ndk" ] && [ -d "$env_ndk/toolchains/llvm" ] && ndk_matches_major "$env_ndk"; then
+      printf '%s\n' "$env_ndk"
+      return 0
+    fi
+  done
+
+  local found
+  found="$(find "$sdk_dir/ndk" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -n 1 || true)"
+  if [ -n "$found" ] && [ -d "$found/toolchains/llvm" ]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+
+  for env_ndk in "${ANDROID_NDK_HOME:-}" "${ANDROID_NDK_ROOT:-}"; do
+    if [ -n "$env_ndk" ] && [ -d "$env_ndk/toolchains/llvm" ]; then
+      printf '%s\n' "$env_ndk"
+      return 0
+    fi
+  done
+
+  echo "ERROR: Android NDK $ANDROID_NDK_VERSION not found under $sdk_dir/ndk. Install with: sdkmanager \"ndk;$ANDROID_NDK_VERSION\"" >&2
+  exit 1
+}
+
+if [ "$MODE" = "print-ndk-home" ]; then
+  resolve_ndk_home
+  exit 0
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JNI_SRC="$REPO_ROOT/app/src/main/jni/ghostty_vt_jni.c"
@@ -58,6 +123,18 @@ case "$HOST_ARCH" in
 esac
 
 mkdir -p "$CACHE_DIR/downloads" "$CACHE_DIR/built-$GHOSTTY_VT_VERSION"
+
+CACHE_LOCK_FILE="$CACHE_DIR/.lock"
+with_cache_lock() {
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x 9
+      "$@"
+    ) 9>"$CACHE_LOCK_FILE"
+  else
+    "$@"
+  fi
+}
 
 download_verified() {
   local url="$1"
@@ -130,26 +207,6 @@ ensure_ghostty_source() {
   mv "$deps_stage" "$CACHE_DIR/deps-$GHOSTTY_VT_VERSION"
 }
 
-resolve_ndk_home() {
-  if [ -n "${ANDROID_NDK_HOME:-}" ] && [ -d "$ANDROID_NDK_HOME/toolchains/llvm" ]; then
-    printf '%s\n' "$ANDROID_NDK_HOME"
-    return 0
-  fi
-  local sdk_dir="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/opt/android-sdk}}"
-  if [ -d "$sdk_dir/ndk/$ANDROID_NDK_VERSION/toolchains/llvm" ]; then
-    printf '%s\n' "$sdk_dir/ndk/$ANDROID_NDK_VERSION"
-    return 0
-  fi
-  local found
-  found="$(find "$sdk_dir/ndk" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -n 1 || true)"
-  if [ -n "$found" ] && [ -d "$found/toolchains/llvm" ]; then
-    printf '%s\n' "$found"
-    return 0
-  fi
-  echo "ERROR: Android NDK $ANDROID_NDK_VERSION not found under $sdk_dir/ndk. Install with: sdkmanager \"ndk;$ANDROID_NDK_VERSION\"" >&2
-  exit 1
-}
-
 resolve_jdk_include() {
   local java_home="${JAVA_HOME:-}"
   if [ -z "$java_home" ] && command -v javac >/dev/null 2>&1; then
@@ -164,7 +221,7 @@ resolve_jdk_include() {
   printf '%s\n' "$java_home/include"
 }
 
-build_libghostty_static() {
+build_libghostty_static_locked() {
   local zig_target="$1"
   local optimize="$2"
   local ndk_home="${3:-}"
@@ -183,6 +240,7 @@ build_libghostty_static() {
     export ZIG_LOCAL_CACHE_DIR="$CACHE_DIR/zig-local-cache-$zig_target"
     if [ -n "$ndk_home" ]; then
       export ANDROID_NDK_HOME="$ndk_home"
+      export ANDROID_NDK_ROOT="$ndk_home"
     fi
     "$ZIG_BIN" build \
       -Demit-lib-vt \
@@ -193,6 +251,10 @@ build_libghostty_static() {
   )
   rm -rf "$prefix"
   mv "$stage" "$prefix"
+}
+
+build_libghostty_static() {
+  with_cache_lock build_libghostty_static_locked "$@"
 }
 
 JNI_SHA="$(sha256sum "$JNI_SRC" | awk '{print $1}')"

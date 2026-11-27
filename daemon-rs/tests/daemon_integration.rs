@@ -2367,6 +2367,17 @@ fn pty_shell_tab_autocomplete_ctrl_c_no_echo_resize_reconnect_and_restart() {
         Some(json!({ "data": "nope\n" })),
     );
     assert_eq!(st, 400);
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{pty_tab_id}/interrupt"),
+        Some(json!({ "text": "echo bypassed", "processQueue": true })),
+    );
+    assert_eq!(st, 400);
+    let (_, msgs_resp) = daemon.api("GET", &format!("/api/tabs/{pty_tab_id}/messages"), None);
+    assert!(
+        msgs_resp["messages"].as_array().unwrap().is_empty(),
+        "PTY tab must never persist messages from rejected interrupt: {msgs_resp}"
+    );
 
     // 4. PTY WS enforces auth and rejects Command-mode tabs.
     assert_eq!(
@@ -2514,6 +2525,162 @@ fn pty_shell_tab_autocomplete_ctrl_c_no_echo_resize_reconnect_and_restart() {
     let (st, _) = daemon.api("DELETE", &format!("/api/tabs/{pty_tab_id}"), None);
     assert_eq!(st, 200);
 
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn pty_ws_query_restart_trailing_output_and_delete_kills_jobs() {
+    let home = make_temp_dir("herdr-pty-audit-fixes");
+    let work = home.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let daemon = TestDaemon::start(&home, None);
+
+    let (st, created) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({
+            "agent": "shell",
+            "shellMode": "pty",
+            "cwd": work.to_string_lossy(),
+            "title": "PTY Lifecycle"
+        })),
+    );
+    assert_eq!(st, 200);
+    let tab_id = created["tab"]["id"].as_str().unwrap().to_string();
+
+    // 1. Connect, emit trailing output right before exit 0, and verify output arrives BEFORE exit.
+    let mut ws = TestWsClient::connect(
+        daemon.port,
+        &format!("/api/tabs/{tab_id}/pty?afterSeq=0&cols=80&rows=24"),
+        Some(&daemon.token),
+    )
+    .expect("connect pty ws");
+    let ready1: Value = match ws.read_frame().unwrap() {
+        TestWsFrame::Text(s) => serde_json::from_str(&s).unwrap(),
+        _ => panic!("expected ready1"),
+    };
+    let sess1 = ready1["sessionId"].as_str().unwrap().to_string();
+    loop {
+        if let TestWsFrame::Text(s) = ws.read_frame().unwrap() {
+            let v: Value = serde_json::from_str(&s).unwrap();
+            if v["type"].as_str() == Some("replay_end") {
+                break;
+            }
+        }
+    }
+
+    ws.send_binary(b"echo BYE_BEFORE_EXIT_141; exit 0\n");
+    let mut output_before_exit = String::new();
+    let mut saw_exit = false;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match ws.read_frame() {
+            Some(TestWsFrame::Binary(frame)) => {
+                output_before_exit.push_str(&String::from_utf8_lossy(&frame[8..]));
+            }
+            Some(TestWsFrame::Text(s)) => {
+                let v: Value = serde_json::from_str(&s).unwrap();
+                if v["type"].as_str() == Some("exit") {
+                    assert_eq!(v["exitCode"].as_i64(), Some(0));
+                    saw_exit = true;
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    assert!(saw_exit, "expected exit frame");
+    assert!(
+        output_before_exit.contains("BYE_BEFORE_EXIT_141"),
+        "expected trailing output before exit frame, got: {output_before_exit:?}"
+    );
+    drop(ws);
+
+    // 2. Reconnect to the exited session with `?restart=1`: must spawn a fresh running session.
+    let mut ws2 = TestWsClient::connect(
+        daemon.port,
+        &format!("/api/tabs/{tab_id}/pty?restart=1&cols=90&rows=30"),
+        Some(&daemon.token),
+    )
+    .expect("connect pty ws with restart=1");
+    let ready2: Value = match ws2.read_frame().unwrap() {
+        TestWsFrame::Text(s) => serde_json::from_str(&s).unwrap(),
+        _ => panic!("expected ready2"),
+    };
+    assert_eq!(ready2["type"].as_str(), Some("ready"));
+    assert_eq!(ready2["running"].as_bool(), Some(true));
+    assert_eq!(ready2["cols"].as_u64(), Some(90));
+    assert_eq!(ready2["rows"].as_u64(), Some(30));
+    assert_ne!(ready2["sessionId"].as_str(), Some(sess1.as_str()));
+
+    let mut last_seq = ready2["replayFrom"].as_u64().unwrap_or(0);
+    loop {
+        match ws2.read_frame().unwrap() {
+            TestWsFrame::Binary(frame) => {
+                let seq = u64::from_be_bytes(frame[..8].try_into().unwrap());
+                last_seq = last_seq.max(seq + (frame.len() - 8) as u64);
+            }
+            TestWsFrame::Text(s) => {
+                let v: Value = serde_json::from_str(&s).unwrap();
+                if v["type"].as_str() == Some("replay_end") {
+                    break;
+                }
+            }
+            TestWsFrame::Close => panic!("unexpected close before replay_end"),
+        }
+    }
+
+    // 3. Start a foreground `sleep 60` job and verify deleting the tab terminates it cleanly.
+    let pid_file = work.join("sleep.pid");
+    let cmd = format!("sleep 60 & echo $! > {}; fg || wait\n", pid_file.display());
+    ws2.send_binary(cmd.as_bytes());
+    let pid_deadline = Instant::now() + Duration::from_secs(5);
+    let mut sleep_pid: Option<i32> = None;
+    while Instant::now() < pid_deadline {
+        if let Ok(raw) = fs::read_to_string(&pid_file) {
+            if let Ok(p) = raw.trim().parse::<i32>() {
+                sleep_pid = Some(p);
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let sleep_pid = sleep_pid.expect("sleep.pid never written");
+    assert_eq!(
+        unsafe { libc::kill(sleep_pid as libc::pid_t, 0) },
+        0,
+        "sleep process should be alive before DELETE"
+    );
+
+    let (st, _) = daemon.api("DELETE", &format!("/api/tabs/{tab_id}"), None);
+    assert_eq!(st, 200);
+
+    // Confirm `sleep 60` dies promptly after tab deletion.
+    let kill_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let alive = fs::read_to_string(format!("/proc/{sleep_pid}/stat"))
+            .ok()
+            .and_then(|raw| {
+                raw.rfind(')')
+                    .and_then(|i| raw.get(i + 1..))
+                    .map(str::to_string)
+            })
+            .and_then(|rest| rest.split_ascii_whitespace().next().map(str::to_string))
+            .is_some_and(|state| state != "Z" && state != "X");
+        if !alive {
+            break;
+        }
+        assert!(
+            Instant::now() < kill_deadline,
+            "sleep job (pid {sleep_pid}) survived DELETE /api/tabs/:id"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    // Suppress unused warning on last_seq if compiler checks.
+    let _ = last_seq;
+    drop(ws2);
     drop(daemon);
     let _ = fs::remove_dir_all(&home);
 }
