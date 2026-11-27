@@ -259,4 +259,11 @@
         <item quantity="other">Closed %1$d finished tabs</item>
     </plurals>
     <string name="snackbar_tab_revived">Revived \"%1$s\"</string>
+    <string name="shell_exit_code">Exit %1$d</string>
+    <string name="shell_mode_queue">Queue</string>
+    <string name="shell_mode_stdin">Stdin</string>
+    <string name="shell_stdin_placeholder">Send input to running command…</string>
+    <string name="shell_stdin_eof">EOF</string>
+    <string name="action_send_stdin">Send input to command</string>
+    <string name="action_send_stdin_eof">Send EOF to command</string>
 </resources>

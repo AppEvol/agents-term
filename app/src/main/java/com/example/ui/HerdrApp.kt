@@ -176,6 +176,8 @@ fun HerdrApp(viewModel: MainViewModel) {
         }
     }
     val revivingTabId by viewModel.revivingTabId.collectAsStateWithLifecycle()
+    val createTabError by viewModel.createTabError.collectAsStateWithLifecycle()
+    val isCreatingTab by viewModel.isCreatingTab.collectAsStateWithLifecycle()
 
     if (showSettings) {
         val debugUploadState by viewModel.debugUploadState.collectAsStateWithLifecycle()
@@ -255,6 +257,11 @@ fun HerdrApp(viewModel: MainViewModel) {
         )
     }
 
+    fun openNewTabSheet() {
+        viewModel.newTabController.clearError()
+        showNewTabSheet = true
+    }
+
     fun openRecentlyClosedSheet() {
         showRecentlyClosedSheet = true
         viewModel.refreshClosedTabs()
@@ -331,6 +338,12 @@ fun HerdrApp(viewModel: MainViewModel) {
         }
     }
 
+    LaunchedEffect(showNewTabSheet) {
+        if (!showNewTabSheet && createTabError != null) {
+            viewModel.newTabController.clearError()
+        }
+    }
+
     fun triggerQuickDebugDialog() {
         scope.launch {
             pendingScreenshotBase64 = if (debugSettings.includeScreenshot) {
@@ -392,7 +405,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 showOverflowMenu = showOverflowMenu,
                 onToggleOverflow = { showOverflowMenu = it },
                 onOpenDrawer = { scope.launch { drawerState.open() } },
-                onNewTab = { showNewTabSheet = true },
+                onNewTab = { openNewTabSheet() },
                 onQuickDebugDump = { triggerQuickDebugDialog() },
                 onSelectTab = { handleTabTap(it) },
                 showTaskSummary = showTaskSummary,
@@ -461,6 +474,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                         null -> viewModel.sendMessage(rawText)
                     }
                 },
+                onSendStdin = { data, eof -> viewModel.sendShellStdin(data = data, eof = eof) },
                 onInterrupt = { viewModel.interruptActiveTab() },
                 onForceInterrupt = { draftText ->
                     viewModel.interruptActiveTab(processQueue = true, text = draftText)
@@ -479,7 +493,7 @@ fun HerdrApp(viewModel: MainViewModel) {
             state = state,
             debugSharingEnabled = debugSettings.enabled,
             onSelectTab = { handleTabTap(it) },
-            onNewTab = { showNewTabSheet = true },
+            onNewTab = { openNewTabSheet() },
             onDeleteTab = { handleDeleteTab(it) },
             onCloseFinishedTabs = { handleCloseFinishedTabs() },
             onOpenRecentlyClosed = { openRecentlyClosedSheet() },
@@ -513,9 +527,11 @@ fun HerdrApp(viewModel: MainViewModel) {
     }
 
     if (showNewTabSheet) {
+        // createTabError is tracked on MainViewModel so NewTabSheet stays open on failure and
+        // can render createError inline once integrated with NewTabSheet's createError parameter.
         NewTabSheet(
             agents = state.serverInfo?.agents.orEmpty(),
-            canCreateTab = state.canCreateTab,
+            canCreateTab = state.canCreateTab && !isCreatingTab,
             defaultCwd = resolvePreferredNewTabCwd(
                 lastCwd = state.lastCwd,
                 activeTabCwd = state.activeTab?.cwd,
@@ -524,18 +540,24 @@ fun HerdrApp(viewModel: MainViewModel) {
             defaultSystemPromptForMode = { mode ->
                 resolveDefaultSystemPrompt(state.serverInfo, permissionMode = mode)
             },
-            onLoadInitialDirectories = { path -> viewModel.loadInitialDirectories(path) },
-            onLoadDirectories = { path -> viewModel.loadDirectories(path) },
-            onDismiss = { showNewTabSheet = false },
+            onLoadInitialDirectories = { path -> viewModel.newTabController.loadInitialDirectories(path) },
+            onLoadDirectories = { path -> viewModel.newTabController.loadDirectories(path) },
+            onDismiss = {
+                viewModel.newTabController.clearError()
+                showNewTabSheet = false
+            },
             onCreate = { agent, cwd, permMode, title, model, systemPrompt ->
-                viewModel.createTab(
+                viewModel.newTabController.createTab(
                     agent = agent,
                     cwd = cwd,
                     permissionMode = permMode,
                     title = title,
                     model = model,
                     systemPrompt = systemPrompt,
-                    onCreated = { showNewTabSheet = false },
+                    onCreated = {
+                        viewModel.newTabController.clearError()
+                        showNewTabSheet = false
+                    },
                 )
             },
         )
@@ -959,6 +981,7 @@ internal fun WorkspaceScaffold(
     onOpenAppSettings: () -> Unit,
     onReconnect: () -> Unit,
     onSendMessage: (String) -> Unit,
+    onSendStdin: ((data: String?, eof: Boolean) -> Unit)? = null,
     onInterrupt: () -> Unit,
     onForceInterrupt: (String?) -> Unit,
     onRemoveQueuedMessage: (String) -> Unit,
@@ -1337,6 +1360,7 @@ internal fun WorkspaceScaffold(
                 hasCustomModel = !activeTab.model.isNullOrBlank(),
                 onOpenModelPicker = if (activeTab.agent != "shell") onChangeModel else null,
                 onSendMessage = onSendMessage,
+                onSendStdin = if (activeTab.agent == "shell") onSendStdin else null,
                 onInterrupt = onInterrupt,
                 onForceInterrupt = onForceInterrupt,
                 onRemoveQueuedMessage = onRemoveQueuedMessage,
@@ -1399,6 +1423,7 @@ private fun ActiveTabChatContent(
     hasCustomModel: Boolean,
     onOpenModelPicker: (() -> Unit)?,
     onSendMessage: (String) -> Unit,
+    onSendStdin: ((data: String?, eof: Boolean) -> Unit)? = null,
     onInterrupt: () -> Unit,
     onForceInterrupt: (String?) -> Unit,
     onRemoveQueuedMessage: (String) -> Unit,
@@ -1421,6 +1446,7 @@ private fun ActiveTabChatContent(
         hasCustomModel = hasCustomModel,
         onOpenModelPicker = onOpenModelPicker,
         onSendMessage = onSendMessage,
+        onSendStdin = onSendStdin,
         onInterrupt = onInterrupt,
         onForceInterrupt = onForceInterrupt,
         onRemoveQueuedMessage = onRemoveQueuedMessage,
