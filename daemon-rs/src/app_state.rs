@@ -3,12 +3,16 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::util::{now_ms, rand_hex};
 
 pub const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 15_000;
 pub const MAX_COMMAND_TIMEOUT_MS: u64 = 120_000;
+/// How long after a socket connects it may still send its first `app_hello`.
+/// The app sends it right after connecting; until this has passed, a socket
+/// without one is still connecting rather than an app too old to report.
+const HELLO_GRACE_MS: u64 = 2_000;
 
 fn command_name_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -131,11 +135,20 @@ struct BrokerInner {
 #[derive(Clone)]
 pub struct AppStateBroker {
     inner: Arc<Mutex<BrokerInner>>,
+    /// Signalled when a client says hello or disconnects.
+    clients_changed: Arc<Notify>,
+    hello_grace_ms: u64,
 }
 
 impl AppStateBroker {
     pub fn new() -> Self {
+        Self::with_hello_grace(HELLO_GRACE_MS)
+    }
+
+    fn with_hello_grace(hello_grace_ms: u64) -> Self {
         Self {
+            clients_changed: Arc::new(Notify::new()),
+            hello_grace_ms,
             inner: Arc::new(Mutex::new(BrokerInner {
                 next_seq: 1,
                 clients: HashMap::new(),
@@ -169,6 +182,7 @@ impl AppStateBroker {
             let Some(client) = inner.clients.remove(&id) else {
                 return;
             };
+            self.clients_changed.notify_waiters();
             let keys: Vec<String> = inner
                 .pending
                 .iter()
@@ -199,6 +213,7 @@ impl AppStateBroker {
             if let Some(client) = inner.clients.get_mut(&id) {
                 client.hello = Some(parse_hello(msg.get("reporter")));
                 client.hello_at = Some(now_ms());
+                self.clients_changed.notify_waiters();
                 return true;
             }
             return false;
@@ -253,6 +268,37 @@ impl AppStateBroker {
             return true;
         }
         false
+    }
+
+    /// Waits while the only connected clients are ones that connected moments
+    /// ago and have not said hello yet, so that an app that is still
+    /// connecting is not reported as `unsupported_app`. Returns at once in
+    /// every other case, and after `hello_grace_ms` at the latest.
+    pub async fn wait_for_hello(&self) {
+        loop {
+            let changed = self.clients_changed.notified();
+            tokio::pin!(changed);
+            // Register before looking, so a hello that lands in between is not missed.
+            changed.as_mut().enable();
+            let remaining_ms = {
+                let inner = self.inner.lock().unwrap();
+                if inner.clients.values().any(|c| c.hello.is_some()) {
+                    return;
+                }
+                let now = now_ms();
+                let grace = self.hello_grace_ms as i64;
+                inner
+                    .clients
+                    .values()
+                    .map(|c| c.connected_at + grace - now)
+                    .max()
+                    .unwrap_or(0)
+            };
+            if remaining_ms <= 0 {
+                return;
+            }
+            let _ = tokio::time::timeout(Duration::from_millis(remaining_ms as u64), changed).await;
+        }
     }
 
     pub fn status(&self) -> Value {
@@ -325,6 +371,7 @@ impl AppStateBroker {
         }
         let clamped_ms = timeout_ms.clamp(1_000, MAX_COMMAND_TIMEOUT_MS);
         let request_id = format!("req_{}", rand_hex(8));
+        self.wait_for_hello().await;
 
         let (rx, tx_ws) = {
             let mut inner = self.inner.lock().unwrap();
@@ -417,5 +464,125 @@ impl AppStateBroker {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    const HELLO: &str = r#"{"type":"app_hello","reporter":{"enabled":true,"commands":["state"]}}"#;
+
+    /// Answers the next request the daemon sends down `rx`, as the app would.
+    async fn answer_next(
+        broker: &AppStateBroker,
+        id: u64,
+        rx: &mut mpsc::UnboundedReceiver<String>,
+    ) {
+        let frame: Value = serde_json::from_str(&rx.recv().await.unwrap()).unwrap();
+        let reply = json!({
+            "type": "app_state_response",
+            "requestId": frame["requestId"],
+            "ok": true,
+            "result": {"screen": "chat"},
+        });
+        assert!(broker.handle_message(id, &reply.to_string()));
+    }
+
+    #[tokio::test]
+    async fn request_waits_for_the_hello_of_a_client_that_just_connected() {
+        let broker = AppStateBroker::with_hello_grace(5_000);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let id = broker.add_socket(tx);
+
+        let app = broker.clone();
+        let app_task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(app.handle_message(id, HELLO));
+            answer_next(&app, id, &mut rx).await;
+        });
+
+        let started = Instant::now();
+        let res = broker.request("state", json!({}), 5_000).await.unwrap();
+        assert_eq!(res["result"]["screen"], json!("chat"));
+        // It went on as soon as the hello arrived, not at the end of the grace period.
+        assert!(started.elapsed() < Duration::from_millis(4_000));
+        app_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn status_is_ready_after_waiting_for_the_hello() {
+        let broker = AppStateBroker::with_hello_grace(5_000);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let id = broker.add_socket(tx);
+        // Before the hello the client is indistinguishable from an old app.
+        assert_eq!(broker.status()["reason"], json!("unsupported_app"));
+
+        let app = broker.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            app.handle_message(id, HELLO);
+        });
+        broker.wait_for_hello().await;
+        let status = broker.status();
+        assert_eq!(status["ready"], json!(true));
+        assert_eq!(status["reason"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn a_client_that_never_says_hello_is_unsupported_once_the_grace_period_ends() {
+        let broker = AppStateBroker::with_hello_grace(150);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        broker.add_socket(tx);
+
+        let started = Instant::now();
+        let err = broker.request("state", json!({}), 5_000).await.unwrap_err();
+        assert_eq!(err.code, "unsupported_app");
+        assert!(started.elapsed() >= Duration::from_millis(100));
+
+        // The grace period is over: later calls do not wait again.
+        let started = Instant::now();
+        broker.wait_for_hello().await;
+        let err = broker.request("state", json!({}), 5_000).await.unwrap_err();
+        assert_eq!(err.code, "unsupported_app");
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert_eq!(broker.status()["reason"], json!("unsupported_app"));
+    }
+
+    #[tokio::test]
+    async fn waiting_ends_when_the_connecting_client_disconnects() {
+        let broker = AppStateBroker::with_hello_grace(5_000);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let id = broker.add_socket(tx);
+
+        let app = broker.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            app.remove_socket(id);
+        });
+        let started = Instant::now();
+        let err = broker.request("state", json!({}), 5_000).await.unwrap_err();
+        assert_eq!(err.code, "no_app_connected");
+        assert!(started.elapsed() < Duration::from_millis(4_000));
+    }
+
+    #[tokio::test]
+    async fn nothing_waits_without_clients_or_once_a_client_has_said_hello() {
+        let broker = AppStateBroker::with_hello_grace(5_000);
+        let started = Instant::now();
+        let err = broker.request("state", json!({}), 5_000).await.unwrap_err();
+        assert_eq!(err.code, "no_app_connected");
+
+        // A client with inspection off has said hello; a second one still connecting
+        // does not hold the answer back.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let id = broker.add_socket(tx);
+        broker.handle_message(id, r#"{"type":"app_hello","reporter":{"enabled":false}}"#);
+        let (tx2, _rx2) = mpsc::unbounded_channel();
+        broker.add_socket(tx2);
+        let err = broker.request("state", json!({}), 5_000).await.unwrap_err();
+        assert_eq!(err.code, "inspection_disabled");
+        assert!(started.elapsed() < Duration::from_millis(4_000));
     }
 }
