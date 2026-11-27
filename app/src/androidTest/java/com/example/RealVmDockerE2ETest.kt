@@ -387,4 +387,54 @@ class RealVmDockerE2ETest {
         waitForText("resumed=yes", substring = true, timeoutMs = 20_000L)
         composeRule.onNodeWithContentDescription("Sent image 1 of 1").assertExists()
     }
+
+    @Test
+    fun test04_interactivePtyShellTabSupportsAutocompleteAndCtrlC() {
+        bootstrapOverRealSsh()
+
+        // Create a Shell tab opting into Interactive terminal (PTY).
+        val hasEmptyButton = composeRule.onAllNodes(hasTestTag("empty_new_tab_button"))
+            .fetchSemanticsNodes()
+            .isNotEmpty()
+        if (hasEmptyButton) {
+            composeRule.onNodeWithTag("empty_new_tab_button").performClick()
+        } else {
+            composeRule.onNodeWithTag("top_new_tab_button").performClick()
+        }
+        waitForText("New Persistent Agent Tab")
+        composeRule.onNodeWithTag("agent_option_shell").performScrollTo().performClick()
+        waitForTag("new_tab_shell_mode_pty")
+        composeRule.onNodeWithTag("new_tab_shell_mode_pty").performScrollTo().performClick()
+        composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextReplacement("Real PTY")
+        closeSoftKeyboard()
+        composeRule.onNodeWithTag("create_tab_button")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
+        waitForTagGone("create_tab_button")
+
+        // Verify the native libghostty-vt terminal canvas and mobile extra-keys bar render.
+        waitForTag("pty_terminal_canvas", timeoutMs = 20_000L)
+        waitForTag("pty_control_toolbar", timeoutMs = 10_000L)
+        waitForTag("pty_key_tab")
+        waitForTag("pty_key_ctrl_c")
+        waitForTag("pty_key_esc")
+        waitForTag("pty_key_up")
+
+        // Wait for the live bash prompt from the Docker VM to render on Ghostty's grid.
+        waitForCondition("initial PTY prompt output", timeoutMs = 20_000L) {
+            composeRule.onAllNodesWithTag("pty_terminal_canvas")
+                .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                .any { node ->
+                    node.config.getOrNull(SemanticsProperties.Text)
+                        ?.joinToString("") { it.text }
+                        ?.isNotBlank() == true
+                }
+        }
+
+        // Tap the terminal canvas to focus the IME view and verify Ctrl+C & Tab toolbar keys work without crashing.
+        composeRule.onNodeWithTag("pty_terminal_canvas").performClick()
+        composeRule.onNodeWithTag("pty_key_tab").performClick()
+        composeRule.onNodeWithTag("pty_key_ctrl_c").performClick()
+        composeRule.waitForIdle()
+    }
 }

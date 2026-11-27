@@ -266,4 +266,23 @@
     <string name="shell_stdin_eof">EOF</string>
     <string name="action_send_stdin">Send input to command</string>
     <string name="action_send_stdin_eof">Send EOF to command</string>
+    <string name="new_tab_shell_mode_label">Shell Mode</string>
+    <string name="new_tab_shell_mode_command">Command</string>
+    <string name="new_tab_shell_mode_pty">Interactive terminal (PTY)</string>
+    <string name="new_tab_shell_pty_description">Interactive Bash terminal (PTY)</string>
+    <string name="new_tab_shell_pty_capabilities_detail">Live VT terminal with Tab autocomplete, history arrows, Ctrl+C, no-echo password prompts, and full-screen tools like less.</string>
+    <string name="pty_status_connecting">Connecting to terminal…</string>
+    <string name="pty_status_reconnecting">Reconnecting to terminal…</string>
+    <string name="pty_status_exited">Shell exited%1$s</string>
+    <string name="pty_status_error_default">Terminal connection error</string>
+    <string name="pty_action_restart">Restart</string>
+    <string name="pty_action_paste">Paste</string>
+    <string name="pty_action_copy_screen">Copy screen</string>
+    <string name="pty_action_zoom_in">Increase terminal font size</string>
+    <string name="pty_action_zoom_out">Decrease terminal font size</string>
+    <string name="pty_action_keyboard">Toggle keyboard</string>
+    <string name="pty_password_input_hint">Password prompt</string>
+    <string name="pty_unsafe_paste_title">Paste multiline text?</string>
+    <string name="pty_unsafe_paste_body">This clipboard text contains newlines or control characters that may run commands immediately in the shell.</string>
+    <string name="pty_unsafe_paste_confirm">Paste anyway</string>
 </resources>

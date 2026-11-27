@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::attachments::{supported_mime_types, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES};
 use crate::models::get_cached_agent_models;
+use crate::pty::{PTY_BUFFER_BYTES, PTY_MAX_COLS, PTY_MAX_ROWS, PTY_PROTOCOL_VERSION};
 
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD_HASH: &str = env!("AGENTSTERM_BUILD_HASH");
@@ -535,6 +536,12 @@ pub fn build_server_info(bind_host: Option<&str>) -> Value {
             "maxBytes": MAX_ATTACHMENT_BYTES,
             "maxPerMessage": MAX_ATTACHMENTS_PER_MESSAGE,
             "mimeTypes": supported_mime_types(),
+        },
+        "pty": {
+            "version": PTY_PROTOCOL_VERSION,
+            "maxCols": PTY_MAX_COLS,
+            "maxRows": PTY_MAX_ROWS,
+            "bufferBytes": PTY_BUFFER_BYTES,
         },
     })
 }

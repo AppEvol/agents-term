@@ -15,11 +15,11 @@ Keep REST and WebSocket payloads backward compatible with released Android app b
 
 | Endpoint | Purpose |
 | :--- | :--- |
-| `GET /api/info` | Returns server version, git `commit`, hostname, Tailscale IP, `defaultCwd`, `defaultSystemPrompt`, `defaultSystemPromptFullAccess`, `attachments` (image upload limits; absent on daemons without attachment support), and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
+| `GET /api/info` | Returns server version, git `commit`, hostname, Tailscale IP, `defaultCwd`, `defaultSystemPrompt`, `defaultSystemPromptFullAccess`, `attachments` (image upload limits; absent on daemons without attachment support), `pty` (interactive PTY capabilities; absent on daemons without PTY support), and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
 | `GET /api/agents/:agent/models` | Returns (and optionally refreshes via `?refresh=1`) available models for an agent CLI (`agy`, `claude`, `codex`). |
 | `GET /api/agents/:agent/usage` | Returns usage limit windows reported by an agent CLI, if available. |
 | `GET /api/tabs` | Lists all open persistent agent tabs, `activeTabId`, and `closedTabs`. |
-| `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`, optional `systemPrompt`). Returns HTTP `409` when the VM already has 10 or more open tabs. |
+| `POST /api/tabs` | Creates a new persistent tab (`agent`, `cwd`, `permissionMode`, optional `title`, optional `model`, optional `systemPrompt`, optional `shellMode` `"command"` \| `"pty"` for shell tabs). Returns HTTP `409` when the VM already has 10 or more open tabs. |
 | `GET /api/tabs/closed` | Lists recently closed tabs retained for revival (up to 50 tabs for 24 hours). |
 | `POST /api/tabs/closed/:id/revive` | Reopens a recently closed tab and returns `{tab, messages, closedTabs}` (HTTP `409` if 10 tabs are already open; `404` if expired or missing). |
 | `PATCH /api/tabs/:id` | Renames a tab, updates its tool `permissionMode`, changes its `model`, updates its `systemPrompt` (pass `""` to clear), or sets its task `status` (`"done"` / `"idle"`). |
@@ -31,6 +31,7 @@ Keep REST and WebSocket payloads backward compatible with released Android app b
 | `GET /api/tabs/:id/attachments/:attachmentId` | Downloads an uploaded image for rendering in the chat transcript. |
 | `POST /api/tabs/:id/interrupt` | Sends interrupt (`SIGINT`/`SIGTERM`) to a running agent turn; optionally accepts `processQueue`, `text`, `overridePermissionMode`, and `attachments` to immediately run the next message. |
 | `POST /api/tabs/:id/read` | Marks a tab as read. |
+| `WS /api/tabs/:id/pty?afterSeq=...&sessionId=...&cols=...&rows=...` | Per-tab authenticated interactive PTY stream for `shellMode: "pty"` tabs. Binary server frames carry an 8-byte big-endian `u64` byte offset followed by raw PTY output; binary client frames write raw input bytes; text JSON frames handle `ready`, `replay_end`, `exit`, `resize`, and `restart`. |
 | `GET /api/fs?path=...` | Lists directories on the VM for the New Tab directory browser. |
 | `POST /api/debug/dumps` | Uploads an Android debug dump (`events.ndjson`, `state.json`, `logcat.txt`, `crash.txt`, optional `screenshot.png`) into `~/.agents-term/debug-dumps/` and updates the `latest` symlink. |
 | `GET /api/debug/dumps` | Lists recent Android debug dump folders stored on the VM. |

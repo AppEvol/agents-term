@@ -4,6 +4,7 @@ import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 val HerdrMoshi: Moshi = Moshi.Builder()
     .addLast(KotlinJsonAdapterFactory())
@@ -37,6 +38,26 @@ data class ConnectionConfig(
         val cleanHost = host.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
         val base = "ws://$cleanHost:$port/ws"
         return if (token.isNotBlank()) "$base?token=${token.trim()}" else base
+    }
+
+    fun ptyWsUrl(
+        tabId: String,
+        afterSeq: Long = 0L,
+        sessionId: String? = null,
+        cols: Int = 80,
+        rows: Int = 24,
+    ): String {
+        val cleanHost = host.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
+        val encodedTabId = URLEncoder.encode(tabId, "UTF-8")
+        val sb = StringBuilder("ws://$cleanHost:$port/api/tabs/$encodedTabId/pty")
+        sb.append("?afterSeq=").append(afterSeq.coerceAtLeast(0L))
+        sb.append("&cols=").append(cols)
+        sb.append("&rows=").append(rows)
+        val cleanSession = sessionId?.trim().orEmpty()
+        if (cleanSession.isNotEmpty()) {
+            sb.append("&sessionId=").append(URLEncoder.encode(cleanSession, "UTF-8"))
+        }
+        return sb.toString()
     }
 
     companion object {
@@ -285,6 +306,17 @@ fun resolveDefaultSystemPrompt(
         ?: DEFAULT_AGENT_SYSTEM_PROMPT
 }
 
+const val SHELL_MODE_COMMAND = "command"
+const val SHELL_MODE_PTY = "pty"
+
+@JsonClass(generateAdapter = true)
+data class PtyCapabilities(
+    val version: Int = 1,
+    val maxCols: Int = 512,
+    val maxRows: Int = 256,
+    val bufferBytes: Long = 2L * 1024L * 1024L,
+)
+
 @JsonClass(generateAdapter = true)
 data class ServerInfo(
     val version: String = "",
@@ -296,7 +328,11 @@ data class ServerInfo(
     val agents: List<AvailableAgentInfo> = emptyList(),
     /** Image attachment limits; null on daemons that predate attachments. */
     val attachments: AttachmentLimits? = null,
-)
+    /** Interactive PTY terminal capability; null on daemons that predate PTY tabs. */
+    val pty: PtyCapabilities? = null,
+) {
+    val supportsPtyShell: Boolean get() = pty != null
+}
 
 @JsonClass(generateAdapter = true)
 data class AttachmentLimits(
@@ -369,6 +405,8 @@ data class TabRecord(
     val permissionMode: String = "full-access",
     val model: String? = null,
     val systemPrompt: String? = null,
+    /** Shell tab mode (`"command"` or `"pty"`). Null/absent means `"command"` for backward compatibility. */
+    val shellMode: String? = null,
     val status: String = "idle",
     val statusDetail: String? = null,
     val sessionRef: AgentSessionRef? = null,
@@ -380,15 +418,22 @@ data class TabRecord(
     val updatedAt: Long = 0L,
     val closedAt: Long? = null,
 ) {
+    val isPtyShell: Boolean
+        get() = agent == "shell" && shellMode == SHELL_MODE_PTY
+
+    val isCommandShell: Boolean
+        get() = agent == "shell" && !isPtyShell
+
     val folderName: String
         get() = cwd.trimEnd('/').substringAfterLast('/').ifBlank { cwd }
 
     val agentLabel: String
-        get() = when (agent) {
-            "agy" -> "Antigravity"
-            "claude" -> "Claude"
-            "codex" -> "Codex"
-            "shell" -> "Shell"
+        get() = when {
+            isPtyShell -> "Terminal"
+            agent == "agy" -> "Antigravity"
+            agent == "claude" -> "Claude"
+            agent == "codex" -> "Codex"
+            agent == "shell" -> "Shell"
             else -> agent
         }
 }
@@ -537,6 +582,7 @@ data class CreateTabRequest(
     val permissionMode: String = "full-access",
     val model: String? = null,
     val systemPrompt: String? = null,
+    val shellMode: String? = null,
 )
 
 const val WORK_DONE_TOKEN = "<this-work-is-done-172728>"

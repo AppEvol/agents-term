@@ -26,6 +26,7 @@ const PRUNE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateTabError {
     InvalidCwd(String),
+    InvalidShellMode(String),
     OpenTabLimitReached,
 }
 
@@ -561,6 +562,7 @@ impl StateStore {
             .cloned()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_tab(
         &self,
         agent: &str,
@@ -569,9 +571,23 @@ impl StateStore {
         permission_mode: Option<&Value>,
         model: Option<&Value>,
         system_prompt: Option<&Value>,
+        shell_mode: Option<&Value>,
     ) -> Result<Value, CreateTabError> {
         let now = now_ms();
         let tab_id = format!("tab_{}", rand_hex(6));
+        let resolved_shell_mode = if agent == "shell" {
+            match strip_or_none(shell_mode).as_deref() {
+                None | Some("command") => Some("command".to_string()),
+                Some("pty") => Some("pty".to_string()),
+                Some(other) => {
+                    return Err(CreateTabError::InvalidShellMode(format!(
+                        "Unsupported shellMode: {other} (expected \"command\" or \"pty\")"
+                    )));
+                }
+            }
+        } else {
+            None
+        };
         let resolved_cwd = match strip_or_none(cwd) {
             Some(raw_cwd) => validate_working_dir(&raw_cwd).map_err(CreateTabError::InvalidCwd)?,
             None => resolve_abs_path(&home_dir().to_string_lossy()),
@@ -582,8 +598,13 @@ impl StateStore {
             .filter(|s| !s.is_empty())
             .unwrap_or(&resolved_cwd)
             .to_string();
-        let resolved_title = strip_or_none(title)
-            .unwrap_or_else(|| format!("{} · {}", default_agent_label(agent), folder));
+        let default_label = if resolved_shell_mode.as_deref() == Some("pty") {
+            "Terminal"
+        } else {
+            default_agent_label(agent)
+        };
+        let resolved_title =
+            strip_or_none(title).unwrap_or_else(|| format!("{default_label} · {folder}"));
         let resolved_perm =
             strip_or_none(permission_mode).unwrap_or_else(|| "full-access".to_string());
         let resolved_model = strip_or_none(model);
@@ -593,7 +614,7 @@ impl StateStore {
             strip_or_none(system_prompt)
         };
 
-        let tab = json!({
+        let mut tab = json!({
             "id": tab_id,
             "title": resolved_title,
             "agent": agent,
@@ -611,6 +632,11 @@ impl StateStore {
             "createdAt": now,
             "updatedAt": now,
         });
+        if let Some(mode) = resolved_shell_mode {
+            if let Some(obj) = tab.as_object_mut() {
+                obj.insert("shellMode".into(), Value::String(mode));
+            }
+        }
 
         {
             let mut inner = self.inner.lock().unwrap();

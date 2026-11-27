@@ -110,6 +110,8 @@ import com.example.data.resolvePreferredNewTabCwd
 import com.example.data.resolveTabLatestDetail
 import com.example.data.resolveTabTaskSummary
 import com.example.data.shareDebugBundleFile
+import com.example.terminal.PtyTabSession
+import com.example.terminal.TerminalThemePalette
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.LunaTabBorder
 import com.example.ui.theme.LunaTabPageBorder
@@ -486,6 +488,8 @@ fun HerdrApp(viewModel: MainViewModel) {
                 },
                 onRetryFullAccess = { viewModel.retryLastUserPromptWithFullAccess() },
                 composerAttachments = composerAttachments,
+                ptySessionProvider = { tabId, palette -> viewModel.ptySessionFor(tabId, palette) },
+                onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
             )
         }
 
@@ -532,6 +536,7 @@ fun HerdrApp(viewModel: MainViewModel) {
         NewTabSheet(
             agents = state.serverInfo?.agents.orEmpty(),
             canCreateTab = state.canCreateTab,
+            ptySupported = state.serverInfo?.supportsPtyShell == true,
             createError = createTabError,
             isCreating = isCreatingTab,
             defaultCwd = resolvePreferredNewTabCwd(
@@ -548,7 +553,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 viewModel.newTabController.clearError()
                 showNewTabSheet = false
             },
-            onCreate = { agent, cwd, permMode, title, model, systemPrompt ->
+            onCreate = { agent, cwd, permMode, title, model, systemPrompt, shellMode ->
                 viewModel.newTabController.createTab(
                     agent = agent,
                     cwd = cwd,
@@ -556,6 +561,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                     title = title,
                     model = model,
                     systemPrompt = systemPrompt,
+                    shellMode = shellMode,
                     onCreated = {
                         viewModel.newTabController.clearError()
                         showNewTabSheet = false
@@ -991,6 +997,8 @@ internal fun WorkspaceScaffold(
     activeMessagesFlow: StateFlow<List<ChatMessage>>? = null,
     composerAttachments: ComposerAttachments? = null,
     activeDraft: TextFieldState? = rememberActiveDraft(state),
+    ptySessionProvider: ((tabId: String, palette: TerminalThemePalette) -> PtyTabSession)? = null,
+    onShowMessage: (String) -> Unit = {},
 ) {
     val activeTab = state.activeTab
     val finishedTabIds = state.finishedTabIds
@@ -1348,6 +1356,17 @@ internal fun WorkspaceScaffold(
                 onCreateTab = onNewTab,
                 onOpenRecentlyClosed = onOpenRecentlyClosed,
                 onOpenSettings = onOpenSettings,
+                modifier = Modifier.padding(innerPadding),
+            )
+        } else if (activeTab.isPtyShell && ptySessionProvider != null) {
+            val palette = rememberTerminalThemePalette()
+            val ptySession = remember(activeTab.id, state.config) {
+                ptySessionProvider(activeTab.id, palette)
+            }
+            PtyTerminalWorkspace(
+                tab = activeTab,
+                session = ptySession,
+                onShowMessage = onShowMessage,
                 modifier = Modifier.padding(innerPadding),
             )
         } else {

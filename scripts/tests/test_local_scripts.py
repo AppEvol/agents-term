@@ -132,7 +132,10 @@ class LocalScriptsTest(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         lines = log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(lines, ["--licenses", "platforms;android-36.1 build-tools;36.0.0"])
+        self.assertEqual(
+            lines,
+            ["--licenses", "platforms;android-36.1 build-tools;36.0.0 ndk;29.0.14206865"],
+        )
 
     def test_install_android_sdk_fails_without_android_home(self) -> None:
         env = self._base_env()
