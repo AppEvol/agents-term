@@ -15,7 +15,11 @@ Keep REST and WebSocket payloads backward compatible with released Android app b
 
 | Endpoint | Purpose |
 | :--- | :--- |
-| `GET /api/info` | Returns server version, git `commit`, hostname, Tailscale IP, `defaultCwd`, `defaultSystemPrompt`, `defaultSystemPromptFullAccess`, `attachments` (image upload limits; absent on daemons without attachment support), and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
+| `GET /api/info` | Returns server version, git `commit`, `buildHash`, hostname, Tailscale IP, `defaultCwd`, `defaultSystemPrompt`, `defaultSystemPromptFullAccess`, `attachments` (image upload limits; absent on daemons without attachment support), `selfUpdate` (`supported`, `rollbackAvailable`, `previousBuildHash`, `lastError`), and detected `agents[]` (including discovered `models[]` and `defaultModel`). |
+| `GET /api/daemon/update` | Returns the current in-place self-update status (`state`, `targetVersion`, `targetBuildHash`, `currentBuildHash`, `activeTabIds`, `activeTurnsCount`, `whenBusy`, `detail`, `error`, `rollbackAvailable`, `previousBuildHash`, `lastError`, `updatedAt`). |
+| `POST /api/daemon/update` | Starts a verified in-place daemon self-update (`version`: `"latest"` or validated release tag, optional `expectedHash`, optional `whenBusy`: `"defer"` \| `"reject"` \| `"force"`, optional `force`). Custom URLs are never accepted via HTTP. Returns `202 Accepted` (or `200 OK` if already `up_to_date`, `409 Conflict` if busy/disabled/in-progress). Calling with `whenBusy: "force"` while `pending_restart` promotes the staged binary immediately. |
+| `DELETE /api/daemon/update` | Cancels an in-progress download or deferred `pending_restart` update and removes any staged binary (returns `409` if restart is already underway). |
+| `POST /api/daemon/rollback` | Restores the previous known-good `~/.agents-term/bin/agentsterm-daemon.prev` backup and restarts in-place (`whenBusy`: `"force"` (default) \| `"defer"` \| `"reject"`). Returns `409 Conflict` (`no_rollback_available`) when no previous backup is available. |
 | `GET /api/agents/:agent/models` | Returns (and optionally refreshes via `?refresh=1`) available models for an agent CLI (`agy`, `claude`, `codex`). |
 | `GET /api/agents/:agent/usage` | Returns usage limit windows reported by an agent CLI, if available. |
 | `GET /api/tabs` | Lists all open persistent agent tabs, `activeTabId`, and `closedTabs`. |
@@ -36,7 +40,7 @@ Keep REST and WebSocket payloads backward compatible with released Android app b
 | `GET /api/debug/dumps` | Lists recent Android debug dump folders stored on the VM. |
 | `GET /api/app/status` | App state reporter: reports whether a connected app has remote inspection (`ready`) and remote control (`controlReady`) enabled. |
 | `POST /api/app/command` | App state reporter: relays `{command, args, timeoutMs}` to the connected app over WebSocket and returns its result (used by `agents_term_app_cli` / `agentsterm-daemon app`). |
-| `WS /ws?token=...` | Real-time stream of `snapshot`, `tab_*`, `message_created`, `message_delta`, `tool_update`, and `message_updated` events. The app sends `app_hello` and `app_state_response` frames, and the daemon sends `app_state_request` frames (see [Live Debugging](live-debugging.md)). |
+| `WS /ws?token=...` | Real-time stream of `snapshot`, `tab_*`, `message_created`, `message_delta`, `tool_update`, `message_updated`, and `daemon_update_status` (`{type, update, ts}`) events. The app sends `app_hello` and `app_state_response` frames, and the daemon sends `app_state_request` frames (see [Live Debugging](live-debugging.md)). |
 
 ## Related Docs
 

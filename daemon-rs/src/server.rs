@@ -36,6 +36,7 @@ use crate::store::{
     resolve_abs_path, validate_working_dir, CreateTabError, ReviveTabError, StateStore,
     MAX_OPEN_TABS,
 };
+use crate::update::{confirm_daemon_healthy, RestartPlan, UpdateManager};
 use crate::usage::get_agent_usage;
 use crate::util::{now_ms, rand_hex};
 
@@ -365,6 +366,8 @@ struct AppState {
     store: StateStore,
     app_state: AppStateBroker,
     runner: AgentRunner,
+    update_manager: Arc<UpdateManager>,
+    ws_shutdown: tokio::sync::watch::Receiver<bool>,
     ws_clients: Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>,
 }
 
@@ -413,6 +416,98 @@ async fn get_info(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
         .await
         .unwrap_or_else(|_| build_server_info(None));
     json_status(StatusCode::OK, info)
+}
+
+async fn get_daemon_update(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    json_status(StatusCode::OK, st.update_manager.status())
+}
+
+async fn post_daemon_update(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    let parsed: Map<String, Value> = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    if parsed.contains_key("releaseBaseUrl")
+        || parsed.contains_key("release_base_url")
+        || parsed.contains_key("url")
+    {
+        return json_status(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "error": "Custom release URLs are not allowed via HTTP",
+                "code": "custom_url_not_allowed",
+            }),
+        );
+    }
+    let version = parsed.get("version").and_then(Value::as_str);
+    let expected_hash = parsed.get("expectedHash").and_then(Value::as_str);
+    let when_busy = parsed.get("whenBusy").and_then(Value::as_str);
+    let force = parsed
+        .get("force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    match st
+        .update_manager
+        .start_update(version, expected_hash, when_busy, force)
+    {
+        Ok((code, payload)) => {
+            let status = StatusCode::from_u16(code).unwrap_or(StatusCode::ACCEPTED);
+            json_status(status, payload)
+        }
+        Err(err) => {
+            let status =
+                StatusCode::from_u16(err.http_status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            json_status(status, err.to_json())
+        }
+    }
+}
+
+async fn delete_daemon_update(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    match st.update_manager.cancel_update() {
+        Ok(payload) => json_status(StatusCode::OK, payload),
+        Err(err) => {
+            let status =
+                StatusCode::from_u16(err.http_status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            json_status(status, err.to_json())
+        }
+    }
+}
+
+async fn post_daemon_rollback(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    let parsed: Map<String, Value> = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let when_busy = parsed.get("whenBusy").and_then(Value::as_str);
+    match st.update_manager.start_rollback(when_busy) {
+        Ok(payload) => json_status(StatusCode::ACCEPTED, payload),
+        Err(err) => {
+            let status =
+                StatusCode::from_u16(err.http_status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            json_status(status, err.to_json())
+        }
+    }
 }
 
 async fn get_models(
@@ -1089,15 +1184,29 @@ async fn handle_ws(st: Arc<AppState>, socket: WebSocket) {
         }
     });
 
-    while let Some(Ok(msg)) = stream.next().await {
-        match msg {
-            Message::Text(text) => {
-                if !st.app_state.handle_message(client_id, &text) {
-                    handle_ws_client_message(&st, &text).await;
+    let mut ws_shutdown = st.ws_shutdown.clone();
+    loop {
+        if *ws_shutdown.borrow() {
+            break;
+        }
+        tokio::select! {
+            changed = ws_shutdown.changed() => {
+                if changed.is_err() || *ws_shutdown.borrow() {
+                    break;
                 }
             }
-            Message::Close(_) => break,
-            _ => {}
+            maybe_msg = stream.next() => {
+                match maybe_msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if !st.app_state.handle_message(client_id, &text) {
+                            handle_ws_client_message(&st, &text).await;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(_)) => break,
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -1144,23 +1253,31 @@ pub async fn run_daemon(
     port: u16,
     token: String,
     no_auth: bool,
-) -> Result<(), String> {
+) -> Result<Option<RestartPlan>, String> {
     ensure_debugging_docs();
     warm_agent_models_cache();
 
     let store = StateStore::new();
     let app_state = AppStateBroker::new();
-    let ws_clients: Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let (restart_tx, restart_rx) = tokio::sync::oneshot::channel::<RestartPlan>();
+    let (ws_shutdown_tx, ws_shutdown_rx) = tokio::sync::watch::channel(false);
+    let restart_tx_cell = Mutex::new(Some(restart_tx));
 
     let state = Arc::new_cyclic(|weak: &std::sync::Weak<AppState>| {
         let weak_b = weak.clone();
-        let broadcast = Arc::new(move |env: Value| {
+        let broadcast: Arc<dyn Fn(Value) + Send + Sync> = Arc::new(move |env: Value| {
             if let Some(st) = weak_b.upgrade() {
                 st.broadcast_raw(env.to_string());
             }
         });
-        let runner = AgentRunner::new(store.clone(), broadcast);
+        let runner = AgentRunner::new(store.clone(), Arc::clone(&broadcast));
+        let tx = restart_tx_cell
+            .lock()
+            .unwrap()
+            .take()
+            .expect("restart_tx already taken");
+        let update_manager =
+            UpdateManager::new(host.clone(), port, no_auth, runner.clone(), broadcast, tx);
         AppState {
             host: host.clone(),
             token: token.clone(),
@@ -1168,14 +1285,27 @@ pub async fn run_daemon(
             store: store.clone(),
             app_state: app_state.clone(),
             runner,
+            update_manager,
+            ws_shutdown: ws_shutdown_rx.clone(),
             ws_clients: Mutex::new(HashMap::new()),
         }
     });
-    let _ = ws_clients;
+
+    let update_mgr_idle = Arc::clone(&state.update_manager);
+    state.runner.set_on_idle(Arc::new(move || {
+        update_mgr_idle.on_runner_idle();
+    }));
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/api/info", get(get_info))
+        .route(
+            "/api/daemon/update",
+            get(get_daemon_update)
+                .post(post_daemon_update)
+                .delete(delete_daemon_update),
+        )
+        .route("/api/daemon/rollback", post(post_daemon_rollback))
         .route("/api/agents/{agent}/models", get(get_models))
         .route("/api/agents/{agent}/usage", get(get_usage))
         .route("/api/fs", get(get_fs))
@@ -1219,6 +1349,9 @@ pub async fn run_daemon(
         .await
         .map_err(|e| format!("Failed to bind {bind_addr}: {e}"))?;
 
+    // Confirm any pending self-update now that StateStore + TcpListener are healthy.
+    confirm_daemon_healthy();
+
     let commit = daemon_commit();
     let short_commit: String = commit.chars().take(12).collect();
     let auth = if no_auth { "disabled" } else { "bearer" };
@@ -1227,6 +1360,8 @@ pub async fn run_daemon(
         std::process::id()
     ));
 
+    let restart_plan: Arc<Mutex<Option<RestartPlan>>> = Arc::new(Mutex::new(None));
+    let restart_plan_shutdown = Arc::clone(&restart_plan);
     let state_shutdown = state.clone();
     let shutdown_signal = async move {
         let mut sigterm =
@@ -1240,10 +1375,19 @@ pub async fn run_daemon(
                     std::future::pending::<()>().await;
                 }
             } => "SIGTERM",
+            res = restart_rx => {
+                if let Ok(plan) = res {
+                    *restart_plan_shutdown.lock().unwrap() = Some(plan);
+                    "daemon update restart"
+                } else {
+                    std::future::pending::<&'static str>().await
+                }
+            }
         };
         log_warn(&format!(
             "Received {reason}; shutting down AgentsTerm daemon"
         ));
+        let _ = ws_shutdown_tx.send(true);
         state_shutdown.runner.shutdown_active_turns(reason);
         if let Err(err) = state_shutdown.store.save_now() {
             log_warn(&format!("Shutdown store flush failed: {err}"));
@@ -1260,6 +1404,11 @@ pub async fn run_daemon(
         .store
         .save_now()
         .map_err(|e| format!("Final store flush failed: {e}"))?;
-    log_info("AgentsTerm daemon stopped");
-    Ok(())
+    let plan = restart_plan.lock().unwrap().take();
+    if plan.is_some() {
+        log_info("AgentsTerm daemon stopped for in-place execv restart");
+    } else {
+        log_info("AgentsTerm daemon stopped");
+    }
+    Ok(plan)
 }
