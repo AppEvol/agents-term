@@ -868,13 +868,14 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
             self.assertEqual(del_st, 200)
             self.assertEqual(len(del_resp["tab"]["queuedMessages"]), 2)
 
-            # Wait for turn 1 AND the auto-drained combined turn 2 (4 messages total: U1, A1, U2, A2).
-            tab, msgs = self.wait_for_tab_idle(tab_id, timeout=15.0, min_messages=4)
+            # Issue #53: shell drains queued commands one submission at a time (6 messages: U1, A1, U2, A2, U3, A3).
+            tab, msgs = self.wait_for_tab_idle(tab_id, timeout=15.0, min_messages=6)
             self.assertEqual(tab["queuedMessages"], [])
             self.assertIn("TURN_ONE", msgs[1]["text"])
             self.assertIn("QUEUED_PART_A", msgs[3]["text"])
-            self.assertIn("QUEUED_PART_B", msgs[3]["text"])
-            self.assertNotIn("QUEUED_REMOVED", msgs[3]["text"])
+            self.assertNotIn("QUEUED_PART_B", msgs[3]["text"])
+            self.assertIn("QUEUED_PART_B", msgs[5]["text"])
+            self.assertNotIn("QUEUED_REMOVED", "\n".join(m.get("text", "") for m in msgs))
 
             # Interrupt active turn with processQueue=True + inline replacement text.
             self.docker_exec("rm -f /tmp/q_int_started")
@@ -895,8 +896,8 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
                 )[0],
                 200,
             )
-            _, msgs_handoff = self.wait_for_tab_idle(tab_id, timeout=15.0, min_messages=8)
-            self.assertEqual(msgs_handoff[5]["status"], "interrupted")
+            _, msgs_handoff = self.wait_for_tab_idle(tab_id, timeout=15.0, min_messages=10)
+            self.assertEqual(msgs_handoff[7]["status"], "interrupted")
             self.assertIn("INTERRUPT_HANDOFF_OK", msgs_handoff[-1]["text"])
 
             # Interrupting an idle tab is a safe 200 no-op.
