@@ -1,13 +1,14 @@
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::fs;
+use std::collections::HashSet;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -23,12 +24,34 @@ fn asset_name() -> &'static str {
     }
 }
 
+fn used_ports() -> &'static Mutex<HashSet<u16>> {
+    static PORTS: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
+    PORTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn spawn_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn bind_unique_listener() -> (TcpListener, u16) {
+    let mut used = used_ports().lock().unwrap();
+    let mut held = Vec::new();
+    loop {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        if used.insert(port) {
+            drop(held);
+            return (listener, port);
+        }
+        held.push(listener);
+    }
+}
+
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    let (listener, port) = bind_unique_listener();
+    drop(listener);
+    port
 }
 
 fn make_temp_dir(prefix: &str) -> PathBuf {
@@ -90,6 +113,7 @@ fn make_broken_serve_bytes(hash: &str) -> Vec<u8> {
 }
 
 fn spawn_retry_etxtbsy(cmd: &mut Command) -> Child {
+    let _guard = spawn_lock().lock().unwrap();
     for attempt in 0..8 {
         match cmd.spawn() {
             Ok(child) => return child,
@@ -104,8 +128,15 @@ fn spawn_retry_etxtbsy(cmd: &mut Command) -> Child {
 
 fn output_retry_etxtbsy(cmd: &mut Command) -> std::process::Output {
     for attempt in 0..8 {
-        match cmd.output() {
-            Ok(out) => return out,
+        let res = {
+            let _guard = spawn_lock().lock().unwrap();
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        };
+        match res {
+            Ok(child) => return child.wait_with_output().expect("wait_with_output failed"),
             Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && attempt < 7 => {
                 thread::sleep(Duration::from_millis(25 * (attempt as u64 + 1)));
             }
@@ -116,6 +147,7 @@ fn output_retry_etxtbsy(cmd: &mut Command) -> std::process::Output {
 }
 
 fn write_exec_bytes(path: &Path, bytes: &[u8]) {
+    let _guard = spawn_lock().lock().unwrap();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
     }
@@ -228,8 +260,7 @@ impl MockReleaseServer {
             binary_bytes,
             sha256_body,
         }));
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let (listener, port) = bind_unique_listener();
         listener.set_nonblocking(true).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
 
@@ -405,6 +436,8 @@ fn spawn_installed_daemon(
     release_base_url: &str,
     extra_env: &[(&str, &str)],
 ) -> String {
+    let stderr_path = iso.root.join("daemon-stderr.log");
+    let stderr_file = File::create(&stderr_path).expect("create stderr log");
     let mut cmd = Command::new(iso.installed_bin());
     cmd.args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
         .env("HOME", &iso.root)
@@ -417,24 +450,36 @@ fn spawn_installed_daemon(
         .env_remove("AGENTSTERM_DAEMON_COMMIT")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::from(stderr_file));
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
     let child = spawn_retry_etxtbsy(&mut cmd);
     iso.child = Some(child);
 
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut last_err = String::new();
     while Instant::now() < deadline {
+        if let Some(ref mut ch) = iso.child {
+            if let Ok(Some(status)) = ch.try_wait() {
+                let stderr_log = fs::read_to_string(&stderr_path).unwrap_or_default();
+                panic!("Daemon exited early with {status} on port {port}; stderr:\n{stderr_log}");
+            }
+        }
         if iso.app_home.join("config.json").is_file() {
             let token = iso.token();
-            if let Ok((200, _)) = http_call(port, "GET", "/api/info", Some(&token), None) {
-                return token;
+            match http_call(port, "GET", "/api/info", Some(&token), None) {
+                Ok((200, _)) => return token,
+                Ok((code, body)) => last_err = format!("HTTP {code} {body}"),
+                Err(err) => last_err = err,
             }
         }
         thread::sleep(Duration::from_millis(100));
     }
-    panic!("Daemon did not become healthy on port {port}");
+    let stderr_log = fs::read_to_string(&stderr_path).unwrap_or_default();
+    panic!(
+        "Daemon did not become healthy on port {port} (last_err={last_err}); stderr:\n{stderr_log}"
+    );
 }
 
 #[test]
