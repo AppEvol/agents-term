@@ -479,6 +479,17 @@ fun SettingsScreen(
                             testTag = "debug_remote_control_switch",
                         )
 
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.settings_debug_remote_recording_title),
+                            subtitle = stringResource(R.string.settings_debug_remote_recording_subtitle),
+                            checked = debugSettings.remoteRecordingEnabled,
+                            enabled = debugSettings.enabled && debugSettings.remoteInspectionEnabled,
+                            onCheckedChange = { checked ->
+                                onUpdateDebugSettings { it.copy(remoteRecordingEnabled = checked) }
+                            },
+                            testTag = "debug_remote_recording_switch",
+                        )
+
                         // VM destination path indicator
                         Surface(
                             shape = themedCorner(12.dp),

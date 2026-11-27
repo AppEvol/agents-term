@@ -31,7 +31,7 @@ impl AppStateError {
         let http_status = match code {
             "no_app_connected" | "app_disconnected" => 503,
             "unsupported_app" => 501,
-            "inspection_disabled" | "control_disabled" => 403,
+            "inspection_disabled" | "control_disabled" | "recording_disabled" => 403,
             "timeout" => 504,
             "app_error" => 502,
             _ => 400,
@@ -52,6 +52,7 @@ struct HelloInfo {
     commands: Vec<String>,
     control_enabled: bool,
     control_commands: Vec<String>,
+    recording_enabled: bool,
 }
 
 fn str_or_none(v: Option<&Value>) -> Option<String> {
@@ -84,6 +85,10 @@ fn parse_hello(raw: Option<&Value>) -> HelloInfo {
             .and_then(Value::as_bool)
             == Some(true),
         control_commands: str_vec(obj.and_then(|o| o.get("controlCommands"))),
+        recording_enabled: obj
+            .and_then(|o| o.get("recordingEnabled"))
+            .and_then(Value::as_bool)
+            == Some(true),
     }
 }
 
@@ -115,6 +120,7 @@ impl ClientEntry {
             "commands": hello.map(|h| h.commands.clone()).unwrap_or_default(),
             "supportsControl": supports_control,
             "controlEnabled": control_enabled,
+            "recordingEnabled": enabled && hello.map(|h| h.recording_enabled).unwrap_or(false),
         })
     }
 }
@@ -258,6 +264,7 @@ impl AppStateBroker {
                     let code: &'static str = match code_str {
                         "inspection_disabled" => "inspection_disabled",
                         "control_disabled" => "control_disabled",
+                        "recording_disabled" => "recording_disabled",
                         "bad_request" => "bad_request",
                         "timeout" => "timeout",
                         _ => "app_error",
@@ -509,6 +516,45 @@ mod tests {
         // It went on as soon as the hello arrived, not at the end of the grace period.
         assert!(started.elapsed() < Duration::from_millis(4_000));
         app_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_app_can_refuse_a_command_because_recording_is_off() {
+        let broker = AppStateBroker::with_hello_grace(5_000);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let id = broker.add_socket(tx);
+        assert!(broker.handle_message(id, HELLO));
+        assert_eq!(
+            broker.status()["activeClient"]["recordingEnabled"],
+            json!(false)
+        );
+
+        let app = broker.clone();
+        let app_task = tokio::spawn(async move {
+            let frame: Value = serde_json::from_str(&rx.recv().await.unwrap()).unwrap();
+            let reply = json!({
+                "type": "app_state_response",
+                "requestId": frame["requestId"],
+                "ok": false,
+                "code": "recording_disabled",
+                "error": "Screen recording is disabled in the app",
+            });
+            assert!(app.handle_message(id, &reply.to_string()));
+        });
+        let err = broker
+            .request("record_start", json!({}), 5_000)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "recording_disabled");
+        assert_eq!(err.http_status, 403);
+        app_task.await.unwrap();
+
+        let hello = r#"{"type":"app_hello","reporter":{"enabled":true,"recordingEnabled":true}}"#;
+        assert!(broker.handle_message(id, hello));
+        assert_eq!(
+            broker.status()["activeClient"]["recordingEnabled"],
+            json!(true)
+        );
     }
 
     #[tokio::test]

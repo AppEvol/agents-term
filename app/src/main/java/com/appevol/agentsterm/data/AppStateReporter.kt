@@ -25,7 +25,11 @@ interface AppStateRequestHandler {
 }
 
 /** Thrown by [AppStateSources] to send a readable error back to the agent. */
-class AppStateCommandException(message: String) : Exception(message)
+class AppStateCommandException(
+    message: String,
+    /** Machine-readable reason (e.g. `recording_disabled`) passed on to the CLI; null for a plain error. */
+    val code: String? = null,
+) : Exception(message)
 
 /** Android-dependent data sources, injected so the reporter stays unit-testable on the JVM. */
 interface AppStateSources {
@@ -56,10 +60,14 @@ class AppStateReporter(
     /** Reads and drives the on-screen UI; null leaves the UI commands out. */
     private val ui: AppUiController? = null,
     private val isControlEnabled: () -> Boolean = { false },
+    /** Records the screen; null leaves the recording commands out. */
+    private val recording: ScreenRecordingCommands? = null,
+    private val isRecordingEnabled: () -> Boolean = { false },
 ) : AppStateRequestHandler {
 
-    private val commands: List<String> =
-        if (ui == null) COMMANDS else COMMANDS + AppUiController.READ_COMMANDS + AppUiController.CONTROL_COMMANDS
+    private val commands: List<String> = COMMANDS +
+        (if (ui == null) emptyList() else AppUiController.READ_COMMANDS + AppUiController.CONTROL_COMMANDS) +
+        (if (recording == null) emptyList() else ScreenRecordingCommands.COMMANDS)
 
     override fun helloJson(): String = toJsonText(
         mapOf(
@@ -69,9 +77,10 @@ class AppStateReporter(
                 "appVersion" to appVersion,
                 "device" to device,
                 "commands" to commands,
-                // Older daemons ignore these two fields.
+                // Older daemons ignore these fields.
                 "controlEnabled" to (ui != null && isEnabled() && isControlEnabled()),
                 "controlCommands" to if (ui == null) emptyList() else AppUiController.CONTROL_COMMANDS,
+                "recordingEnabled" to (recording != null && isEnabled() && isRecordingEnabled()),
             ),
         ),
     )
@@ -79,16 +88,7 @@ class AppStateReporter(
     override suspend fun handleRequest(requestId: String, command: String, args: Map<String, Any?>): String {
         val startedAt = clockMs()
         val outcome: Result<Any?> = try {
-            if (!isEnabled()) {
-                throw AppStateCommandException(
-                    "Remote inspection is disabled in the app (Settings > Debug sharing).",
-                )
-            }
-            if (ui != null && command in AppUiController.CONTROL_COMMANDS && !isControlEnabled()) {
-                throw AppStateCommandException(
-                    "Remote control is disabled in the app (Settings > Debug sharing > Allow VM agents to control the app).",
-                )
-            }
+            checkAllowed(command)
             Result.success(dispatch(command, args))
         } catch (e: CancellationException) {
             throw e
@@ -128,10 +128,33 @@ class AppStateReporter(
                         "requestId" to requestId,
                         "ok" to false,
                         "error" to sanitizeDebugText(err.message ?: "Unknown error"),
-                    ),
+                    ) + listOfNotNull((err as? AppStateCommandException)?.code?.let { "code" to it }),
                 )
             },
         )
+    }
+
+    /** Throws unless the user's debug sharing settings allow [command]. */
+    private fun checkAllowed(command: String) {
+        val refusal = when {
+            !isEnabled() -> AppStateCommandException(
+                "Remote inspection is disabled in the app (Settings > Debug sharing).",
+            )
+
+            ui != null && command in AppUiController.CONTROL_COMMANDS && !isControlEnabled() -> AppStateCommandException(
+                "Remote control is disabled in the app (Settings > Debug sharing > Allow VM agents to control the app).",
+            )
+
+            recording != null && command in ScreenRecordingCommands.COMMANDS && !isRecordingEnabled() ->
+                AppStateCommandException(
+                    "Screen recording is disabled in the app " +
+                        "(Settings > Debug sharing > Allow VM agents to record the screen).",
+                    code = "recording_disabled",
+                )
+
+            else -> null
+        }
+        if (refusal != null) throw refusal
     }
 
     private suspend fun dispatch(command: String, args: Map<String, Any?>): Any? = when (command) {
@@ -164,7 +187,9 @@ class AppStateReporter(
             includeScreenshot = args["includeScreenshot"] as? Boolean ?: true,
         )
 
-        else -> if (ui != null && command in commands) {
+        else -> if (recording != null && command in ScreenRecordingCommands.COMMANDS) {
+            recording.handle(command, args)
+        } else if (ui != null && command in commands) {
             ui.handle(command, args)
         } else {
             throw AppStateCommandException(
@@ -205,8 +230,8 @@ class AppStateReporter(
         /** Inspection commands; the UI commands of [AppUiController] are added when it is present. */
         val COMMANDS = listOf("ping", "state", "logs", "logcat", "crash", "screenshot", "dump")
 
-        // `ui` is polled too (agents_term_app_cli wait).
-        private val UNRECORDED_COMMANDS = setOf("ping", "logs", "ui")
+        // `ui` is polled too (agents_term_app_cli wait), and `record_read` runs once per chunk.
+        private val UNRECORDED_COMMANDS = setOf("ping", "logs", "ui", "record_read")
     }
 }
 

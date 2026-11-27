@@ -1,11 +1,13 @@
 package com.appevol.agentsterm.ui
 
 import android.app.Application
+import android.util.Base64
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.appevol.agentsterm.BuildConfig
 import com.appevol.agentsterm.R
+import com.appevol.agentsterm.data.AndroidScreenRecorder
 import com.appevol.agentsterm.data.AndroidUiDriver
 import com.appevol.agentsterm.data.AppStateCommandException
 import com.appevol.agentsterm.data.AppStateReporter
@@ -31,6 +33,8 @@ import com.appevol.agentsterm.data.FsListResponse
 import com.appevol.agentsterm.data.HerdrApiClient
 import com.appevol.agentsterm.data.HerdrRepository
 import com.appevol.agentsterm.data.HostKeyMismatchException
+import com.appevol.agentsterm.data.ScreenRecordingCommands
+import com.appevol.agentsterm.data.ScreenRecordingService
 import com.appevol.agentsterm.data.SettingsStore
 import com.appevol.agentsterm.data.SshBootstrapClient
 import com.appevol.agentsterm.data.SshBootstrapConfig
@@ -203,6 +207,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             onControl = { notifyRemoteControl() },
         ),
         isControlEnabled = { _debugSettings.value.remoteControlActive },
+        recording = ScreenRecordingCommands(
+            recorder = AndroidScreenRecorder(
+                context = application,
+                activity = { ForegroundActivityTracker.current() },
+            ),
+            encodeBase64 = { Base64.encodeToString(it, Base64.NO_WRAP) },
+        ),
+        isRecordingEnabled = { _debugSettings.value.remoteRecordingActive },
     )
 
     init {
@@ -314,13 +326,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             event = "debug_settings_updated",
             detail = "enabled=${updated.enabled} screenshot=${updated.includeScreenshot} logcat=${updated.includeLogcat} " +
                 "autoUpload=${updated.autoUploadOnError} remoteInspection=${updated.remoteInspectionEnabled} " +
-                "remoteControl=${updated.remoteControlEnabled}",
+                "remoteControl=${updated.remoteControlEnabled} remoteRecording=${updated.remoteRecordingEnabled}",
         )
         if (previous.remoteInspectionActive != updated.remoteInspectionActive ||
-            previous.remoteControlActive != updated.remoteControlActive
+            previous.remoteControlActive != updated.remoteControlActive ||
+            previous.remoteRecordingActive != updated.remoteRecordingActive
         ) {
             repo.sendAppHello()
         }
+        if (!updated.remoteRecordingActive) ScreenRecordingService.stopRunning("recording_disabled")
     }
 
     fun clearDebugLogs() {
@@ -845,6 +859,7 @@ private fun formatAppStateUiMap(
         "autoUploadOnError" to debug.autoUploadOnError,
         "remoteInspectionEnabled" to debug.remoteInspectionEnabled,
         "remoteControlEnabled" to debug.remoteControlEnabled,
+        "remoteRecordingEnabled" to debug.remoteRecordingEnabled,
     ),
     "debugEventCount" to debugEventCount,
     "hasLastCrash" to hasLastCrash,

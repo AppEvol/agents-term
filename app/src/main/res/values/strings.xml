@@ -173,6 +173,12 @@
     <string name="settings_debug_remote_control_title">Allow VM agents to control the app</string>
     <string name="settings_debug_remote_control_subtitle">Agents on the connected VM can also tap, swipe, type and press Back in this app, as if they were holding the phone (agents_term_app_cli), for example to QA test it. Anything you can do in the app, they can do. Leave off unless you are running such a test.</string>
     <string name="app_state_control_toast">VM agent is controlling the app</string>
+    <string name="settings_debug_remote_recording_title">Allow VM agents to record the screen</string>
+    <string name="settings_debug_remote_recording_subtitle">Agents on the connected VM can ask to record a video of your screen (agents_term_app_cli record), for example as evidence of a test. Android asks you to approve every recording, and it captures everything on screen, including other apps and notifications, until it is stopped.</string>
+    <string name="screen_recording_channel_name">Screen recording</string>
+    <string name="screen_recording_notification_title">Recording the screen for a VM agent</string>
+    <string name="screen_recording_notification_text">The video is sent to your VM when the agent collects it.</string>
+    <string name="screen_recording_notification_stop">Stop</string>
     <string name="settings_debug_autoupload_subtitle">Automatically send a dump to the VM when HTTP or WebSocket errors occur (max once per minute).</string>
     <string name="settings_debug_vm_path_label">VM debug storage folder</string>
     <string name="settings_debug_vm_path_default">~/.agents-term/debug-dumps/latest</string>
