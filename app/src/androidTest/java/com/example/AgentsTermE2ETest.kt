@@ -103,9 +103,11 @@ class AgentsTermE2ETest {
         scenario?.onActivity { activity ->
             val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             for (root in appWindowRoots(activity).asReversed()) {
+                val focused = root.findFocus()
+                val token = focused?.windowToken ?: root.windowToken
+                focused?.clearFocus()
                 WindowCompat.getInsetsController(activity.window, root)
                     .hide(WindowInsetsCompat.Type.ime())
-                val token = root.findFocus()?.windowToken ?: root.windowToken
                 imm?.hideSoftInputFromWindow(token, 0)
             }
         }
