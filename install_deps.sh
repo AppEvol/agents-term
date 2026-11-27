@@ -8,7 +8,8 @@
 #
 # What it sets up:
 #   apt packages  git, curl, unzip, a C toolchain, python3 + venv, gh, docker,
-#                 and JDK 21 when no JDK >= 17 is present
+#                 and JDK 21 unless one is already installed (Gradle needs
+#                 JDK >= 17 to run; the app's unit tests run on Java 21)
 #   Rust          rustup stable with rustfmt, clippy and the two musl targets
 #                 the daemon is released for, installed for the invoking user
 #                 and linked into /usr/local/bin
@@ -27,6 +28,9 @@ ANDROID_PLATFORM="platforms;android-36.1"
 ANDROID_BUILD_TOOLS="build-tools;36.0.0"
 ANDROID_CMDLINE_TOOLS_BUILD=13114758
 MIN_JDK=17
+# Robolectric needs this Java version for the unit tests. app/build.gradle.kts
+# asks Gradle for it as a toolchain; keep the two in step.
+UNIT_TEST_JDK=21
 RUST_TARGETS=(x86_64-unknown-linux-musl aarch64-unknown-linux-musl)
 RUST_COMPONENTS=(rustfmt clippy)
 RUST_LINKS=(cargo rustc rustup rustfmt cargo-fmt cargo-clippy clippy-driver)
@@ -82,6 +86,18 @@ jdk_ok() {
   [ -n "$major" ] && [ "$major" -ge "$MIN_JDK" ]
 }
 
+# A JDK for the unit tests that Gradle can find by itself: the default one, a
+# distribution package in /usr/lib/jvm, or one Gradle downloaded earlier.
+unit_test_jdk_ok() {
+  local release
+  [ "$(jdk_major)" = "$UNIT_TEST_JDK" ] && return 0
+  for release in /usr/lib/jvm/*/release "$target_home"/.gradle/jdks/*/release; do
+    [ -f "$release" ] || continue
+    grep -q "^JAVA_VERSION=\"${UNIT_TEST_JDK}[.\"]" "$release" && return 0
+  done
+  return 1
+}
+
 python_ok() {
   has python3 || return 1
   has uv || python3 -c 'import ensurepip, venv' >/dev/null 2>&1
@@ -123,6 +139,12 @@ run_checks() {
 
   echo "JDK"
   check_that "JDK >= $MIN_JDK (javac)" jdk_ok
+  if unit_test_jdk_ok; then
+    ok "JDK $UNIT_TEST_JDK for the app unit tests"
+  else
+    printf '  absent   JDK %s for the app unit tests\n' "$UNIT_TEST_JDK"
+    note "no JDK $UNIT_TEST_JDK found; Gradle downloads one into ~/.gradle/jdks the first time the app unit tests run (needs network access)."
+  fi
 
   echo "Rust"
   for tool in rustup cargo rustc; do check_cmd "$tool"; done
@@ -206,7 +228,7 @@ step "apt packages"
 packages=(ca-certificates curl git unzip tar build-essential python3 python3-venv)
 has gh || packages+=(gh)
 has docker || packages+=(docker.io)
-jdk_ok || packages+=(openjdk-21-jdk-headless)
+unit_test_jdk_ok || packages+=("openjdk-$UNIT_TEST_JDK-jdk-headless")
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq "${packages[@]}"
