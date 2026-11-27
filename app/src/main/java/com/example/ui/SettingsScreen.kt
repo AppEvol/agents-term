@@ -93,6 +93,7 @@ import com.example.ui.theme.sectionTitleColor
 import com.example.ui.theme.themedCorner
 import com.example.ui.theme.titleBarColors
 import com.example.ui.theme.titleBarTitleStyle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -473,7 +474,7 @@ fun SettingsScreen(
 
                         ThemedButton(
                             onClick = {
-                                scope.launch {
+                                scope.launch(Dispatchers.Main.immediate) {
                                     val shot = if (debugSettings.includeScreenshot) {
                                         captureWindowScreenshotBase64(context.findActivityOrNull())
                                     } else {
@@ -514,7 +515,7 @@ fun SettingsScreen(
                         ThemedOutlinedButton(
                             onClick = {
                                 if (isExportingZip) return@ThemedOutlinedButton
-                                scope.launch {
+                                scope.launch(Dispatchers.Main.immediate) {
                                     isExportingZip = true
                                     val shot = if (debugSettings.includeScreenshot) {
                                         captureWindowScreenshotBase64(context.findActivityOrNull())

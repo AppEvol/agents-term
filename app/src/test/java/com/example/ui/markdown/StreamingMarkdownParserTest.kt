@@ -1,13 +1,23 @@
 package com.example.ui.markdown
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class StreamingMarkdownParserTest {
@@ -227,6 +237,7 @@ class StreamingMarkdownParserTest {
             scope = this,
             parseDispatcher = bgDispatcher,
             syncThresholdChars = 128,
+            commitDispatcher = bgDispatcher,
             onAsyncCommit = { commits.add(it) },
         )
 
@@ -256,5 +267,45 @@ class StreamingMarkdownParserTest {
         assertEquals(1, commits.size)
         assertEquals(MarkdownParser.parse(large3), session.blocks)
         assertEquals(MarkdownParser.parse(large3), commits.single())
+    }
+
+    @Test
+    fun asyncSessionCommitsOnCommitDispatcherEvenUnderUnconfinedScope() {
+        val commitThreadRef = AtomicReference<Thread?>(null)
+        val commitExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "test-markdown-commit-main").also { commitThreadRef.set(it) }
+        }
+        val commitDispatcher = commitExecutor.asCoroutineDispatcher()
+        val unconfinedScope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher())
+        val observedCommitThread = AtomicReference<Thread?>(null)
+        val committed = CountDownLatch(1)
+        val largeDoc = (1..20).joinToString("\n\n") { "Paragraph $it with **bold** and `code`." }
+
+        try {
+            val session = AsyncMarkdownSession(
+                scope = unconfinedScope,
+                parseDispatcher = Dispatchers.Default,
+                syncThresholdChars = 0,
+                commitDispatcher = commitDispatcher,
+                onAsyncCommit = {
+                    observedCommitThread.set(Thread.currentThread())
+                    committed.countDown()
+                },
+            )
+
+            // Queue and launch on the commit thread (matching Compose UI thread ownership).
+            commitExecutor.submit {
+                session.requestBlocks(largeDoc, isStreaming = false)
+                session.launchIfNeeded()
+            }.get(5, TimeUnit.SECONDS)
+
+            assertTrue("Timed out waiting for async markdown commit", committed.await(5, TimeUnit.SECONDS))
+            assertSame(commitThreadRef.get(), observedCommitThread.get())
+            assertEquals(MarkdownParser.parse(largeDoc), session.blocks)
+        } finally {
+            unconfinedScope.cancel()
+            commitDispatcher.close()
+            commitExecutor.shutdownNow()
+        }
     }
 }
