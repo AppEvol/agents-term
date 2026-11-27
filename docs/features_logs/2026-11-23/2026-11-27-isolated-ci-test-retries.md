@@ -1,2 +1,2 @@
-- CI retries individual failed tests up to five times and requires two consecutive isolated passes for recovery. Recent failures affected both [Android emulator tests](https://github.com/AppEvol/agents-term/issues/155) and [Rust daemon tests](https://github.com/AppEvol/agents-term/issues/160).
+- CI retries individual failed tests up to five times and requires two consecutive isolated passes for recovery. [PR #168](https://github.com/AppEvol/agents-term/pull/168)
 - Reports count each test once per matrix variant and retain the first failure and retry outcomes so recovered failures remain visible after an APK ships.

@@ -15,18 +15,18 @@ from typing import Callable, Dict, List, Optional, Sequence
 import allure_results
 from test_retries import record_attempt, retry_case
 
+CARGO_COUNTS = re.compile(r"(\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;")
+CARGO_SELECTOR = re.compile(r"error: (?:doc)?test failed, to rerun pass `(--(?:bin|test) [\w-]+|--lib|--doc)`")
+
 
 def run_python(cmd: List[str], folder: Path) -> int:
     complete = folder / "unittest-complete"
+    complete.unlink(missing_ok=True)
     code = subprocess.run([*cmd, "--completion-file", str(complete)], check=False).returncode
     if not complete.is_file():
         return 2
     complete.unlink()
     return code
-
-
-CARGO_COUNTS = re.compile(r"(\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;")
-CARGO_SELECTOR = re.compile(r"error: (?:doc)?test failed, to rerun pass `(--(?:bin|test) [\w-]+|--lib|--doc)`")
 
 
 def cargo_failed_targets(log: str, records: List[dict]) -> Optional[Dict[str, List[str]]]:
@@ -61,7 +61,7 @@ def cargo_failed_targets(log: str, records: List[dict]) -> Optional[Dict[str, Li
                 return None
             failed = target if summary[1] == "FAILED" else None
             target = None
-        elif line.startswith("error:"):
+        elif target is None and line.startswith("error:"):
             selector = CARGO_SELECTOR.fullmatch(line)
             if selector and failed:
                 selectors[failed] = selector[1].split()
@@ -82,7 +82,7 @@ def retry_results(
     failure_code: int,
 ) -> int:
     def retry(result: dict, attempt: int) -> Optional[str]:
-        with tempfile.TemporaryDirectory(dir=output) as scratch:
+        with tempfile.TemporaryDirectory(dir=output.parent) as scratch:
             folder = Path(scratch)
             code = execute(result, folder)
             records = read_results(folder)
@@ -130,7 +130,11 @@ def main(argv: Sequence[str]) -> int:
             test_id = case["fullName"][len(prefix) :]
             return run_python([*cmd, "--test-id", test_id, "--output", str(folder)], folder)
 
-        failures = [case for case in read_results(output) if case["status"] in ("failed", "broken")]
+        records = read_results(output)
+        if len({case["historyId"] for case in records}) != len(records):
+            print("Duplicate unittest case IDs prevent isolated recovery", file=sys.stderr)
+            return 1
+        failures = [case for case in records if case["status"] in ("failed", "broken")]
         return retry_results(failures, output, isolated_python, failure_code=1)
     if args.subcommand != "cargo":
         sys.exit("Expected unittest or cargo suite")
