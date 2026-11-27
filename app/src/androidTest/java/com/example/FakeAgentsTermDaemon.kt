@@ -10,6 +10,7 @@ import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DeniedAction
+import com.example.data.EXPECTED_DAEMON_PROTOCOL_VERSION
 import com.example.data.FsDirectoryEntry
 import com.example.data.FsListResponse
 import com.example.data.HerdrMoshi
@@ -52,6 +53,7 @@ class FakeAgentsTermDaemon(
     val hostname: String = "ci-test-vm",
     initialTabs: List<TabRecord> = emptyList(),
     initialMessages: Map<String, List<ChatMessage>> = emptyMap(),
+    protocolVersion: Int? = EXPECTED_DAEMON_PROTOCOL_VERSION,
 ) : AutoCloseable {
 
     private val lock = Any()
@@ -113,7 +115,10 @@ class FakeAgentsTermDaemon(
     }
 
     private val serverInfo = ServerInfo(
-        version = "0.1.0-e2e",
+        version = "0.3.0-e2e",
+        protocolVersion = protocolVersion,
+        commit = "e2e0000",
+        runtime = "rust",
         hostname = hostname,
         tailscaleIp = "127.0.0.1",
         defaultCwd = "/home/ci",

@@ -143,6 +143,7 @@ data class AgentUsageUiState(
     val isLoading: Boolean = false,
     val response: AgentUsageResponse? = null,
     val error: String? = null,
+    val needsDaemonUpdate: Boolean = false,
 )
 
 fun formatUsagePercent(percent: Double): String {
@@ -320,6 +321,10 @@ data class PtyCapabilities(
 @JsonClass(generateAdapter = true)
 data class ServerInfo(
     val version: String = "",
+    val protocolVersion: Int? = null,
+    val commit: String? = null,
+    val buildHash: String? = null,
+    val runtime: String? = null,
     val hostname: String = "",
     val tailscaleIp: String? = null,
     val defaultCwd: String = "/home",

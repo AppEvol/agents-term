@@ -286,4 +286,12 @@
     <string name="pty_unsafe_paste_title">Paste multiline text?</string>
     <string name="pty_unsafe_paste_body">This clipboard text contains newlines or control characters that may run commands immediately in the shell.</string>
     <string name="pty_unsafe_paste_confirm">Paste anyway</string>
+    <string name="status_daemon_outdated">VM daemon (%1$s) is older than this app — update recommended.</string>
+    <string name="action_update_daemon">Update</string>
+    <string name="action_dismiss_daemon_warning">Dismiss daemon update warning</string>
+    <string name="settings_version_summary">App %1$s · Daemon %2$s</string>
+    <string name="settings_daemon_outdated_title">VM daemon is out of date</string>
+    <string name="settings_daemon_outdated_body">This app expects VM daemon protocol v%1$d (connected: %2$s). Update via SSH Auto-Setup below, or run `sh daemon-rs/install.sh` on your VM.</string>
+    <string name="settings_update_daemon_button">Update VM Daemon (SSH Auto-Setup)</string>
+    <string name="action_update_vm_daemon">Update VM Daemon</string>
 </resources>

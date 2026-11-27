@@ -39,6 +39,8 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.SystemUpdateAlt
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -73,12 +75,14 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.AppThemeId
 import com.example.data.ConnectionState
+import com.example.data.DaemonCompatibilityInfo
 import com.example.data.DebugDumpUploadState
 import com.example.data.DebugEvent
 import com.example.data.DebugSharingSettings
 import com.example.data.SshProfile
 import com.example.data.WorkspaceState
 import com.example.data.captureWindowScreenshotBase64
+import com.example.data.evaluateDaemonCompatibility
 import com.example.data.shareDebugBundleFile
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.MonoFontFamily
@@ -118,6 +122,7 @@ fun SettingsScreen(
     recentEventsProvider: () -> List<DebugEvent>,
     onBack: () -> Unit,
     onOpenVmConnection: () -> Unit,
+    onUpdateDaemon: () -> Unit = onOpenVmConnection,
     onUpdateDebugSettings: ((DebugSharingSettings) -> DebugSharingSettings) -> Unit,
     onUploadDumpToVm: (note: String?, screenshotBase64: String?) -> Unit,
     onExportOfflineZip: suspend (note: String?, screenshotBase64: String?) -> Result<File>,
@@ -136,6 +141,9 @@ fun SettingsScreen(
     var isExportingZip by remember { mutableStateOf(false) }
 
     val isConnected = workspaceState.connectionState == ConnectionState.CONNECTED && workspaceState.config.isValid
+    val daemonCompat = remember(workspaceState.serverInfo) {
+        evaluateDaemonCompatibility(workspaceState.serverInfo)
+    }
 
     LaunchedEffect(copiedPath) {
         if (copiedPath) {
@@ -251,7 +259,31 @@ fun SettingsScreen(
                                     fontFamily = MonoFontFamily,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                if (workspaceState.serverInfo != null) {
+                                    Text(
+                                        text = stringResource(
+                                            R.string.settings_version_summary,
+                                            daemonCompat.appVersionLabel,
+                                            daemonCompat.daemonVersionLabel,
+                                        ),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = MonoFontFamily,
+                                        color = if (daemonCompat.isOutdated) {
+                                            AppTheme.colors.warning
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.testTag("settings_version_summary"),
+                                    )
+                                }
                             }
+                        }
+
+                        if (daemonCompat.isOutdated) {
+                            OutdatedDaemonSettingsCard(
+                                daemonCompat = daemonCompat,
+                                onUpdateDaemon = onUpdateDaemon,
+                            )
                         }
 
                         ThemedOutlinedButton(
@@ -786,5 +818,67 @@ private fun SettingsSwitchRow(
             onCheckedChange = onCheckedChange,
             modifier = Modifier.testTag(testTag),
         )
+    }
+}
+
+@Composable
+private fun OutdatedDaemonSettingsCard(
+    daemonCompat: DaemonCompatibilityInfo,
+    onUpdateDaemon: () -> Unit,
+) {
+    Surface(
+        shape = themedCorner(12.dp),
+        color = AppTheme.colors.warning.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, AppTheme.colors.warning.copy(alpha = 0.45f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("settings_outdated_daemon_card"),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Warning,
+                    contentDescription = null,
+                    tint = AppTheme.colors.warning,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    text = stringResource(R.string.settings_daemon_outdated_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            Text(
+                text = stringResource(
+                    R.string.settings_daemon_outdated_body,
+                    daemonCompat.expectedProtocolVersion,
+                    daemonCompat.daemonVersionLabel,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            ThemedButton(
+                onClick = onUpdateDaemon,
+                shape = themedCorner(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_update_daemon_button"),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.SystemUpdateAlt,
+                    contentDescription = null,
+                    modifier = Modifier.size(17.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.settings_update_daemon_button))
+            }
+        }
     }
 }

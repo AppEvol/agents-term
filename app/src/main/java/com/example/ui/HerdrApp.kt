@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -97,11 +98,14 @@ import com.example.R
 import com.example.data.AgentUsageUiState
 import com.example.data.ChatMessage
 import com.example.data.ConnectionState
+import com.example.data.DaemonCompatibilityInfo
 import com.example.data.ModelSlashCommand
 import com.example.data.TabRecord
 import com.example.data.WorkspaceState
 import com.example.data.attachmentLimitsForTab
 import com.example.data.captureWindowScreenshotBase64
+import com.example.data.daemonIdentityKey
+import com.example.data.evaluateDaemonCompatibility
 import com.example.data.formatModelChipLabel
 import com.example.data.parseModelSlashCommand
 import com.example.data.resolveAgentModelCatalog
@@ -156,6 +160,7 @@ fun HerdrApp(viewModel: MainViewModel) {
     val state by viewModel.chromeState.collectAsStateWithLifecycle()
     val activeDraft = rememberActiveDraft(state)
     val showConnect by viewModel.showConnectScreen.collectAsStateWithLifecycle()
+    val preferSshForConnect by viewModel.preferSshModeForConnect.collectAsStateWithLifecycle()
     val showSettings by viewModel.showSettingsScreen.collectAsStateWithLifecycle()
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val pendingPairing by viewModel.pendingPairingConfig.collectAsStateWithLifecycle()
@@ -200,6 +205,7 @@ fun HerdrApp(viewModel: MainViewModel) {
             recentEventsProvider = { viewModel.recentDebugEvents() },
             onBack = { viewModel.closeAppSettings() },
             onOpenVmConnection = { viewModel.openConnectionSettings() },
+            onUpdateDaemon = { viewModel.openDaemonUpdate() },
             onUpdateDebugSettings = { viewModel.updateDebugSettings(it) },
             onUploadDumpToVm = { note, shot ->
                 viewModel.uploadDebugDumpToVm(note = note, screenshotBase64 = shot)
@@ -230,7 +236,8 @@ fun HerdrApp(viewModel: MainViewModel) {
             onConsumedPendingPairing = { viewModel.clearPendingPairingConfig() },
             onConsumedPendingSshAutofill = { viewModel.clearPendingSshAutofill() },
             onOpenAppSettings = { viewModel.openAppSettings() },
-            preferSshMode = state.connectionState == ConnectionState.AUTH_ERROR && sshProfile.username.isNotBlank(),
+            preferSshMode = preferSshForConnect ||
+                (state.connectionState == ConnectionState.AUTH_ERROR && sshProfile.username.isNotBlank()),
         )
         return
     }
@@ -438,6 +445,7 @@ fun HerdrApp(viewModel: MainViewModel) {
                 onDeleteTab = { handleDeleteTab(it) },
                 onOpenRecentlyClosed = { openRecentlyClosedSheet() },
                 onOpenSettings = { viewModel.openConnectionSettings() },
+                onUpdateDaemon = { viewModel.openDaemonUpdate() },
                 onOpenAppSettings = { viewModel.openAppSettings() },
                 onReconnect = { viewModel.reconnectNow() },
                 onSendMessage = { rawText ->
@@ -585,6 +593,10 @@ fun HerdrApp(viewModel: MainViewModel) {
             isRefreshing = isRefreshingModels,
             usageState = usageByAgent[current.agent] ?: AgentUsageUiState(),
             onCheckUsage = { viewModel.usageController.checkUsage(current.agent) },
+            onUpdateDaemon = {
+                showModelPicker = false
+                viewModel.openDaemonUpdate()
+            },
             onRefresh = { viewModel.refreshModelsForAgent(current.agent, forceRefresh = true) },
             onSelectModel = { chosenModel ->
                 showModelPicker = false
@@ -987,6 +999,7 @@ internal fun WorkspaceScaffold(
     onDeleteTab: (String) -> Unit,
     onOpenRecentlyClosed: () -> Unit = {},
     onOpenSettings: () -> Unit,
+    onUpdateDaemon: () -> Unit = onOpenSettings,
     onOpenAppSettings: () -> Unit,
     onReconnect: () -> Unit,
     onSendMessage: (String) -> Unit,
@@ -1004,6 +1017,11 @@ internal fun WorkspaceScaffold(
     val activeTab = state.activeTab
     val finishedTabIds = state.finishedTabIds
     val activeTabFinished = activeTab != null && activeTab.id in finishedTabIds
+    val daemonCompat = remember(state.serverInfo) { evaluateDaemonCompatibility(state.serverInfo) }
+    val daemonIdentity = remember(state.serverInfo, state.config.host, state.config.port) {
+        state.serverInfo?.daemonIdentityKey(state.config.host, state.config.port)
+    }
+    var dismissedOutdatedDaemonKey by remember { mutableStateOf<String?>(null) }
     val activeModelInfo = remember(activeTab?.agent, activeTab?.model, state.serverInfo?.agents) {
         if (activeTab == null || activeTab.agent == "shell") {
             null
@@ -1325,6 +1343,20 @@ internal fun WorkspaceScaffold(
                     }
                 }
 
+                // Outdated VM daemon banner when connected to an older daemon
+                val isConnectedToOutdatedDaemon =
+                    state.connectionState == ConnectionState.CONNECTED && daemonCompat.isOutdated
+                if (isConnectedToOutdatedDaemon &&
+                    daemonIdentity != null &&
+                    dismissedOutdatedDaemonKey != daemonIdentity
+                ) {
+                    OutdatedDaemonBanner(
+                        daemonCompat = daemonCompat,
+                        onUpdate = onUpdateDaemon,
+                        onDismiss = { dismissedOutdatedDaemonKey = daemonIdentity },
+                    )
+                }
+
                 // Quick horizontal tab strip on compact screens when multiple tabs exist
                 if (!isExpanded && state.tabs.size > 1) {
                     QuickTabStrip(
@@ -1394,6 +1426,63 @@ internal fun WorkspaceScaffold(
                 attachments = composerAttachments,
                 modifier = Modifier.padding(innerPadding),
             )
+        }
+    }
+}
+
+@Composable
+private fun OutdatedDaemonBanner(
+    daemonCompat: DaemonCompatibilityInfo,
+    onUpdate: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        color = AppTheme.colors.warning.copy(alpha = 0.2f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("outdated_daemon_banner"),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Warning,
+                contentDescription = null,
+                tint = AppTheme.colors.warning,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = stringResource(
+                    R.string.status_daemon_outdated,
+                    daemonCompat.daemonVersionLabel,
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            ThemedTextButton(
+                onClick = onUpdate,
+                modifier = Modifier.testTag("banner_update_daemon_button"),
+            ) {
+                Text(stringResource(R.string.action_update_daemon))
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .size(32.dp)
+                    .testTag("banner_dismiss_outdated_daemon_button"),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = stringResource(R.string.action_dismiss_daemon_warning),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
     }
 }
