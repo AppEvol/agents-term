@@ -23,6 +23,12 @@ pub const CLOSED_TAB_RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 const PRUNE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateTabError {
+    InvalidCwd(String),
+    OpenTabLimitReached,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviveTabError {
     NotFound,
@@ -82,13 +88,20 @@ fn normalize_queued_messages(raw: Option<&Value>) -> Vec<Value> {
 }
 
 pub fn resolve_abs_path(raw: &str) -> String {
-    let p = Path::new(raw);
-    let joined = if p.is_absolute() {
-        p.to_path_buf()
+    let trimmed = raw.trim();
+    let expanded = if trimmed == "~" {
+        home_dir()
+    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+        home_dir().join(rest)
+    } else {
+        std::path::PathBuf::from(trimmed)
+    };
+    let joined = if expanded.is_absolute() {
+        expanded
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| home_dir())
-            .join(p)
+            .join(expanded)
     };
     let mut normalized = std::path::PathBuf::new();
     for comp in joined.components() {
@@ -104,6 +117,15 @@ pub fn resolve_abs_path(raw: &str) -> String {
         "/".to_string()
     } else {
         normalized.to_string_lossy().to_string()
+    }
+}
+
+pub fn validate_working_dir(raw: &str) -> Result<String, String> {
+    let resolved = resolve_abs_path(raw);
+    match fs::metadata(&resolved) {
+        Ok(meta) if meta.is_dir() => Ok(resolved),
+        Ok(_) => Err(format!("Working directory is not a directory: {resolved}")),
+        Err(_) => Err(format!("Working directory does not exist: {resolved}")),
     }
 }
 
@@ -547,12 +569,13 @@ impl StateStore {
         permission_mode: Option<&Value>,
         model: Option<&Value>,
         system_prompt: Option<&Value>,
-    ) -> Option<Value> {
+    ) -> Result<Value, CreateTabError> {
         let now = now_ms();
         let tab_id = format!("tab_{}", rand_hex(6));
-        let raw_cwd =
-            strip_or_none(cwd).unwrap_or_else(|| home_dir().to_string_lossy().to_string());
-        let resolved_cwd = resolve_abs_path(&raw_cwd);
+        let resolved_cwd = match strip_or_none(cwd) {
+            Some(raw_cwd) => validate_working_dir(&raw_cwd).map_err(CreateTabError::InvalidCwd)?,
+            None => resolve_abs_path(&home_dir().to_string_lossy()),
+        };
         let folder = Path::new(&resolved_cwd)
             .file_name()
             .and_then(|s| s.to_str())
@@ -592,7 +615,7 @@ impl StateStore {
         {
             let mut inner = self.inner.lock().unwrap();
             if inner.tabs.len() >= MAX_OPEN_TABS {
-                return None;
+                return Err(CreateTabError::OpenTabLimitReached);
             }
             inner.tabs.push(tab.clone());
             inner.messages_by_tab.insert(tab_id.clone(), Vec::new());
@@ -602,7 +625,7 @@ impl StateStore {
             inner.deleted_tab_dirs.remove(&tab_id);
         }
         self.schedule_save();
-        Some(tab)
+        Ok(tab)
     }
 
     pub fn update_tab(&self, tab_id: &str, patch: Map<String, Value>) -> Option<Value> {
@@ -668,6 +691,28 @@ impl StateStore {
         let mut patch = Map::new();
         patch.insert("queuedMessages".into(), Value::Array(queued));
         self.update_tab(tab_id, patch)
+    }
+
+    pub fn pop_next_queued_message(&self, tab_id: &str) -> Option<(Value, Value)> {
+        let result = {
+            let mut inner = self.inner.lock().unwrap();
+            let tab = inner
+                .tabs
+                .iter_mut()
+                .find(|t| t.get("id").and_then(Value::as_str) == Some(tab_id))?;
+            let obj = tab.as_object_mut()?;
+            let queued = obj.get_mut("queuedMessages")?.as_array_mut()?;
+            if queued.is_empty() {
+                return None;
+            }
+            let item = queued.remove(0);
+            obj.insert("updatedAt".into(), json!(now_ms()));
+            let updated_tab = tab.clone();
+            inner.mark_index_dirty();
+            (updated_tab, item)
+        };
+        self.schedule_save();
+        Some(result)
     }
 
     pub fn pop_queued_messages(&self, tab_id: &str) -> Option<(Value, Vec<Value>)> {

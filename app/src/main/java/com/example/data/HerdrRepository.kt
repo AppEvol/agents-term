@@ -439,6 +439,34 @@ private fun applyWorkspaceEnvelope(
     )
 }
 
+private fun applyTabMessagesLoaded(
+    state: WorkspaceState,
+    tabId: String,
+    res: TabMessagesResponse,
+): WorkspaceState = state.copy(
+    tabs = state.tabs.map { if (it.id == res.tab.id) res.tab else it },
+    messagesByTab = state.messagesByTab + (tabId to res.messages),
+    loadingTabIds = state.loadingTabIds - tabId,
+)
+
+private fun applyDeletedTabWithPendingFlush(
+    state: WorkspaceState,
+    pendingDeltas: PendingDeltaBuffer,
+    tabId: String,
+    resp: DeleteTabResponse?,
+): WorkspaceState {
+    val remaining = state.tabs.filterNot { it.id == tabId }
+    val candidateSelected = if (state.selectedTabId == tabId) remaining.lastOrNull()?.id else state.selectedTabId
+    val flushed = candidateSelected?.let { pendingDeltas.applyTo(state, tabId = it, consume = true) } ?: state
+    return applyDeletedTab(flushed, tabId, resp)
+}
+
+private fun computeReconnectDelayMs(
+    baseDelayMs: Long,
+    maxDelayMs: Long,
+    attempt: Int,
+): Long = (baseDelayMs * (1 shl attempt.coerceAtMost(4))).coerceAtMost(maxDelayMs)
+
 private fun applySocketClosed(
     state: WorkspaceState,
     stayConnected: Boolean,
@@ -786,9 +814,7 @@ class HerdrRepository(
         synchronized(socketLock) {
             if (expectedGeneration != socketGeneration || !shouldStayConnected || !isInForeground) return
             reconnectJob?.cancel()
-            val delayMs = (reconnectBaseDelayMs * (1 shl reconnectAttempt.coerceAtMost(4)))
-                .coerceAtMost(reconnectMaxDelayMs)
-            reconnectAttempt++
+            val delayMs = computeReconnectDelayMs(reconnectBaseDelayMs, reconnectMaxDelayMs, reconnectAttempt++)
             reconnectJob = scope.launch {
                 delay(delayMs)
                 openSocketNow(config, expectedGeneration = expectedGeneration)
@@ -832,13 +858,7 @@ class HerdrRepository(
                     )
                     synchronized(socketLock) {
                         pendingDeltas.clear(tabId = tabId)
-                        _state.update { cur ->
-                            cur.copy(
-                                tabs = cur.tabs.map { if (it.id == res.tab.id) res.tab else it },
-                                messagesByTab = cur.messagesByTab + (tabId to res.messages),
-                                loadingTabIds = cur.loadingTabIds - tabId,
-                            )
-                        }
+                        _state.update { applyTabMessagesLoaded(it, tabId, res) }
                     }
                 }
                 .onFailure { err ->
@@ -949,10 +969,7 @@ class HerdrRepository(
             synchronized(socketLock) {
                 pendingDeltas.clear(tabId = tabId)
                 _state.update { cur ->
-                    val remaining = cur.tabs.filterNot { it.id == tabId }
-                    val candidateSelected = if (cur.selectedTabId == tabId) remaining.lastOrNull()?.id else cur.selectedTabId
-                    val flushed = candidateSelected?.let { pendingDeltas.applyTo(cur, tabId = it, consume = true) } ?: cur
-                    applyDeletedTab(flushed, tabId, resp).also { nextSelected = it.selectedTabId }
+                    applyDeletedTabWithPendingFlush(cur, pendingDeltas, tabId, resp).also { nextSelected = it.selectedTabId }
                 }
             }
             settings.saveLastTabId(nextSelected)
@@ -1007,6 +1024,24 @@ class HerdrRepository(
             Unit
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to send message")
+        }
+    }
+
+    suspend fun sendStdin(
+        tabId: String,
+        data: String? = null,
+        eof: Boolean = false,
+    ): Result<Unit> {
+        val cfg = _state.value.config
+        debugRecorder?.record(
+            "ui",
+            "send_stdin",
+            "Sending stdin to tab=$tabId len=${data?.length ?: 0} eof=$eof",
+        )
+        return runCatching {
+            api.sendStdin(cfg, tabId, data = data, eof = eof)
+        }.onFailure { err ->
+            showBanner(err.message ?: "Failed to send input")
         }
     }
 

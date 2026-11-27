@@ -8,6 +8,7 @@ mod log;
 mod models;
 mod runner;
 mod server;
+mod shell;
 mod store;
 mod usage;
 mod util;

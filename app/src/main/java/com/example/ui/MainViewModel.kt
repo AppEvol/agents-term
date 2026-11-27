@@ -48,6 +48,7 @@ import com.example.data.generateDebugDumpId
 import com.example.data.parseSshSetupUri
 import com.example.data.sanitizeDebugText
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -155,6 +156,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isRefreshingModels: StateFlow<Boolean> = _isRefreshingModels.asStateFlow()
 
     val usageController = AgentUsageController(repo = repo, scope = viewModelScope)
+    val newTabController = NewTabController(repo = repo, scope = viewModelScope)
+    val createTabError: StateFlow<String?> = newTabController.error
+    val isCreatingTab: StateFlow<Boolean> = newTabController.isCreating
 
     /** Images of sent messages, for the transcript, and images attached to unsent messages. */
     val attachmentImages = AttachmentImageStore(application.cacheDir) { tabId, attachmentId ->
@@ -176,7 +180,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val appStateReporter = AppStateReporter(
         recorder = debugRecorder,
-        sources = ViewModelAppStateSources(),
+        sources = ViewModelAppStateSources(
+            app = application,
+            repo = repo,
+            readDebugSettings = { _debugSettings.value },
+            readUiState = { buildAppStateUiMap() },
+            uploadDump = { note, shot -> performDebugDumpUpload(note = note, screenshotBase64 = shot) },
+        ),
         isEnabled = { _debugSettings.value.remoteInspectionActive },
         appVersion = appVersionLabel,
         device = buildDeviceInfoSummary(),
@@ -304,31 +314,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun buildDebugDumpRequest(
         note: String?,
         screenshotBase64: String?,
-    ): DebugDumpUploadRequest {
-        val app = getApplication<Application>()
-        val cfg = _debugSettings.value
-        val wsState = repo.snapshotStateWithPendingDeltas()
-        val logcat = if (cfg.includeLogcat) collectAppLogcat(maxLines = 400) else null
-        val lastCrash = CrashLogStore.readLastCrash(app)
-        val connectionSummary = if (wsState.config.isValid) {
-            "${wsState.config.host}:${wsState.config.port} (${wsState.connectionState.name})"
-        } else {
-            "unconfigured (${wsState.connectionState.name})"
-        }
-        return DebugDumpUploadRequest(
-            dumpId = generateDebugDumpId(),
-            createdAt = System.currentTimeMillis(),
-            note = note?.trim()?.takeIf { it.isNotEmpty() },
-            appVersion = appVersionLabel,
-            deviceInfo = buildDeviceInfoSummary(),
-            connectionSummary = connectionSummary,
-            workspaceStateJson = buildSanitizedWorkspaceJson(wsState),
-            eventsNdjson = debugRecorder.toNdjson(),
-            logcat = logcat,
-            lastCrash = lastCrash,
-            screenshotPngBase64 = if (cfg.includeScreenshot) screenshotBase64 else null,
-        )
-    }
+    ): DebugDumpUploadRequest = buildDebugDumpPayload(
+        app = getApplication(),
+        cfg = _debugSettings.value,
+        wsState = repo.snapshotStateWithPendingDeltas(),
+        debugRecorder = debugRecorder,
+        appVersionLabel = appVersionLabel,
+        note = note,
+        screenshotBase64 = screenshotBase64,
+    )
 
     fun uploadDebugDumpToVm(
         note: String? = null,
@@ -391,97 +385,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Android-backed data for [AppStateReporter]; respects the user's debug sharing toggles. */
-    private inner class ViewModelAppStateSources : AppStateSources {
-        override fun uiState(): Map<String, Any?> {
-            val debug = _debugSettings.value
-            val bootstrap = _bootstrapState.value
-            return mapOf(
-                "screen" to when {
-                    _showSettingsScreen.value -> "settings"
-                    _showConnectScreen.value -> "connect"
-                    else -> "workspace"
-                },
-                "theme" to _appTheme.value.storageKey,
-                "appInForeground" to (ForegroundActivityTracker.current() != null),
-                "isTestingConnection" to _isTestingConnection.value,
-                "hasPendingPairing" to (_pendingPairingConfig.value != null),
-                "bootstrap" to mapOf(
-                    "phase" to bootstrap.phase.name,
-                    "isRunning" to bootstrap.isRunning,
-                    "errorMessage" to bootstrap.errorMessage?.let { sanitizeDebugText(it) },
-                    "isHostKeyMismatch" to bootstrap.isHostKeyMismatch,
-                    "recentLogs" to bootstrap.logs.takeLast(20).map { sanitizeDebugText(it) },
-                ),
-                "debugSettings" to mapOf(
-                    "enabled" to debug.enabled,
-                    "includeScreenshot" to debug.includeScreenshot,
-                    "includeLogcat" to debug.includeLogcat,
-                    "autoUploadOnError" to debug.autoUploadOnError,
-                    "remoteInspectionEnabled" to debug.remoteInspectionEnabled,
-                    "remoteControlEnabled" to debug.remoteControlEnabled,
-                ),
-                "debugEventCount" to debugRecorder.count,
-                "hasLastCrash" to CrashLogStore.hasLastCrash(getApplication()),
-                "lastDebugUpload" to _debugUploadState.value.let {
-                    mapOf(
-                        "isUploading" to it.isUploading,
-                        "lastDumpId" to it.lastDumpId,
-                        "lastRemoteDir" to it.lastRemoteDir,
-                        "lastUploadedAt" to it.lastUploadedAt,
-                        "lastError" to it.lastError?.let { e -> sanitizeDebugText(e) },
-                    )
-                },
-            )
-        }
-
-        override fun workspaceJson(): String = buildSanitizedWorkspaceJson(repo.snapshotStateWithPendingDeltas())
-
-        override suspend fun logcat(lines: Int): String {
-            if (!_debugSettings.value.includeLogcat) {
-                throw AppStateCommandException("Logcat sharing is turned off in the app (Settings > Debug sharing).")
-            }
-            return collectAppLogcat(maxLines = lines)
-                ?: throw AppStateCommandException("Logcat is unavailable on this device.")
-        }
-
-        override fun lastCrash(): String? = CrashLogStore.readLastCrash(getApplication())
-
-        override suspend fun screenshotPngBase64(): String {
-            if (!_debugSettings.value.includeScreenshot) {
-                throw AppStateCommandException("Screenshot sharing is turned off in the app (Settings > Debug sharing).")
-            }
-            val activity = ForegroundActivityTracker.current()
-                ?: throw AppStateCommandException("The app is in the background; screenshots need it on screen.")
-            val shot = captureWindowScreenshotBase64(activity)
-                ?: throw AppStateCommandException("Screenshot capture failed.")
-            withContext(Dispatchers.Main) {
-                Toast.makeText(activity, R.string.app_state_screenshot_toast, Toast.LENGTH_SHORT).show()
-            }
-            return shot
-        }
-
-        override suspend fun uploadDump(note: String?, includeScreenshot: Boolean): Map<String, Any?> {
-            val shot = if (includeScreenshot && _debugSettings.value.includeScreenshot) {
-                ForegroundActivityTracker.current()?.let { captureWindowScreenshotBase64(it) }
-            } else {
-                null
-            }
-            val resp = performDebugDumpUpload(
-                note = note?.trim()?.takeIf { it.isNotEmpty() } ?: "Requested by a VM agent (agents_term_app_cli dump)",
-                screenshotBase64 = shot,
-            ).getOrElse { err ->
-                throw AppStateCommandException("Dump upload failed: ${err.message ?: err::class.java.simpleName}")
-            }
-            return mapOf(
-                "dumpId" to resp.dumpId,
-                "remoteDir" to resp.remoteDir,
-                "latestSymlink" to resp.latestSymlink,
-                "files" to resp.files,
-                "includedScreenshot" to (shot != null),
-            )
-        }
-    }
+    private fun buildAppStateUiMap(): Map<String, Any?> = formatAppStateUiMap(
+        screen = when {
+            _showSettingsScreen.value -> "settings"
+            _showConnectScreen.value -> "connect"
+            else -> "workspace"
+        },
+        themeKey = _appTheme.value.storageKey,
+        isTestingConnection = _isTestingConnection.value,
+        hasPendingPairing = _pendingPairingConfig.value != null,
+        bootstrap = _bootstrapState.value,
+        debug = _debugSettings.value,
+        debugEventCount = debugRecorder.count,
+        hasLastCrash = CrashLogStore.hasLastCrash(getApplication()),
+        upload = _debugUploadState.value,
+    )
 
     suspend fun createOfflineDebugZip(
         note: String? = null,
@@ -642,32 +560,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repo.selectTab(tabId)
     }
 
-    fun createTab(
-        agent: String,
-        cwd: String?,
-        permissionMode: String,
-        title: String?,
-        model: String? = null,
-        systemPrompt: String? = null,
-        onCreated: () -> Unit = {},
-    ) {
-        viewModelScope.launch {
-            val res = repo.createTab(
-                CreateTabRequest(
-                    agent = agent,
-                    title = title?.takeIf { it.isNotBlank() },
-                    cwd = cwd?.takeIf { it.isNotBlank() },
-                    permissionMode = permissionMode,
-                    model = model?.trim()?.takeIf { it.isNotEmpty() },
-                    systemPrompt = if (agent == "shell") null else systemPrompt?.trim().orEmpty(),
-                ),
-            )
-            if (res.isSuccess) {
-                onCreated()
-            }
-        }
-    }
-
     fun renameTab(tabId: String, newTitle: String) {
         viewModelScope.launch {
             repo.updateTab(tabId, UpdateTabRequest(title = newTitle))
@@ -801,6 +693,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun sendShellStdin(data: String? = null, eof: Boolean = false) {
+        val tab = state.value.activeTab ?: return
+        if (tab.agent != "shell") return
+        viewModelScope.launch {
+            repo.sendStdin(tab.id, data = data, eof = eof)
+        }
+    }
+
     fun retryLastUserPromptWithFullAccess() {
         val activeTab = state.value.activeTab ?: return
         val lastUser = state.value.activeMessages.lastOrNull { it.role == "user" } ?: return
@@ -829,10 +729,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> = repo.loadInitialDirectories(preferredPath)
-
-    suspend fun loadDirectories(path: String?): Result<FsListResponse> = repo.listDirectories(path)
-
     fun clearBanner() {
         repo.clearBanner()
     }
@@ -844,5 +740,192 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         @Volatile
         internal var latestDebugRecorder: DebugRecorder? = null
+    }
+}
+
+/** Coordinates directory browsing and tab creation state (including inline errors) for NewTabSheet. */
+class NewTabController(
+    private val repo: HerdrRepository,
+    private val scope: CoroutineScope,
+) {
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _isCreating = MutableStateFlow(false)
+    val isCreating: StateFlow<Boolean> = _isCreating.asStateFlow()
+
+    fun clearError() {
+        _error.value = null
+    }
+
+    suspend fun loadInitialDirectories(preferredPath: String?): Result<FsListResponse> = repo.loadInitialDirectories(preferredPath)
+
+    suspend fun loadDirectories(path: String?): Result<FsListResponse> = repo.listDirectories(path)
+
+    fun createTab(
+        agent: String,
+        cwd: String?,
+        permissionMode: String,
+        title: String?,
+        model: String? = null,
+        systemPrompt: String? = null,
+        onCreated: () -> Unit = {},
+    ) {
+        if (_isCreating.value) return
+        scope.launch {
+            _isCreating.value = true
+            _error.value = null
+            try {
+                val res = repo.createTab(
+                    CreateTabRequest(
+                        agent = agent,
+                        title = title?.takeIf { it.isNotBlank() },
+                        cwd = cwd?.takeIf { it.isNotBlank() },
+                        permissionMode = permissionMode,
+                        model = model?.trim()?.takeIf { it.isNotEmpty() },
+                        systemPrompt = if (agent == "shell") null else systemPrompt?.trim().orEmpty(),
+                    ),
+                )
+                res.onSuccess {
+                    _error.value = null
+                    onCreated()
+                }.onFailure { err ->
+                    _error.value = err.message ?: "Failed to create tab"
+                }
+            } finally {
+                _isCreating.value = false
+            }
+        }
+    }
+}
+
+private suspend fun buildDebugDumpPayload(
+    app: Application,
+    cfg: DebugSharingSettings,
+    wsState: WorkspaceState,
+    debugRecorder: DebugRecorder,
+    appVersionLabel: String,
+    note: String? = null,
+    screenshotBase64: String? = null,
+): DebugDumpUploadRequest {
+    val logcat = if (cfg.includeLogcat) collectAppLogcat(maxLines = 400) else null
+    val lastCrash = CrashLogStore.readLastCrash(app)
+    val connectionSummary = if (wsState.config.isValid) {
+        "${wsState.config.host}:${wsState.config.port} (${wsState.connectionState.name})"
+    } else {
+        "unconfigured (${wsState.connectionState.name})"
+    }
+    return DebugDumpUploadRequest(
+        dumpId = generateDebugDumpId(),
+        createdAt = System.currentTimeMillis(),
+        note = note?.trim()?.takeIf { it.isNotEmpty() },
+        appVersion = appVersionLabel,
+        deviceInfo = buildDeviceInfoSummary(),
+        connectionSummary = connectionSummary,
+        workspaceStateJson = buildSanitizedWorkspaceJson(wsState),
+        eventsNdjson = debugRecorder.toNdjson(),
+        logcat = logcat,
+        lastCrash = lastCrash,
+        screenshotPngBase64 = if (cfg.includeScreenshot) screenshotBase64 else null,
+    )
+}
+
+private fun formatAppStateUiMap(
+    screen: String = "workspace",
+    themeKey: String = "",
+    isTestingConnection: Boolean = false,
+    hasPendingPairing: Boolean = false,
+    bootstrap: BootstrapUiState = BootstrapUiState(),
+    debug: DebugSharingSettings = DebugSharingSettings(),
+    debugEventCount: Int = 0,
+    hasLastCrash: Boolean = false,
+    upload: DebugDumpUploadState = DebugDumpUploadState(),
+): Map<String, Any?> = mapOf(
+    "screen" to screen,
+    "theme" to themeKey,
+    "appInForeground" to (ForegroundActivityTracker.current() != null),
+    "isTestingConnection" to isTestingConnection,
+    "hasPendingPairing" to hasPendingPairing,
+    "bootstrap" to mapOf(
+        "phase" to bootstrap.phase.name,
+        "isRunning" to bootstrap.isRunning,
+        "errorMessage" to bootstrap.errorMessage?.let { sanitizeDebugText(it) },
+        "isHostKeyMismatch" to bootstrap.isHostKeyMismatch,
+        "recentLogs" to bootstrap.logs.takeLast(20).map { sanitizeDebugText(it) },
+    ),
+    "debugSettings" to mapOf(
+        "enabled" to debug.enabled,
+        "includeScreenshot" to debug.includeScreenshot,
+        "includeLogcat" to debug.includeLogcat,
+        "autoUploadOnError" to debug.autoUploadOnError,
+        "remoteInspectionEnabled" to debug.remoteInspectionEnabled,
+        "remoteControlEnabled" to debug.remoteControlEnabled,
+    ),
+    "debugEventCount" to debugEventCount,
+    "hasLastCrash" to hasLastCrash,
+    "lastDebugUpload" to mapOf(
+        "isUploading" to upload.isUploading,
+        "lastDumpId" to upload.lastDumpId,
+        "lastRemoteDir" to upload.lastRemoteDir,
+        "lastUploadedAt" to upload.lastUploadedAt,
+        "lastError" to upload.lastError?.let { e -> sanitizeDebugText(e) },
+    ),
+)
+
+/** Android-backed data for [AppStateReporter]; respects the user's debug sharing toggles. */
+private class ViewModelAppStateSources(
+    private val app: Application,
+    private val repo: HerdrRepository,
+    private val readDebugSettings: () -> DebugSharingSettings,
+    private val readUiState: () -> Map<String, Any?>,
+    private val uploadDump: suspend (note: String?, screenshotBase64: String?) -> Result<DebugDumpUploadResponse>,
+) : AppStateSources {
+    override fun uiState(): Map<String, Any?> = readUiState()
+
+    override fun workspaceJson(): String = buildSanitizedWorkspaceJson(repo.snapshotStateWithPendingDeltas())
+
+    override suspend fun logcat(lines: Int): String {
+        if (!readDebugSettings().includeLogcat) {
+            throw AppStateCommandException("Logcat sharing is turned off in the app (Settings > Debug sharing).")
+        }
+        return collectAppLogcat(maxLines = lines)
+            ?: throw AppStateCommandException("Logcat is unavailable on this device.")
+    }
+
+    override fun lastCrash(): String? = CrashLogStore.readLastCrash(app)
+
+    override suspend fun screenshotPngBase64(): String {
+        if (!readDebugSettings().includeScreenshot) {
+            throw AppStateCommandException("Screenshot sharing is turned off in the app (Settings > Debug sharing).")
+        }
+        val activity = ForegroundActivityTracker.current()
+            ?: throw AppStateCommandException("The app is in the background; screenshots need it on screen.")
+        val shot = captureWindowScreenshotBase64(activity)
+            ?: throw AppStateCommandException("Screenshot capture failed.")
+        withContext(Dispatchers.Main) {
+            Toast.makeText(activity, R.string.app_state_screenshot_toast, Toast.LENGTH_SHORT).show()
+        }
+        return shot
+    }
+
+    override suspend fun uploadDump(note: String?, includeScreenshot: Boolean): Map<String, Any?> {
+        val shot = if (includeScreenshot && readDebugSettings().includeScreenshot) {
+            ForegroundActivityTracker.current()?.let { captureWindowScreenshotBase64(it) }
+        } else {
+            null
+        }
+        val resp = uploadDump(
+            note?.trim()?.takeIf { it.isNotEmpty() } ?: "Requested by a VM agent (agents_term_app_cli dump)",
+            shot,
+        ).getOrElse { err ->
+            throw AppStateCommandException("Dump upload failed: ${err.message ?: err::class.java.simpleName}")
+        }
+        return mapOf(
+            "dumpId" to resp.dumpId,
+            "remoteDir" to resp.remoteDir,
+            "latestSymlink" to resp.latestSymlink,
+            "files" to resp.files,
+            "includedScreenshot" to (shot != null),
+        )
     }
 }

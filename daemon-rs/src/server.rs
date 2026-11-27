@@ -32,7 +32,10 @@ use crate::config::{
 use crate::log::{log_info, log_warn};
 use crate::models::{get_agent_models, warm_agent_models_cache};
 use crate::runner::AgentRunner;
-use crate::store::{resolve_abs_path, ReviveTabError, StateStore, MAX_OPEN_TABS};
+use crate::store::{
+    resolve_abs_path, validate_working_dir, CreateTabError, ReviveTabError, StateStore,
+    MAX_OPEN_TABS,
+};
 use crate::usage::get_agent_usage;
 use crate::util::{now_ms, rand_hex};
 
@@ -568,18 +571,24 @@ async fn post_tabs(
             json!({ "error": "Missing required field: agent" }),
         );
     };
-    let Some(tab) = st.store.create_tab(
+    let tab = match st.store.create_tab(
         agent,
         parsed.get("title"),
         parsed.get("cwd"),
         parsed.get("permissionMode"),
         parsed.get("model"),
         parsed.get("systemPrompt"),
-    ) else {
-        return json_status(
-            StatusCode::CONFLICT,
-            json!({ "error": format!("The limit is {MAX_OPEN_TABS} open tabs. Close a tab to make room.") }),
-        );
+    ) {
+        Ok(tab) => tab,
+        Err(CreateTabError::InvalidCwd(err)) => {
+            return json_status(StatusCode::BAD_REQUEST, json!({ "error": err }));
+        }
+        Err(CreateTabError::OpenTabLimitReached) => {
+            return json_status(
+                StatusCode::CONFLICT,
+                json!({ "error": format!("The limit is {MAX_OPEN_TABS} open tabs. Close a tab to make room.") }),
+            );
+        }
     };
     st.broadcast_raw(json!({ "type": "tab_created", "tab": tab }).to_string());
     json_status(StatusCode::OK, json!({ "tab": tab }))
@@ -606,8 +615,23 @@ async fn patch_tab(
     if let Some(title) = parsed.get("title").filter(|v| !v.is_null()) {
         patch.insert("title".into(), title.clone());
     }
-    if let Some(cwd) = parsed.get("cwd").and_then(Value::as_str) {
-        patch.insert("cwd".into(), json!(resolve_abs_path(cwd)));
+    let mut cwd_changed = false;
+    if let Some(cwd) = parsed
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        match validate_working_dir(cwd) {
+            Ok(valid) => {
+                let prev = existing.get("cwd").and_then(Value::as_str).unwrap_or("");
+                cwd_changed = valid != prev;
+                patch.insert("cwd".into(), json!(valid));
+            }
+            Err(err) => {
+                return json_status(StatusCode::BAD_REQUEST, json!({ "error": err }));
+            }
+        }
     }
     if let Some(pm) = parsed.get("permissionMode").filter(|v| !v.is_null()) {
         patch.insert("permissionMode".into(), pm.clone());
@@ -657,6 +681,9 @@ async fn patch_tab(
     if let Some(updated) = st.store.update_tab(&tab_id, patch) {
         if system_prompt_changed {
             st.runner.mark_system_prompt_updated(&tab_id);
+        }
+        if cwd_changed && is_shell_tab(&existing) && !st.runner.is_running(&tab_id) {
+            st.runner.reset_shell_session(&tab_id);
         }
         st.broadcast_raw(json!({ "type": "tab_updated", "tab": updated }).to_string());
         json_status(StatusCode::OK, json!({ "tab": updated }))
@@ -954,6 +981,37 @@ async fn post_tab_interrupt(
     )
 }
 
+async fn post_tab_stdin(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(tab_id): AxumPath<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    if !st.authorized(&headers, None, false) {
+        return unauthorized();
+    }
+    if st.store.get_tab(&tab_id).is_none() {
+        return json_status(StatusCode::NOT_FOUND, json!({ "error": "Tab not found" }));
+    }
+    let parsed: Map<String, Value> = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let data = parsed.get("data").and_then(Value::as_str);
+    let eof = parsed.get("eof").and_then(Value::as_bool).unwrap_or(false);
+    let has_data = data.map(|s| !s.is_empty()).unwrap_or(false);
+    if !has_data && !eof {
+        return json_status(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "Provide stdin data or eof: true" }),
+        );
+    }
+    match st.runner.send_stdin(&tab_id, data, eof).await {
+        Ok(()) => json_status(StatusCode::OK, json!({ "ok": true })),
+        Err(err) => json_status(StatusCode::CONFLICT, json!({ "error": err })),
+    }
+}
+
 async fn post_tab_read(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1034,7 +1092,9 @@ async fn handle_ws(st: Arc<AppState>, socket: WebSocket) {
     while let Some(Ok(msg)) = stream.next().await {
         match msg {
             Message::Text(text) => {
-                st.app_state.handle_message(client_id, &text);
+                if !st.app_state.handle_message(client_id, &text) {
+                    handle_ws_client_message(&st, &text).await;
+                }
             }
             Message::Close(_) => break,
             _ => {}
@@ -1044,6 +1104,32 @@ async fn handle_ws(st: Arc<AppState>, socket: WebSocket) {
     writer_task.abort();
     st.ws_clients.lock().unwrap().remove(&client_id);
     st.app_state.remove_socket(client_id);
+}
+
+async fn handle_ws_client_message(st: &Arc<AppState>, raw: &str) {
+    let Ok(Value::Object(msg)) = serde_json::from_str::<Value>(raw) else {
+        return;
+    };
+    if msg.get("type").and_then(Value::as_str) != Some("send_stdin") {
+        return;
+    }
+    let Some(tab_id) = msg
+        .get("tabId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let data = msg.get("data").and_then(Value::as_str);
+    let eof = msg.get("eof").and_then(Value::as_bool).unwrap_or(false);
+    let has_data = data.map(|s| !s.is_empty()).unwrap_or(false);
+    if !has_data && !eof {
+        return;
+    }
+    if st.store.get_tab(tab_id).is_some() {
+        let _ = st.runner.send_stdin(tab_id, data, eof).await;
+    }
 }
 
 async fn not_found() -> Response {
@@ -1120,6 +1206,7 @@ pub async fn run_daemon(
         )
         .route("/api/tabs/{id}/queue/{item}", delete(delete_tab_queue_item))
         .route("/api/tabs/{id}/interrupt", post(post_tab_interrupt))
+        .route("/api/tabs/{id}/stdin", post(post_tab_stdin))
         .route("/api/tabs/{id}/read", post(post_tab_read))
         .fallback(not_found)
         .with_state(state.clone());
