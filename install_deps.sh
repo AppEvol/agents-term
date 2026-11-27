@@ -28,6 +28,7 @@ set -euo pipefail
 GRADLE_VERSION=9.3.1
 ANDROID_PLATFORM="platforms;android-36.1"
 ANDROID_BUILD_TOOLS="build-tools;36.0.0"
+ANDROID_NDK="ndk;29.0.14206865"
 ANDROID_CMDLINE_TOOLS_BUILD=13114758
 MIN_JDK=17
 # Robolectric needs this Java version for the unit tests. app/build.gradle.kts
@@ -181,6 +182,7 @@ run_checks() {
   check_that "Gradle $GRADLE_VERSION" gradle_ok
   check_that "Android SDK $ANDROID_PLATFORM" test -d "$(android_dir "$ANDROID_PLATFORM")"
   check_that "Android SDK $ANDROID_BUILD_TOOLS" test -d "$(android_dir "$ANDROID_BUILD_TOOLS")"
+  check_that "Android SDK $ANDROID_NDK" test -d "$(android_dir "$ANDROID_NDK")"
   if [ -d "$android_home" ] && [ -z "${ANDROID_HOME:-}${ANDROID_SDK_ROOT:-}" ]; then
     note "ANDROID_HOME is not set in this shell. Before running gradle: export ANDROID_HOME=$android_home"
   fi
@@ -301,10 +303,10 @@ if [ ! -x "$sdkmanager" ]; then
   rm -rf "$android_home/cmdline-tools/latest"
   mv "$tmp/android/cmdline-tools" "$android_home/cmdline-tools/latest"
 fi
-if [ ! -d "$(android_dir "$ANDROID_PLATFORM")" ] || [ ! -d "$(android_dir "$ANDROID_BUILD_TOOLS")" ]; then
+if [ ! -d "$(android_dir "$ANDROID_PLATFORM")" ] || [ ! -d "$(android_dir "$ANDROID_BUILD_TOOLS")" ] || [ ! -d "$(android_dir "$ANDROID_NDK")" ]; then
   # `yes` exits with SIGPIPE once sdkmanager stops reading; that is expected.
   (yes || true) | "$sdkmanager" --sdk_root="$android_home" --licenses >/dev/null
-  "$sdkmanager" --sdk_root="$android_home" "platform-tools" "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+  "$sdkmanager" --sdk_root="$android_home" "platform-tools" "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS" "$ANDROID_NDK"
 fi
 # Gradle writes licence and component files into the SDK, so the user owns it.
 chown -R "$target_user": "$android_home"

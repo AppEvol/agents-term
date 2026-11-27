@@ -24,7 +24,7 @@ impl Drop for TestHome {
 
 fn create_tab(store: &StateStore) -> String {
     store
-        .create_tab("shell", None, None, None, None, None)
+        .create_tab("shell", None, None, None, None, None, None)
         .unwrap()["id"]
         .as_str()
         .unwrap()

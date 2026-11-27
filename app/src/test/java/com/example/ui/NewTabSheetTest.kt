@@ -22,8 +22,11 @@ import com.example.data.AppThemeId
 import com.example.data.AvailableAgentInfo
 import com.example.data.FsDirectoryEntry
 import com.example.data.FsListResponse
+import com.example.data.SHELL_MODE_COMMAND
+import com.example.data.SHELL_MODE_PTY
 import com.example.ui.theme.HerdrTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -61,7 +64,7 @@ class NewTabSheetTest {
                         defaultCwd = "/home/ned",
                         canCreateTab = true,
                         onLoadDirectories = { Result.success(FsListResponse(path = "/home/ned")) },
-                        onCreate = { _, _, _, _, _, _ -> },
+                        onCreate = { _, _, _, _, _, _, _ -> },
                     )
                 }
             }
@@ -109,7 +112,7 @@ class NewTabSheetTest {
                     defaultCwd = "/home/ned",
                     canCreateTab = true,
                     onLoadDirectories = { Result.success(FsListResponse(path = "/home/ned")) },
-                    onCreate = { _, _, _, _, _, _ -> },
+                    onCreate = { _, _, _, _, _, _, _ -> },
                 )
             }
         }
@@ -162,7 +165,7 @@ class NewTabSheetTest {
                             )
                         }
                     },
-                    onCreate = { _, _, _, _, _, _ -> },
+                    onCreate = { _, _, _, _, _, _, _ -> },
                 )
             }
         }
@@ -208,7 +211,7 @@ class NewTabSheetTest {
                         defaultCwd = "/home/ned/work/repo",
                         canCreateTab = true,
                         onLoadDirectories = { Result.success(FsListResponse(path = "/home/ned/work/repo")) },
-                        onCreate = { _, _, _, _, _, _ -> },
+                        onCreate = { _, _, _, _, _, _, _ -> },
                     )
                 }
             }
@@ -235,7 +238,7 @@ class NewTabSheetTest {
                     defaultCwd = "/bad/path",
                     canCreateTab = true,
                     onLoadDirectories = { Result.success(FsListResponse(path = "/bad/path")) },
-                    onCreate = { _, _, _, _, _, _ -> },
+                    onCreate = { _, _, _, _, _, _, _ -> },
                     createError = errorMsg,
                     isCreating = true,
                 )
@@ -265,6 +268,80 @@ class NewTabSheetTest {
 
         composeRule.waitForIdle()
         assertEquals("New Tab", resolvedLabel)
+    }
+
+    @Test
+    fun shellModeDefaultsToCommandAndAllowsPtyOptInOnCapableDaemon() {
+        var createdAgent: String? = null
+        var createdShellMode: String? = null
+        composeRule.setContent {
+            HerdrTheme {
+                NewTabSheetContent(
+                    agents = defaultAgents,
+                    defaultCwd = "/home/ned",
+                    canCreateTab = true,
+                    ptySupported = true,
+                    onLoadDirectories = { Result.success(FsListResponse(path = "/home/ned")) },
+                    onCreate = { agent, _, _, _, _, _, shellMode ->
+                        createdAgent = agent
+                        createdShellMode = shellMode
+                    },
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agent_option_shell").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("new_tab_shell_mode_command").assertIsDisplayed()
+        composeRule.onNodeWithTag("new_tab_shell_mode_pty").assertIsDisplayed()
+        composeRule.onNodeWithTag("new_tab_shell_description")
+            .assertTextContains("Stdin mode", substring = true)
+
+        // Default selection is Command mode.
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        assertEquals("shell", createdAgent)
+        assertEquals(SHELL_MODE_COMMAND, createdShellMode)
+
+        // Opting into Interactive terminal (PTY) updates description and passes shellMode="pty".
+        composeRule.onNodeWithTag("new_tab_shell_mode_pty").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("new_tab_shell_description")
+            .assertTextContains("Interactive Bash terminal (PTY)", substring = true)
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        assertEquals("shell", createdAgent)
+        assertEquals(SHELL_MODE_PTY, createdShellMode)
+    }
+
+    @Test
+    fun olderDaemonWithoutPtyHidesShellModeSelectorAndOmitsShellMode() {
+        var createdShellMode: String? = "unset"
+        composeRule.setContent {
+            HerdrTheme {
+                NewTabSheetContent(
+                    agents = defaultAgents,
+                    defaultCwd = "/home/ned",
+                    canCreateTab = true,
+                    ptySupported = false,
+                    onLoadDirectories = { Result.success(FsListResponse(path = "/home/ned")) },
+                    onCreate = { _, _, _, _, _, _, shellMode ->
+                        createdShellMode = shellMode
+                    },
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agent_option_shell").performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(0, composeRule.onAllNodesWithTag("new_tab_shell_mode_pty").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        assertNull(createdShellMode)
     }
 
     @Test

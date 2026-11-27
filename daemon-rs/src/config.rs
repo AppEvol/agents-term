@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::attachments::{supported_mime_types, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES};
 use crate::models::get_cached_agent_models;
+use crate::pty::{PTY_BUFFER_BYTES, PTY_MAX_COLS, PTY_MAX_ROWS, PTY_PROTOCOL_VERSION};
 
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD_HASH: &str = env!("AGENTSTERM_BUILD_HASH");
@@ -516,7 +517,17 @@ pub fn detect_available_agents() -> Vec<Value> {
     AGENT_SPECS
         .iter()
         .map(|spec| {
-            let binary_path = resolve_binary(spec.binary);
+            let (binary, binary_path) = if spec.kind == "shell" {
+                if let Some(p) = resolve_binary(spec.binary) {
+                    (spec.binary, Some(p))
+                } else if let Some(p) = resolve_binary("sh") {
+                    ("sh", Some(p))
+                } else {
+                    (spec.binary, None)
+                }
+            } else {
+                (spec.binary, resolve_binary(spec.binary))
+            };
             let available = binary_path.is_some();
             let discovered = if available {
                 get_cached_agent_models(spec.kind)
@@ -527,7 +538,7 @@ pub fn detect_available_agents() -> Vec<Value> {
                 "type": spec.kind,
                 "name": spec.name,
                 "description": spec.description,
-                "binary": spec.binary,
+                "binary": binary,
                 "available": available,
                 "binaryPath": binary_path,
                 "defaultModel": discovered.get("defaultModel").cloned().unwrap_or(Value::Null),
@@ -559,6 +570,12 @@ pub fn build_server_info(bind_host: Option<&str>) -> Value {
             "maxBytes": MAX_ATTACHMENT_BYTES,
             "maxPerMessage": MAX_ATTACHMENTS_PER_MESSAGE,
             "mimeTypes": supported_mime_types(),
+        },
+        "pty": {
+            "version": PTY_PROTOCOL_VERSION,
+            "maxCols": PTY_MAX_COLS,
+            "maxRows": PTY_MAX_ROWS,
+            "bufferBytes": PTY_BUFFER_BYTES,
         },
         "selfUpdate": crate::update::self_update_info(),
     })

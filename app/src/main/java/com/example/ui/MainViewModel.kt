@@ -47,6 +47,9 @@ import com.example.data.exportDebugBundleZip
 import com.example.data.generateDebugDumpId
 import com.example.data.parseSshSetupUri
 import com.example.data.sanitizeDebugText
+import com.example.terminal.PtySessionManager
+import com.example.terminal.PtyTabSession
+import com.example.terminal.TerminalThemePalette
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -157,6 +160,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val usageController = AgentUsageController(repo = repo, scope = viewModelScope)
     val newTabController = NewTabController(repo = repo, scope = viewModelScope)
+    val ptySessions = PtySessionManager(debugRecorder = debugRecorder)
     val createTabError: StateFlow<String?> = newTabController.error
     val isCreatingTab: StateFlow<Boolean> = newTabController.isCreating
 
@@ -209,9 +213,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             detail = "AgentsTerm ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) started; crashLog=${_hasLastCrash.value}",
         )
         repo.initializeAutoConnect()
+        ptySessions.observeWorkspace(viewModelScope, repo.state)
     }
 
+    fun ptySessionFor(
+        tabId: String,
+        palette: TerminalThemePalette,
+    ): PtyTabSession = ptySessions.getOrCreate(tabId, state.value.config, palette)
+
     fun onForegroundChanged(inForeground: Boolean) {
+        ptySessions.onForegroundChanged(inForeground)
         if (inForeground) {
             debugRecorder.record("lifecycle", "on_foreground", "App resumed to foreground")
             repo.ensureConnectedOnForeground()
@@ -222,6 +233,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        ptySessions.closeAll()
         repo.disconnect()
         super.onCleared()
     }
@@ -617,6 +629,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val res = repo.deleteTab(tabId)
             res.onSuccess { archived ->
+                ptySessions.remove(tabId)
                 onDeleted?.invoke(archived)
             }
         }
@@ -769,6 +782,7 @@ class NewTabController(
         title: String?,
         model: String? = null,
         systemPrompt: String? = null,
+        shellMode: String? = null,
         onCreated: () -> Unit = {},
     ) {
         if (_isCreating.value) return
@@ -784,6 +798,7 @@ class NewTabController(
                         permissionMode = permissionMode,
                         model = model?.trim()?.takeIf { it.isNotEmpty() },
                         systemPrompt = if (agent == "shell") null else systemPrompt?.trim().orEmpty(),
+                        shellMode = if (agent == "shell") shellMode?.trim()?.takeIf { it.isNotEmpty() } else null,
                     ),
                 )
                 res.onSuccess {

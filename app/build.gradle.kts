@@ -121,11 +121,26 @@ android {
         compose = true
         buildConfig = true
     }
+    sourceSets {
+        getByName("main") {
+            jniLibs.directories.add(layout.buildDirectory.dir("ghostty-vt/jniLibs").get().asFile.path)
+        }
+    }
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
             all { test ->
                 test.javaLauncher = unitTestJavaLauncher
+                val ghosttyHostLibDir = layout.buildDirectory.dir("ghostty-vt/host").get().asFile.absolutePath
+                val existingLibPath = System.getProperty("java.library.path").orEmpty()
+                test.systemProperty(
+                    "java.library.path",
+                    if (existingLibPath.isNotEmpty()) {
+                        "$ghosttyHostLibDir${File.pathSeparator}$existingLibPath"
+                    } else {
+                        ghosttyHostLibDir
+                    },
+                )
                 // Golden image tests (MarkdownGoldenTest) compare against src/test/snapshots.
                 // `-Pgoldens=record` writes new golden images instead of comparing.
                 val record = goldensMode == "record"
@@ -248,4 +263,30 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     // "ksp"(libs.androidx.room.compiler)
     "ksp"(libs.moshi.kotlin.codegen)
+}
+
+val buildGhosttyVtHostNative = tasks.register<Exec>("buildGhosttyVtHostNative") {
+    description = "Builds libghostty-vt 1.0.2 and the host Linux JNI library for JVM unit tests."
+    workingDir = rootProject.projectDir
+    commandLine("bash", rootProject.file("scripts/build-libghostty-vt.sh").absolutePath, "--host-only")
+    inputs.file(file("src/main/jni/ghostty_vt_jni.c"))
+    inputs.file(rootProject.file("scripts/build-libghostty-vt.sh"))
+    outputs.file(layout.buildDirectory.file("ghostty-vt/host/libghostty_vt_jni.so"))
+}
+
+val buildGhosttyVtAndroidNative = tasks.register<Exec>("buildGhosttyVtAndroidNative") {
+    description = "Cross-builds libghostty-vt 1.0.2 and the Android JNI libraries."
+    workingDir = rootProject.projectDir
+    commandLine("bash", rootProject.file("scripts/build-libghostty-vt.sh").absolutePath, "--android-only")
+    inputs.file(file("src/main/jni/ghostty_vt_jni.c"))
+    inputs.file(rootProject.file("scripts/build-libghostty-vt.sh"))
+    outputs.dir(layout.buildDirectory.dir("ghostty-vt/jniLibs"))
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(buildGhosttyVtHostNative)
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach {
+    dependsOn(buildGhosttyVtAndroidNative)
 }

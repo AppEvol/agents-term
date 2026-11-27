@@ -6,6 +6,7 @@ mod http_client;
 mod install;
 mod log;
 mod models;
+mod pty;
 mod runner;
 mod server;
 mod shell;

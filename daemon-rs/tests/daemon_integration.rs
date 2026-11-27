@@ -2150,3 +2150,537 @@ fn issue_53_shell_queue_preserves_submission_boundaries() {
     drop(daemon);
     let _ = fs::remove_dir_all(&home);
 }
+
+struct TestWsClient {
+    stream: TcpStream,
+}
+
+enum TestWsFrame {
+    Text(String),
+    Binary(Vec<u8>),
+    Close,
+}
+
+impl TestWsClient {
+    fn connect(port: u16, path_and_query: &str, token: Option<&str>) -> Result<Self, u16> {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect ws");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut req = format!(
+            "GET {path_and_query} HTTP/1.1\r\n\
+             Host: 127.0.0.1:{port}\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\n"
+        );
+        if let Some(tok) = token {
+            req.push_str(&format!("Authorization: Bearer {tok}\r\n"));
+        }
+        req.push_str("\r\n");
+        stream.write_all(req.as_bytes()).unwrap();
+        stream.flush().unwrap();
+
+        let mut header_buf = Vec::new();
+        let mut b = [0u8; 1];
+        while !header_buf.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut b).unwrap();
+            header_buf.push(b[0]);
+        }
+        let header_str = String::from_utf8_lossy(&header_buf);
+        let status: u16 = header_str
+            .lines()
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        if status != 101 {
+            return Err(status);
+        }
+        Ok(Self { stream })
+    }
+
+    fn send_frame(&mut self, opcode: u8, payload: &[u8]) {
+        let mask = [0x12u8, 0x34, 0x56, 0x78];
+        let mut out = Vec::with_capacity(14 + payload.len());
+        out.push(0x80 | opcode);
+        let len = payload.len();
+        if len < 126 {
+            out.push(0x80 | (len as u8));
+        } else if len <= 65535 {
+            out.push(0x80 | 126);
+            out.extend_from_slice(&(len as u16).to_be_bytes());
+        } else {
+            out.push(0x80 | 127);
+            out.extend_from_slice(&(len as u64).to_be_bytes());
+        }
+        out.extend_from_slice(&mask);
+        for (i, byte) in payload.iter().enumerate() {
+            out.push(byte ^ mask[i % 4]);
+        }
+        self.stream.write_all(&out).unwrap();
+        self.stream.flush().unwrap();
+    }
+
+    fn send_text(&mut self, text: &str) {
+        self.send_frame(0x1, text.as_bytes());
+    }
+
+    fn send_binary(&mut self, data: &[u8]) {
+        self.send_frame(0x2, data);
+    }
+
+    fn read_frame(&mut self) -> Option<TestWsFrame> {
+        loop {
+            let mut hdr = [0u8; 2];
+            if self.stream.read_exact(&mut hdr).is_err() {
+                return None;
+            }
+            let opcode = hdr[0] & 0x0F;
+            let masked = (hdr[1] & 0x80) != 0;
+            let mut len = (hdr[1] & 0x7F) as u64;
+            if len == 126 {
+                let mut ext = [0u8; 2];
+                self.stream.read_exact(&mut ext).ok()?;
+                len = u16::from_be_bytes(ext) as u64;
+            } else if len == 127 {
+                let mut ext = [0u8; 8];
+                self.stream.read_exact(&mut ext).ok()?;
+                len = u64::from_be_bytes(ext);
+            }
+            let mask_key = if masked {
+                let mut m = [0u8; 4];
+                self.stream.read_exact(&mut m).ok()?;
+                Some(m)
+            } else {
+                None
+            };
+            let mut payload = vec![0u8; len as usize];
+            if len > 0 {
+                self.stream.read_exact(&mut payload).ok()?;
+            }
+            if let Some(m) = mask_key {
+                for (i, byte) in payload.iter_mut().enumerate() {
+                    *byte ^= m[i % 4];
+                }
+            }
+            match opcode {
+                0x1 => {
+                    return Some(TestWsFrame::Text(
+                        String::from_utf8_lossy(&payload).into_owned(),
+                    ))
+                }
+                0x2 => return Some(TestWsFrame::Binary(payload)),
+                0x8 => return Some(TestWsFrame::Close),
+                0x9 => self.send_frame(0xA, &payload),
+                _ => continue,
+            }
+        }
+    }
+}
+
+fn read_pty_until_contains(
+    ws: &mut TestWsClient,
+    last_seq: &mut u64,
+    needle: &str,
+    timeout: Duration,
+) -> String {
+    let deadline = Instant::now() + timeout;
+    let mut text = String::new();
+    while Instant::now() < deadline {
+        ws.stream
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        if let Some(TestWsFrame::Binary(frame)) = ws.read_frame() {
+            assert!(frame.len() >= 8);
+            let seq = u64::from_be_bytes(frame[..8].try_into().unwrap());
+            let chunk = &frame[8..];
+            *last_seq = (*last_seq).max(seq + chunk.len() as u64);
+            text.push_str(&String::from_utf8_lossy(chunk));
+            if text.contains(needle) {
+                return text;
+            }
+        }
+    }
+    panic!("Timed out waiting for PTY output containing {needle:?}; got: {text:?}");
+}
+
+#[test]
+fn pty_shell_tab_autocomplete_ctrl_c_no_echo_resize_reconnect_and_restart() {
+    let home = make_temp_dir("herdr-pty-home");
+    let work = home.join("work");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("my spaced file.txt"), "hello").unwrap();
+
+    let daemon = TestDaemon::start(&home, None);
+
+    // 1. /api/info advertises PTY capability.
+    let (st, info) = daemon.api("GET", "/api/info", None);
+    assert_eq!(st, 200);
+    assert_eq!(info["pty"]["version"].as_u64(), Some(1));
+    assert!(info["pty"]["bufferBytes"].as_u64().unwrap_or(0) >= 1024 * 1024);
+
+    // 2. Default shell tab retains Command mode; invalid shellMode is rejected.
+    let (st, cmd_tab) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({ "agent": "shell", "cwd": work.to_string_lossy() })),
+    );
+    assert_eq!(st, 200);
+    assert_eq!(cmd_tab["tab"]["shellMode"].as_str(), Some("command"));
+    let cmd_tab_id = cmd_tab["tab"]["id"].as_str().unwrap().to_string();
+
+    let (st, _) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({ "agent": "shell", "shellMode": "bogus", "cwd": work.to_string_lossy() })),
+    );
+    assert_eq!(st, 400);
+
+    // 3. Opt-in PTY shell tab persists shellMode="pty" and rejects Command message/stdin APIs.
+    let (st, pty_tab) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({
+            "agent": "shell",
+            "shellMode": "pty",
+            "cwd": work.to_string_lossy(),
+            "title": "PTY Test"
+        })),
+    );
+    assert_eq!(st, 200);
+    assert_eq!(pty_tab["tab"]["shellMode"].as_str(), Some("pty"));
+    let pty_tab_id = pty_tab["tab"]["id"].as_str().unwrap().to_string();
+
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{pty_tab_id}/messages"),
+        Some(json!({ "text": "echo nope" })),
+    );
+    assert_eq!(st, 400);
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{pty_tab_id}/stdin"),
+        Some(json!({ "data": "nope\n" })),
+    );
+    assert_eq!(st, 400);
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{pty_tab_id}/interrupt"),
+        Some(json!({ "text": "echo bypassed", "processQueue": true })),
+    );
+    assert_eq!(st, 400);
+    let (_, msgs_resp) = daemon.api("GET", &format!("/api/tabs/{pty_tab_id}/messages"), None);
+    assert!(
+        msgs_resp["messages"].as_array().unwrap().is_empty(),
+        "PTY tab must never persist messages from rejected interrupt: {msgs_resp}"
+    );
+
+    // 4. PTY WS enforces auth and rejects Command-mode tabs.
+    assert_eq!(
+        TestWsClient::connect(daemon.port, &format!("/api/tabs/{pty_tab_id}/pty"), None).err(),
+        Some(401)
+    );
+    assert_eq!(
+        TestWsClient::connect(
+            daemon.port,
+            &format!("/api/tabs/{cmd_tab_id}/pty"),
+            Some(&daemon.token),
+        )
+        .err(),
+        Some(400)
+    );
+
+    // 5. Connect to PTY WS, read ready + replay_end.
+    let mut ws = TestWsClient::connect(
+        daemon.port,
+        &format!("/api/tabs/{pty_tab_id}/pty?afterSeq=0&cols=80&rows=24"),
+        Some(&daemon.token),
+    )
+    .expect("connect pty ws");
+
+    let ready_val: Value = match ws.read_frame().unwrap() {
+        TestWsFrame::Text(s) => serde_json::from_str(&s).unwrap(),
+        _ => panic!("expected ready text frame"),
+    };
+    assert_eq!(ready_val["type"].as_str(), Some("ready"));
+    assert_eq!(ready_val["running"].as_bool(), Some(true));
+    assert_eq!(ready_val["cols"].as_u64(), Some(80));
+    assert_eq!(ready_val["rows"].as_u64(), Some(24));
+    let session_id = ready_val["sessionId"].as_str().unwrap().to_string();
+
+    let mut last_seq = ready_val["replayFrom"].as_u64().unwrap_or(0);
+    loop {
+        match ws.read_frame().unwrap() {
+            TestWsFrame::Binary(frame) => {
+                let seq = u64::from_be_bytes(frame[..8].try_into().unwrap());
+                last_seq = last_seq.max(seq + (frame.len() - 8) as u64);
+            }
+            TestWsFrame::Text(s) => {
+                let v: Value = serde_json::from_str(&s).unwrap();
+                if v["type"].as_str() == Some("replay_end") {
+                    break;
+                }
+            }
+            TestWsFrame::Close => panic!("unexpected close before replay_end"),
+        }
+    }
+
+    // 6. Tab-complete a filename containing spaces!
+    ws.send_binary(b"ls my\t");
+    let completed =
+        read_pty_until_contains(&mut ws, &mut last_seq, "spaced", Duration::from_secs(5));
+    assert!(completed.contains("file.txt") || completed.contains("spaced"));
+    ws.send_binary(b"\n");
+    let _ = read_pty_until_contains(
+        &mut ws,
+        &mut last_seq,
+        "my spaced file.txt",
+        Duration::from_secs(5),
+    );
+
+    // 7. Ctrl+C interrupts a running foreground sleep.
+    ws.send_binary(b"sleep 30\n");
+    thread::sleep(Duration::from_millis(200));
+    ws.send_binary(&[0x03]);
+    ws.send_binary(b"echo AFTER_SIGINT\n");
+    let _ = read_pty_until_contains(
+        &mut ws,
+        &mut last_seq,
+        "AFTER_SIGINT",
+        Duration::from_secs(5),
+    );
+
+    // 8. No-echo secret input is NOT echoed back in PTY output.
+    ws.send_binary(b"stty -echo; read -r s; stty echo; printf 'LEN=%d\\n' \"${#s}\"\n");
+    thread::sleep(Duration::from_millis(200));
+    ws.send_binary(b"disposable-secret-141\n");
+    let no_echo_out =
+        read_pty_until_contains(&mut ws, &mut last_seq, "LEN=21", Duration::from_secs(5));
+    assert!(
+        !no_echo_out.contains("disposable-secret-141"),
+        "No-echo secret must not appear in PTY output: {no_echo_out:?}"
+    );
+
+    // 9. Resize updates PTY dimensions.
+    ws.send_text(&json!({ "type": "resize", "cols": 110, "rows": 35 }).to_string());
+    thread::sleep(Duration::from_millis(100));
+    ws.send_binary(b"stty size\n");
+    let _ = read_pty_until_contains(&mut ws, &mut last_seq, "35 110", Duration::from_secs(5));
+
+    // 10. Disconnect and warm reconnect from last_seq with sessionId (no truncation!).
+    drop(ws);
+    let mut ws2 = TestWsClient::connect(
+        daemon.port,
+        &format!(
+            "/api/tabs/{pty_tab_id}/pty?afterSeq={last_seq}&sessionId={session_id}&cols=110&rows=35"
+        ),
+        Some(&daemon.token),
+    )
+    .expect("warm reconnect pty ws");
+    let ready2: Value = match ws2.read_frame().unwrap() {
+        TestWsFrame::Text(s) => serde_json::from_str(&s).unwrap(),
+        _ => panic!("expected ready2"),
+    };
+    assert_eq!(ready2["sessionId"].as_str(), Some(session_id.as_str()));
+    assert_eq!(ready2["truncated"].as_bool(), Some(false));
+    assert_eq!(ready2["replayFrom"].as_u64(), Some(last_seq));
+
+    loop {
+        if let TestWsFrame::Text(s) = ws2.read_frame().unwrap() {
+            let v: Value = serde_json::from_str(&s).unwrap();
+            if v["type"].as_str() == Some("replay_end") {
+                break;
+            }
+        }
+    }
+    ws2.send_binary(b"exit 0\n");
+    let exit_deadline = Instant::now() + Duration::from_secs(5);
+    let mut saw_exit = false;
+    while Instant::now() < exit_deadline {
+        if let Some(TestWsFrame::Text(s)) = ws2.read_frame() {
+            let v: Value = serde_json::from_str(&s).unwrap();
+            if v["type"].as_str() == Some("exit") {
+                assert_eq!(v["exitCode"].as_i64(), Some(0));
+                saw_exit = true;
+                break;
+            }
+        }
+    }
+    assert!(saw_exit, "expected exit frame after `exit 0`");
+
+    ws2.send_text(&json!({ "type": "restart", "cols": 80, "rows": 24 }).to_string());
+    let ready3: Value = match ws2.read_frame().unwrap() {
+        TestWsFrame::Text(s) => serde_json::from_str(&s).unwrap(),
+        _ => panic!("expected ready3 after restart"),
+    };
+    assert_eq!(ready3["type"].as_str(), Some("ready"));
+    assert_eq!(ready3["running"].as_bool(), Some(true));
+    assert_ne!(ready3["sessionId"].as_str(), Some(session_id.as_str()));
+
+    drop(ws2);
+    let (st, _) = daemon.api("DELETE", &format!("/api/tabs/{pty_tab_id}"), None);
+    assert_eq!(st, 200);
+
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn pty_ws_query_restart_trailing_output_and_delete_kills_jobs() {
+    let home = make_temp_dir("herdr-pty-audit-fixes");
+    let work = home.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let daemon = TestDaemon::start(&home, None);
+
+    let (st, created) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({
+            "agent": "shell",
+            "shellMode": "pty",
+            "cwd": work.to_string_lossy(),
+            "title": "PTY Lifecycle"
+        })),
+    );
+    assert_eq!(st, 200);
+    let tab_id = created["tab"]["id"].as_str().unwrap().to_string();
+
+    // 1. Connect, emit trailing output right before exit 0, and verify output arrives BEFORE exit.
+    let mut ws = TestWsClient::connect(
+        daemon.port,
+        &format!("/api/tabs/{tab_id}/pty?afterSeq=0&cols=80&rows=24"),
+        Some(&daemon.token),
+    )
+    .expect("connect pty ws");
+    let ready1: Value = match ws.read_frame().unwrap() {
+        TestWsFrame::Text(s) => serde_json::from_str(&s).unwrap(),
+        _ => panic!("expected ready1"),
+    };
+    let sess1 = ready1["sessionId"].as_str().unwrap().to_string();
+    loop {
+        if let TestWsFrame::Text(s) = ws.read_frame().unwrap() {
+            let v: Value = serde_json::from_str(&s).unwrap();
+            if v["type"].as_str() == Some("replay_end") {
+                break;
+            }
+        }
+    }
+
+    ws.send_binary(b"echo BYE_BEFORE_EXIT_141; exit 0\n");
+    let mut output_before_exit = String::new();
+    let mut saw_exit = false;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match ws.read_frame() {
+            Some(TestWsFrame::Binary(frame)) => {
+                output_before_exit.push_str(&String::from_utf8_lossy(&frame[8..]));
+            }
+            Some(TestWsFrame::Text(s)) => {
+                let v: Value = serde_json::from_str(&s).unwrap();
+                if v["type"].as_str() == Some("exit") {
+                    assert_eq!(v["exitCode"].as_i64(), Some(0));
+                    saw_exit = true;
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    assert!(saw_exit, "expected exit frame");
+    assert!(
+        output_before_exit.contains("BYE_BEFORE_EXIT_141"),
+        "expected trailing output before exit frame, got: {output_before_exit:?}"
+    );
+    drop(ws);
+
+    // 2. Reconnect to the exited session with `?restart=1`: must spawn a fresh running session.
+    let mut ws2 = TestWsClient::connect(
+        daemon.port,
+        &format!("/api/tabs/{tab_id}/pty?restart=1&cols=90&rows=30"),
+        Some(&daemon.token),
+    )
+    .expect("connect pty ws with restart=1");
+    let ready2: Value = match ws2.read_frame().unwrap() {
+        TestWsFrame::Text(s) => serde_json::from_str(&s).unwrap(),
+        _ => panic!("expected ready2"),
+    };
+    assert_eq!(ready2["type"].as_str(), Some("ready"));
+    assert_eq!(ready2["running"].as_bool(), Some(true));
+    assert_eq!(ready2["cols"].as_u64(), Some(90));
+    assert_eq!(ready2["rows"].as_u64(), Some(30));
+    assert_ne!(ready2["sessionId"].as_str(), Some(sess1.as_str()));
+
+    let mut last_seq = ready2["replayFrom"].as_u64().unwrap_or(0);
+    loop {
+        match ws2.read_frame().unwrap() {
+            TestWsFrame::Binary(frame) => {
+                let seq = u64::from_be_bytes(frame[..8].try_into().unwrap());
+                last_seq = last_seq.max(seq + (frame.len() - 8) as u64);
+            }
+            TestWsFrame::Text(s) => {
+                let v: Value = serde_json::from_str(&s).unwrap();
+                if v["type"].as_str() == Some("replay_end") {
+                    break;
+                }
+            }
+            TestWsFrame::Close => panic!("unexpected close before replay_end"),
+        }
+    }
+
+    // 3. Start a foreground `sleep 60` job and verify deleting the tab terminates it cleanly.
+    let pid_file = work.join("sleep.pid");
+    let cmd = format!("sleep 60 & echo $! > {}; fg || wait\n", pid_file.display());
+    ws2.send_binary(cmd.as_bytes());
+    let pid_deadline = Instant::now() + Duration::from_secs(5);
+    let mut sleep_pid: Option<i32> = None;
+    while Instant::now() < pid_deadline {
+        if let Ok(raw) = fs::read_to_string(&pid_file) {
+            if let Ok(p) = raw.trim().parse::<i32>() {
+                sleep_pid = Some(p);
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let sleep_pid = sleep_pid.expect("sleep.pid never written");
+    assert_eq!(
+        unsafe { libc::kill(sleep_pid as libc::pid_t, 0) },
+        0,
+        "sleep process should be alive before DELETE"
+    );
+
+    let (st, _) = daemon.api("DELETE", &format!("/api/tabs/{tab_id}"), None);
+    assert_eq!(st, 200);
+
+    // Confirm `sleep 60` dies promptly after tab deletion.
+    let kill_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let alive = fs::read_to_string(format!("/proc/{sleep_pid}/stat"))
+            .ok()
+            .and_then(|raw| {
+                raw.rfind(')')
+                    .and_then(|i| raw.get(i + 1..))
+                    .map(str::to_string)
+            })
+            .and_then(|rest| rest.split_ascii_whitespace().next().map(str::to_string))
+            .is_some_and(|state| state != "Z" && state != "X");
+        if !alive {
+            break;
+        }
+        assert!(
+            Instant::now() < kill_deadline,
+            "sleep job (pid {sleep_pid}) survived DELETE /api/tabs/:id"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    // Suppress unused warning on last_seq if compiler checks.
+    let _ = last_seq;
+    drop(ws2);
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}

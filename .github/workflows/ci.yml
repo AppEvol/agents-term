@@ -225,6 +225,14 @@ jobs:
           restore-keys: |
             robolectric-${{ runner.os }}-
 
+      - name: Cache libghostty-vt 1.0.2 toolchain and static libraries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentsterm-ghostty-vt
+          key: ghostty-vt-${{ runner.os }}-${{ hashFiles('scripts/build-libghostty-vt.sh') }}
+          restore-keys: |
+            ghostty-vt-${{ runner.os }}-
+
       - name: Run Android Lint, unit tests and build debug & test APKs
         env:
           APP_VERSION_CODE: ${{ github.run_number }}
@@ -436,6 +444,14 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 9.3.1
+
+      - name: Cache libghostty-vt 1.0.2 toolchain and static libraries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentsterm-ghostty-vt
+          key: ghostty-vt-${{ runner.os }}-${{ hashFiles('scripts/build-libghostty-vt.sh') }}
+          restore-keys: |
+            ghostty-vt-${{ runner.os }}-
 
       - name: Enable KVM group permissions
         run: scripts/ci/enable_kvm.sh

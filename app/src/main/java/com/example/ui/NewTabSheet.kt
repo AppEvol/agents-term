@@ -61,6 +61,8 @@ import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
 import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.FsListResponse
 import com.example.data.MAX_OPEN_TABS
+import com.example.data.SHELL_MODE_COMMAND
+import com.example.data.SHELL_MODE_PTY
 import com.example.data.resolveAgentModelCatalog
 import com.example.ui.theme.MonoFontFamily
 import com.example.ui.theme.ThemedButton
@@ -97,6 +99,7 @@ fun NewTabSheet(
     agents: List<AvailableAgentInfo>,
     defaultCwd: String,
     canCreateTab: Boolean,
+    ptySupported: Boolean = false,
     defaultSystemPromptForMode: (String) -> String = { mode ->
         if (mode == "full-access") DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT else DEFAULT_AGENT_SYSTEM_PROMPT
     },
@@ -109,6 +112,7 @@ fun NewTabSheet(
         title: String,
         model: String?,
         systemPrompt: String?,
+        shellMode: String?,
     ) -> Unit,
     onLoadInitialDirectories: (suspend (String?) -> Result<FsListResponse>)? = null,
     createError: String? = null,
@@ -125,6 +129,7 @@ fun NewTabSheet(
             agents = agents,
             defaultCwd = defaultCwd,
             canCreateTab = canCreateTab,
+            ptySupported = ptySupported,
             defaultSystemPromptForMode = defaultSystemPromptForMode,
             onLoadDirectories = onLoadDirectories,
             onCreate = onCreate,
@@ -141,6 +146,7 @@ internal fun NewTabSheetContent(
     agents: List<AvailableAgentInfo>,
     defaultCwd: String,
     canCreateTab: Boolean,
+    ptySupported: Boolean = false,
     defaultSystemPromptForMode: (String) -> String = { mode ->
         if (mode == "full-access") DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT else DEFAULT_AGENT_SYSTEM_PROMPT
     },
@@ -152,6 +158,7 @@ internal fun NewTabSheetContent(
         title: String,
         model: String?,
         systemPrompt: String?,
+        shellMode: String?,
     ) -> Unit,
     onLoadInitialDirectories: (suspend (String?) -> Result<FsListResponse>)? = null,
     createError: String? = null,
@@ -181,6 +188,7 @@ internal fun NewTabSheetContent(
         mutableStateOf(effectiveAgents.firstOrNull { it.available }?.type ?: "agy")
     }
     var selectedModel by remember { mutableStateOf<String?>(null) }
+    var selectedShellMode by remember { mutableStateOf(SHELL_MODE_COMMAND) }
     var cwdField by remember {
         mutableStateOf(
             TextFieldValue(
@@ -337,11 +345,45 @@ internal fun NewTabSheetContent(
             }
         }
 
-        // Shell capability description
+        // Shell mode selector (opt-in PTY on capable daemons) and capability description
         if (selectedAgent == "shell") {
+            val effectiveShellMode = if (ptySupported) selectedShellMode else SHELL_MODE_COMMAND
+            val isPtyMode = effectiveShellMode == SHELL_MODE_PTY
+            if (ptySupported) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.new_tab_shell_mode_label),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ThemedFilterChip(
+                            selected = !isPtyMode,
+                            onClick = { selectedShellMode = SHELL_MODE_COMMAND },
+                            label = { Text(stringResource(R.string.new_tab_shell_mode_command)) },
+                            modifier = Modifier.testTag("new_tab_shell_mode_command"),
+                        )
+                        ThemedFilterChip(
+                            selected = isPtyMode,
+                            onClick = { selectedShellMode = SHELL_MODE_PTY },
+                            label = { Text(stringResource(R.string.new_tab_shell_mode_pty)) },
+                            modifier = Modifier.testTag("new_tab_shell_mode_pty"),
+                        )
+                    }
+                }
+            }
             val shellInfo = effectiveAgents.firstOrNull { it.type == "shell" }
-            val shellDescription = shellInfo?.description?.takeIf { it.isNotBlank() }
-                ?: stringResource(R.string.new_tab_shell_description_fallback)
+            val shellDescription = if (isPtyMode) {
+                stringResource(R.string.new_tab_shell_pty_description)
+            } else {
+                shellInfo?.description?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.new_tab_shell_description_fallback)
+            }
+            val shellDetail = if (isPtyMode) {
+                stringResource(R.string.new_tab_shell_pty_capabilities_detail)
+            } else {
+                stringResource(R.string.new_tab_shell_capabilities_detail)
+            }
             Surface(
                 shape = themedCorner(14.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -371,7 +413,7 @@ internal fun NewTabSheetContent(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            text = stringResource(R.string.new_tab_shell_capabilities_detail),
+                            text = shellDetail,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -732,6 +774,11 @@ internal fun NewTabSheetContent(
                 } else {
                     ""
                 }
+                val effectiveShellMode = if (selectedAgent == "shell" && ptySupported) {
+                    selectedShellMode
+                } else {
+                    null
+                }
                 onCreate(
                     selectedAgent,
                     cwdField.text.trim(),
@@ -739,6 +786,7 @@ internal fun NewTabSheetContent(
                     customTitle.trim(),
                     if (selectedAgent == "shell") null else selectedModel,
                     effectiveSystemPrompt,
+                    effectiveShellMode,
                 )
             },
             enabled = canCreateTab && !isCreating,
