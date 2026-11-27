@@ -125,3 +125,22 @@ fn resolve_abs_path_expands_tilde_and_pop_next_queued_is_fifo() {
     assert!(tab3["queuedMessages"].as_array().unwrap().is_empty());
     assert!(store.pop_next_queued_message(&tab_id).is_none());
 }
+
+#[test]
+fn model_throughput_survives_restart_without_tab_history() {
+    let home = TestHome::new();
+    let store = StateStore::open(home.files(), write_atomic_file);
+    store.record_throughput("codex", "example", 120, 2000, |rates| {
+        assert_eq!(rates[0]["tokensPerSecond"], 60.0);
+    });
+    store.save_now().unwrap();
+    assert!(home.files().root.join("model-throughput.json").is_file());
+    assert!(!home.files().workspace_path().exists());
+    assert!(!home.files().index_path().exists());
+    let reopened = StateStore::open(home.files(), write_atomic_file);
+    reopened.with_throughput(|rates| {
+        assert_eq!(rates.len(), 1);
+        assert_eq!(rates[0]["model"], "example");
+        assert_eq!(rates[0]["tokensPerSecond"], 60.0);
+    });
+}

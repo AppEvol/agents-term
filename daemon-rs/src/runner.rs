@@ -649,6 +649,13 @@ impl AgentRunner {
         let mut assistant_message =
             Self::new_message(&tab_id, "assistant", "", "streaming", now + 1);
         if agent != "shell" {
+            assistant_message["model"] = tab
+                .get("model")
+                .filter(|v| v.is_string())
+                .cloned()
+                .unwrap_or_else(|| {
+                    crate::models::get_cached_agent_models(&agent)["defaultModel"].clone()
+                });
             assistant_message["permissionMode"] = json!(effective_mode);
         }
         self.store.add_message(&tab_id, user_message.clone());
@@ -1366,6 +1373,19 @@ impl AgentRunner {
             "Turn finished tab={tab_id} msg={msg_id} status={final_status} tab_status={tab_status} exit_code={exit_code:?} interrupted={interrupted} duration_ms={duration_ms}"
         ));
 
+        if !interrupted && !failed && final_status == "complete" {
+            if let (Some(agent), Some(model), Some(tokens), Ok(duration)) = (
+                tab["agent"].as_str(),
+                final_msg["model"].as_str(),
+                final_msg["usage"]["outputTokens"].as_u64(),
+                u64::try_from(duration_ms),
+            ) {
+                self.store
+                    .record_throughput(agent, model, tokens, duration, |rates| {
+                        (self.broadcast)(json!({"type":"model_throughput", "throughput":rates}));
+                    });
+            }
+        }
         self.store.replace_message(tab_id, final_msg.clone());
         let mut patch = Map::new();
         patch.insert("status".into(), json!(tab_status));

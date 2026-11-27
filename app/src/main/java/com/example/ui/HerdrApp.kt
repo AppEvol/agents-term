@@ -567,6 +567,7 @@ fun HerdrApp(viewModel: MainViewModel) {
 
     if (showNewTabSheet) {
         NewTabSheet(
+            throughput = state.throughput,
             agents = state.serverInfo?.agents.orEmpty(),
             canCreateTab = state.canCreateTab,
             ptySupported = state.serverInfo?.supportsPtyShell == true,
@@ -610,6 +611,7 @@ fun HerdrApp(viewModel: MainViewModel) {
             resolveAgentModelCatalog(current.agent, state.serverInfo?.agents.orEmpty())
         }
         ModelPickerSheet(
+            throughput = rememberThroughputLabels(state.throughput, current.agent),
             agentLabel = current.agentLabel,
             currentModel = current.model,
             defaultModel = defaultModel,
@@ -1514,6 +1516,7 @@ internal fun WorkspaceScaffold(
             }
         } else {
             ActiveTabChatContent(
+                throughput = rememberThroughputLabels(state.throughput, activeTab.agent),
                 tab = activeTab,
                 draft = requireNotNull(activeDraft),
                 activeMessagesFlow = activeMessagesFlow,
@@ -1674,6 +1677,7 @@ private fun ActiveTabSummaryBanner(
 
 @Composable
 private fun ActiveTabChatContent(
+    throughput: Map<String, String>,
     tab: TabRecord,
     draft: TextFieldState,
     activeMessagesFlow: StateFlow<List<ChatMessage>>?,
@@ -1698,6 +1702,7 @@ private fun ActiveTabChatContent(
         fallbackMessages
     }
     ChatWorkspace(
+        throughput = throughput,
         tab = tab,
         draft = draft,
         messages = messages,

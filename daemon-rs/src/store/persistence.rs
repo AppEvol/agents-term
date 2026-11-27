@@ -78,6 +78,10 @@ impl StoreFiles {
         self.root.join("workspace.json")
     }
 
+    pub(super) fn throughput_path(&self) -> PathBuf {
+        self.root.join("model-throughput.json")
+    }
+
     pub(super) fn messages_path(&self, id: &str) -> Option<PathBuf> {
         tab_dir_under(&self.root, id).map(|dir| dir.join("messages.json"))
     }
@@ -87,7 +91,7 @@ impl StoreFiles {
         state: &Mutex<StoreInner>,
         write: &impl Fn(&Path, &[u8], u32) -> io::Result<()>,
     ) -> io::Result<()> {
-        let (index, messages, deletions) = {
+        let (index, throughput, messages, deletions) = {
             let mut inner = state.lock().unwrap();
             prune_closed_tabs_locked(&mut inner, now_ms());
             let index = inner.index_revision.map(|revision| {
@@ -103,9 +107,12 @@ impl StoreFiles {
                 .iter()
                 .map(|(id, revision)| (id.clone(), *revision, inner.messages_by_tab[id].clone()))
                 .collect();
-            (index, messages, inner.deleted_tab_dirs.clone())
+            let throughput = inner
+                .throughput_revision
+                .map(|revision| (revision, inner.throughput.clone()));
+            (index, throughput, messages, inner.deleted_tab_dirs.clone())
         };
-        if index.is_none() && messages.is_empty() && deletions.is_empty() {
+        if index.is_none() && throughput.is_none() && messages.is_empty() && deletions.is_empty() {
             return Ok(());
         }
         ensure_dir_0700(&self.home)?;
@@ -120,6 +127,17 @@ impl StoreFiles {
             write_file(path, &bytes)
         };
         let mut first_error = None;
+        if let Some((revision, samples)) = throughput {
+            match write_json(&self.throughput_path(), &json!(samples)) {
+                Ok(()) => {
+                    let mut inner = state.lock().unwrap();
+                    if inner.throughput_revision == Some(revision) {
+                        inner.throughput_revision = None;
+                    }
+                }
+                Err(err) => first_error = Some(err),
+            }
+        }
         for (id, revision, history) in messages {
             let Some(dir) = tab_dir_under(&self.root, &id) else {
                 first_error.get_or_insert_with(|| {

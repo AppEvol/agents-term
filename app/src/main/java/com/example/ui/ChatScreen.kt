@@ -198,6 +198,7 @@ private sealed interface ChatFeedItem {
         override val key: String,
         override val addMessageGap: Boolean,
         val isStreaming: Boolean,
+        val model: String?,
     ) : ChatFeedItem {
         override val contentType: String get() = "assistant_header"
     }
@@ -274,6 +275,7 @@ private sealed interface ChatFeedItem {
         val messageId: String,
         val text: String,
         val usageSummary: String?,
+        val model: String?,
         val exitCode: Int? = null,
     ) : ChatFeedItem {
         override val contentType: String get() = "assistant_footer"
@@ -316,6 +318,7 @@ private fun MutableList<ChatFeedItem>.appendAssistantFeedItems(
     add(
         ChatFeedItem.AssistantHeader(
             key = "${message.id}:header",
+            model = message.model,
             addMessageGap = addMessageGap,
             isStreaming = isStreaming,
         ),
@@ -405,6 +408,7 @@ private fun appendAssistantStatusAndFooter(
                 messageId = message.id,
                 text = message.text,
                 usageSummary = usageSummary,
+                model = message.model,
                 exitCode = message.exitCode,
             ),
         )
@@ -471,6 +475,7 @@ fun ChatWorkspace(
     modifier: Modifier = Modifier,
     attachments: ComposerAttachments? = null,
     draft: TextFieldState = key(tab.id) { rememberTextFieldState() },
+    throughput: Map<String, String> = emptyMap(),
     keyboard: ComposerKeyboard = ComposerKeyboard.forAgent(tab.agent),
 ) {
     val listState = rememberSaveable(tab.id, saver = LazyListState.Saver) {
@@ -649,6 +654,7 @@ fun ChatWorkspace(
                         ) {
                             ChatFeedItemContent(
                                 item = item,
+                                throughput = throughput,
                                 tab = tab,
                                 markdownStyle = markdownStyle,
                                 onRetryFullAccess = onRetryFullAccess,
@@ -883,6 +889,7 @@ private fun UserMessageBubble(message: ChatMessage) {
 
 @Composable
 private fun ChatFeedItemContent(
+    throughput: Map<String, String>,
     item: ChatFeedItem,
     tab: TabRecord,
     markdownStyle: MarkdownStyle,
@@ -892,6 +899,7 @@ private fun ChatFeedItemContent(
         is ChatFeedItem.UserMessage -> UserMessageBubble(item.message)
 
         is ChatFeedItem.AssistantHeader -> AssistantMessageHeader(
+            rate = throughput[item.model],
             tab = tab,
             isStreaming = item.isStreaming,
         )
@@ -941,7 +949,7 @@ private fun ChatFeedItemContent(
         is ChatFeedItem.AssistantFooter -> AssistantMessageFooter(
             messageId = item.messageId,
             text = item.text,
-            usageSummary = item.usageSummary,
+            usageSummary = listOfNotNull(item.usageSummary, throughput[item.model]).joinToString(" · ").ifEmpty { null },
             exitCode = item.exitCode,
         )
     }
@@ -949,6 +957,7 @@ private fun ChatFeedItemContent(
 
 @Composable
 private fun AssistantMessageHeader(
+    rate: String?,
     tab: TabRecord,
     isStreaming: Boolean,
 ) {
@@ -995,6 +1004,13 @@ private fun AssistantMessageHeader(
                         color = AppTheme.colors.info,
                     )
                 }
+            }
+            if (rate != null) {
+                Text(
+                    text = rate,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

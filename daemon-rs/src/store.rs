@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::{fs, io};
 
 mod persistence;
+mod throughput;
 use persistence::{SaveRequest, StoreFiles};
 
 use crate::attachments::normalize_attachments;
@@ -132,17 +133,24 @@ pub fn validate_working_dir(raw: &str) -> Result<String, String> {
 
 #[derive(Default)]
 struct StoreInner {
+    throughput: throughput::Throughput,
     tabs: Vec<Value>,
     closed_tabs: Vec<Value>,
     active_tab_id: Option<String>,
     messages_by_tab: HashMap<String, Vec<Value>>,
     revision: u64,
     index_revision: Option<u64>,
+    throughput_revision: Option<u64>,
     dirty_message_tabs: HashMap<String, u64>,
     deleted_tab_dirs: HashSet<String>,
 }
 
 impl StoreInner {
+    fn mark_throughput_dirty(&mut self) {
+        self.revision += 1;
+        self.throughput_revision = Some(self.revision);
+    }
+
     fn mark_index_dirty(&mut self) {
         self.revision += 1;
         self.index_revision = Some(self.revision);
@@ -272,6 +280,11 @@ impl StateStore {
         loop {
             interval.tick().await;
             self.prune_expired_closed_tabs();
+            let mut inner = self.inner.lock().unwrap();
+            if inner.throughput.prune(now_ms()) {
+                inner.mark_throughput_dirty();
+                self.schedule_save();
+            }
         }
     }
 
@@ -289,24 +302,30 @@ impl StateStore {
     fn load(&self, files: &StoreFiles) -> bool {
         let index_path = files.index_path();
         let ws_path = files.workspace_path();
-        if !index_path.exists() && !ws_path.exists() {
-            return false;
-        }
-
         let now = now_ms();
-        let mut recovered_any = false;
+        let mut throughput: throughput::Throughput = fs::read(files.throughput_path())
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default();
+        let mut recovered_any = throughput.prune(now);
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.throughput = throughput;
+            if recovered_any {
+                inner.mark_throughput_dirty();
+            }
+        }
+        if !index_path.exists() && !ws_path.exists() {
+            return recovered_any;
+        }
         let mut index_dirty = false;
         let mut dirty_message_tabs: HashSet<String> = HashSet::new();
 
-        let saved_active_tab_id: Option<String> = fs::read_to_string(&ws_path)
+        let workspace = fs::read_to_string(&ws_path)
             .ok()
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-            .and_then(|v| {
-                v.get("activeTabId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            });
-
+            .unwrap_or_default();
+        let saved_active_tab_id = strip_or_none(workspace.get("activeTabId"));
         let mut tabs: Vec<Value> = Vec::new();
         let mut closed_tabs: Vec<Value> = Vec::new();
 
@@ -512,6 +531,33 @@ impl StateStore {
             .send(SaveRequest::Flush(reply))
             .map_err(io::Error::other)?;
         result.recv().map_err(io::Error::other)?
+    }
+
+    pub fn with_throughput(&self, send: impl FnOnce(Vec<Value>)) {
+        let inner = self.inner.lock().unwrap();
+        send(inner.throughput.rates(now_ms()));
+    }
+
+    pub fn record_throughput(
+        &self,
+        agent: &str,
+        model: &str,
+        tokens: u64,
+        duration_ms: u64,
+        send: impl FnOnce(Vec<Value>),
+    ) {
+        if duration_ms == 0 {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let now = now_ms();
+        inner.throughput.prune(now);
+        inner
+            .throughput
+            .record(agent, model, now, tokens, duration_ms);
+        inner.mark_throughput_dirty();
+        send(inner.throughput.rates(now));
+        self.schedule_save();
     }
 
     pub fn list_tabs(&self) -> Value {

@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -57,6 +58,29 @@ class ModelPickerUsageUiTest {
             ),
         ),
     )
+
+    @Test
+    fun throughputAppearsOnTheMatchingModelWithoutCheckingQuota() {
+        var rates by mutableStateOf(emptyMap<String, String>())
+        composeRule.setContent {
+            HerdrTheme {
+                ModelPickerSheetContent(
+                    agentLabel = "Antigravity",
+                    currentModel = null,
+                    defaultModel = null,
+                    models = sampleModels,
+                    isRefreshing = false,
+                    throughput = rates,
+                    onRefresh = {},
+                    onSelectModel = {},
+                )
+            }
+        }
+        composeRule.runOnIdle { rates = mapOf(sampleModels.first().id to "24.5 tokens/s") }
+        composeRule.onNodeWithTag("model_option_${sampleModels.first().id}").assertTextContains("24.5 tokens/s")
+        composeRule.runOnIdle { rates = emptyMap() }
+        composeRule.onNodeWithText("24.5 tokens/s").assertDoesNotExist()
+    }
 
     @Test
     fun clickingUsageButtonGeneratesUsageLeftAndResetTime() {

@@ -61,6 +61,7 @@ import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
 import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
 import com.example.data.FsListResponse
 import com.example.data.MAX_OPEN_TABS
+import com.example.data.ModelThroughput
 import com.example.data.SHELL_MODE_COMMAND
 import com.example.data.SHELL_MODE_PTY
 import com.example.data.resolveAgentModelCatalog
@@ -117,6 +118,7 @@ fun NewTabSheet(
     onLoadInitialDirectories: (suspend (String?) -> Result<FsListResponse>)? = null,
     createError: String? = null,
     isCreating: Boolean = false,
+    throughput: List<ModelThroughput> = emptyList(),
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -127,6 +129,7 @@ fun NewTabSheet(
     ) {
         NewTabSheetContent(
             agents = agents,
+            throughput = throughput,
             defaultCwd = defaultCwd,
             canCreateTab = canCreateTab,
             ptySupported = ptySupported,
@@ -163,6 +166,7 @@ internal fun NewTabSheetContent(
     onLoadInitialDirectories: (suspend (String?) -> Result<FsListResponse>)? = null,
     createError: String? = null,
     isCreating: Boolean = false,
+    throughput: List<ModelThroughput> = emptyList(),
 ) {
     val effectiveAgents = remember(agents) {
         if (agents.isNotEmpty()) {
@@ -541,6 +545,7 @@ internal fun NewTabSheetContent(
             val (availableModels, defaultModel) = remember(selectedAgent, effectiveAgents) {
                 resolveAgentModelCatalog(selectedAgent, effectiveAgents)
             }
+            val rates = rememberThroughputLabels(throughput, selectedAgent)
             val defaultChipText = remember(defaultModel, availableModels) {
                 val defName = defaultModel?.let { defId ->
                     availableModels.firstOrNull { it.id == defId }?.name ?: defId
@@ -562,14 +567,14 @@ internal fun NewTabSheetContent(
                     ThemedFilterChip(
                         selected = selectedModel == null,
                         onClick = { selectedModel = null },
-                        label = { Text(defaultChipText, maxLines = 1) },
+                        label = { Text(listOfNotNull(defaultChipText, rates[defaultModel]).joinToString(" · "), maxLines = 1) },
                         modifier = Modifier.testTag("new_tab_model_default"),
                     )
                     for (option in availableModels) {
                         ThemedFilterChip(
                             selected = selectedModel == option.id,
                             onClick = { selectedModel = option.id },
-                            label = { Text(option.name, maxLines = 1) },
+                            label = { Text(listOfNotNull(option.name, rates[option.id]).joinToString(" · "), maxLines = 1) },
                             modifier = Modifier.testTag("new_tab_model_${option.id}"),
                         )
                     }

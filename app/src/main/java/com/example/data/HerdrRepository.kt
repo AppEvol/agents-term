@@ -39,6 +39,7 @@ data class WorkspaceState(
     val bannerMessage: String? = null,
     val daemonUpdateStatus: DaemonUpdateStatus? = null,
     val precomputedFinishedTabIds: Set<String>? = null,
+    val throughput: List<ModelThroughput> = emptyList(),
 ) {
     val canCreateTab: Boolean
         get() = tabs.size < MAX_OPEN_TABS
@@ -102,12 +103,15 @@ fun reduceWorkspaceEvent(
                 connectionState = ConnectionState.CONNECTED,
                 connectionError = null,
                 serverInfo = nextServer,
+                throughput = event.throughput.orEmpty(),
                 tabs = incomingTabs,
                 closedTabs = event.closedTabs.orEmpty(),
                 selectedTabId = nextSelected,
                 daemonUpdateStatus = nextUpdateStatus,
             )
         }
+
+        "model_throughput" -> state.copy(throughput = event.throughput.orEmpty())
 
         "tab_created" -> {
             val tab = event.tab ?: return state

@@ -111,6 +111,18 @@ impl TurnParser for ClaudeTurn {
         }
 
         let ev_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
+        if ev_type == "system" && obj.get("subtype").and_then(Value::as_str) == Some("init") {
+            if let Some(model) = obj
+                .get("model")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                let mut message = sink.message();
+                if message["model"].is_null() {
+                    message["model"] = json!(model);
+                }
+            }
+        }
         if ev_type == "stream_event" {
             if let Some(inner) = obj.get("event").and_then(Value::as_object) {
                 let itype = inner.get("type").and_then(Value::as_str).unwrap_or("");
