@@ -13,8 +13,8 @@ Android App ──HTTP/WS (Tailscale)──▶ agentsterm-daemon (Rust) ──sp
                                      agents_term_app_cli (read/control bridge)
 ```
 
-- **Android client (`app/`):** Connects over Tailscale to the VM daemon via REST + WebSocket using bearer token authentication.
-- **VM daemon (`daemon-rs/`):** Single static Rust binary (`agentsterm-daemon`) that owns tab lifecycle, message persistence, agent process execution, uploaded debug dumps, and the app-inspection/control bridge.
+- **Android client (`app/`):** Connects over Tailscale to the VM daemon via REST + WebSocket using bearer token authentication. Includes an opt-in interactive PTY terminal backed by `libghostty-vt` (see [Interactive PTY Architecture](pty-architecture.md)).
+- **VM daemon (`daemon-rs/`):** Single static Rust binary (`agentsterm-daemon`) that owns tab lifecycle, message persistence, agent process execution, interactive Linux PTY sessions, uploaded debug dumps, and the app-inspection/control bridge.
 - **VM CLI (`agents_term_app_cli`):** Symlink to `agentsterm-daemon` (dispatched via `argv[0]`) so agents running on the VM can inspect or drive the connected Android app through the daemon without duplicating binaries.
 
 ---
@@ -178,3 +178,12 @@ scripts/static-checks.sh
 ```
 
 Note that `scripts/static-checks.sh` runs `shellcheck` over `git ls-files '*.sh'` (so stage new shell scripts with `git add` before running it) and `actionlint` over `.github/workflows/*.yml`.
+
+---
+
+## Related Docs
+
+- [Interactive PTY Architecture](pty-architecture.md) — opt-in PTY daemon subsystem, WebSocket replay protocol, `libghostty-vt` JNI bridge, and mobile terminal UI
+- [Daemon API Contract](daemon-api.md) — HTTP and WebSocket endpoints served by `agentsterm-daemon`
+- [VM Daemon Setup & Operations](vm-daemon.md) — installation, service lifecycle, and CLI commands
+- [Development, Testing & Releases](development.md) — local build toolchains, static checks, and test suites
