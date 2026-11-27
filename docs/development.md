@@ -13,6 +13,8 @@ sudo ./install_deps.sh       # install missing dependencies (safe to re-run)
 
 The script reuses an Android SDK that is already installed: `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), then the one an earlier run recorded in `/etc/profile.d/agentsterm-dev.sh`, then `~/Android/Sdk`. Otherwise it installs one in `/opt/android-sdk`.
 
+It also sets up the Android emulator when the machine can run it (x86_64 with KVM): the emulator, the system image CI tests on (`system-images;android-35;google_apis;x86_64`, about 4 GB on disk) and a virtual device named `agentsterm-api35`. This part is optional; `--check` reports it but does not fail without it. See [Running the Emulator](#running-the-emulator).
+
 Manual requirements:
 
 - **JDK 17 or newer** to run Gradle 9.3.1 (the Java compilation target is configured in `app/build.gradle.kts`).
@@ -25,6 +27,21 @@ Manual requirements:
 - **Rust toolchain** (`rustup`, `cargo`, `rustfmt`, `clippy`, and musl targets `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`) for building and testing `daemon-rs/`.
 
 > **Important:** Do **not** commit `local.properties` or any `*.keystore` files. Set `ANDROID_SDK_ROOT` or `ANDROID_HOME` via the environment instead.
+
+## Running the Emulator
+
+With the emulator set up by `install_deps.sh`, start the virtual device without a window, using the same options as CI, and wait until it has booted:
+
+```bash
+export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator"
+emulator -avd agentsterm-api35 -no-snapshot-save -no-window -gpu swiftshader_indirect \
+  -noaudio -no-boot-anim -camera-back none >/tmp/emulator.log 2>&1 &
+adb wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done'
+```
+
+- Install a debug build with `adb install -r app/build/outputs/apk/debug/*.apk`, and look at the screen with `adb exec-out screencap -p > /tmp/screen.png`.
+- Inside the emulator, the VM's own `127.0.0.1` is `10.0.2.2`; alternatively `adb reverse tcp:7599 tcp:7599` makes a daemon on that port reachable as `127.0.0.1:7599`.
+- Stop it with `adb emu kill`. Only one agent at a time can use the virtual device: check `adb devices` before starting it.
 
 ## Debug Signing Keystore
 
