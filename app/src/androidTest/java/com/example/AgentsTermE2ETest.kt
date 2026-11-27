@@ -25,6 +25,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -428,9 +429,11 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("composer_input").performTextInput("Final urgent follow-up")
         composeRule.onNodeWithTag("send_button").performSemanticsAction(SemanticsActions.OnLongClick)
 
-        waitForText("Interrupted by user")
-        waitForText("First queued follow-up\n\nFinal urgent follow-up")
         waitForText("Repository is clean on main branch.")
+        waitForText("First queued follow-up\n\nFinal urgent follow-up")
+        closeSoftKeyboard()
+        composeRule.onNodeWithTag("chat_message_list").performScrollToIndex(0)
+        waitForText("Interrupted by user")
         assertTrue(activeDaemon.interruptedTabIds.contains("tab_seed"))
         assertTrue(composeRule.onAllNodesWithTag("queued_messages_tray").fetchSemanticsNodes().isEmpty())
 
@@ -447,7 +450,7 @@ class AgentsTermE2ETest {
 
         waitForTag("allow_full_access_button")
         composeRule.onNodeWithText("Permission Required").assertIsDisplayed()
-        composeRule.onNodeWithTag("allow_full_access_button").performClick()
+        composeRule.onNodeWithTag("allow_full_access_button").performSemanticsAction(SemanticsActions.OnClick)
 
         waitForText("Full access granted. Command completed successfully.")
         assertTrue(activeDaemon.receivedOverrideModes.contains("full-access"))
