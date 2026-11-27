@@ -9,6 +9,13 @@
   - Do not modify `user.name` or `user.email` in git config.
   - Do not add `Co-Authored-By:` trailers, "Generated with ..." notices, or any other agent attribution lines.
 
+## Toolchain Dependencies
+
+- Before starting work in this repository, run `./install_deps.sh --check` from the repository root. It needs no root, changes nothing, and exits non-zero when a required toolchain (JDK, Rust with the musl targets, Gradle, Android SDK, and the base tools) is missing.
+- If the check fails, stop and ask the user to run `sudo ./install_deps.sh`, then run the check again. Do not work around a missing toolchain (for example by building in Docker), and do not push changes whose tests you could not run for that reason.
+- If the check passes but notes that `ANDROID_HOME` is not set in your shell, export it as the note says before running `gradle`.
+- When CI starts using a different tool or version (`.github/workflows/ci.yml`), update the versions at the top of `install_deps.sh` in the same change.
+
 ## Workflow
 
 - Always do your work in your own git worktree on a dedicated work branch. Multiple agents may work in this repository on the same machine at the same time, and separate worktrees keep their changes from conflicting.

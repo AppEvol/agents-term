@@ -13,6 +13,8 @@ AgentsTerm supports both:
 Follow these steps to compile, test, and package the Android APK from this repository.
 
 ### Prerequisites
+On a Debian/Ubuntu VM, `sudo ./install_deps.sh` installs everything below plus the Rust toolchain for the daemon, and `./install_deps.sh --check` reports what is missing without changing anything.
+
 - **JDK 17 or 21** (Gradle 9.3.1 requires JDK 17+ to run; Java compilation target is configured in `app/build.gradle.kts`).
 - **Android SDK** with `ANDROID_SDK_ROOT` (or `ANDROID_HOME`) exported:
   - `platforms;android-36` (SDK 36, minor API level 1 / Android 16)
