@@ -276,6 +276,39 @@ class ChatAttachmentsUiTest {
     }
 
     @Test
+    fun viewerLoadsImageFromBackgroundIoDispatcher() {
+        val png = ByteArrayOutputStream().also {
+            Bitmap.createBitmap(160, 120, Bitmap.Config.ARGB_8888)
+                .apply { eraseColor(Color.GREEN) }
+                .compress(Bitmap.CompressFormat.PNG, 100, it)
+        }.toByteArray()
+        val images = AttachmentImageStore(
+            cacheDir = null,
+            ioDispatcher = Dispatchers.IO,
+            download = { _, _ -> Result.success(png) },
+        )
+        val messages = listOf(
+            ChatMessage(
+                id = "m1",
+                tabId = "tab_1",
+                role = "user",
+                text = "Background decode",
+                attachments = listOf(MessageAttachment(id = "att_bg")),
+            ),
+        )
+        setChat(messages = messages, images = images) { composerAttachments() }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("message_attachment_att_bg").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodesWithTag("attachment_viewer_image")
+                .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                .isNotEmpty()
+        }
+        composeRule.onNodeWithTag("attachment_viewer_image").assertIsDisplayed()
+    }
+
+    @Test
     fun queuedMessagesShowHowManyImagesTheyCarry() {
         val queued = listOf(
             QueuedMessage(id = "q_1", text = "Check this layout", attachments = listOf(MessageAttachment(id = "att_1"))),

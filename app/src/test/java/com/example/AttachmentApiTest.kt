@@ -14,6 +14,7 @@ import com.example.data.encodeHerdrJson
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -119,6 +120,25 @@ class AttachmentApiTest {
         assertThrows(IOException::class.java) {
             runBlocking { api.downloadAttachment(config, "tab_9", "att_gone") }
         }
+        assertEquals("HTTP 404 is not retried", 2, server.requestCount)
+    }
+
+    @Test
+    fun downloadRetriesOnceOnStalledOrDroppedConnectionWithFreshSocket() = runBlocking {
+        val bytes = ByteArray(1024) { (it % 199).toByte() }
+        val fastTimeoutApi = HerdrApiClient(attachmentReadTimeoutMs = 200L)
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        server.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(bytes)))
+
+        val downloaded = fastTimeoutApi.downloadAttachment(config, "tab_9", "att_retry")
+
+        assertArrayEquals(bytes, downloaded)
+        assertEquals(2, server.requestCount)
+        val first = server.takeRequest()
+        val retry = server.takeRequest()
+        assertEquals("/api/tabs/tab_9/attachments/att_retry", first.path)
+        assertEquals("/api/tabs/tab_9/attachments/att_retry", retry.path)
+        assertEquals("close", retry.getHeader("Connection"))
     }
 
     @Test

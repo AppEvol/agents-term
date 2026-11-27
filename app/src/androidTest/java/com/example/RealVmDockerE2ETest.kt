@@ -65,6 +65,7 @@ class RealVmDockerE2ETest {
                 try {
                     base.evaluate()
                 } catch (t: Throwable) {
+                    if ("[window focus at failure]" in t.message.orEmpty()) throw t
                     val focus = queryWindowFocusDiagnostics()
                     throw AssertionError("${t.message}\n[window focus at failure] $focus", t)
                 }
@@ -154,9 +155,18 @@ class RealVmDockerE2ETest {
     }
 
     private fun formatFailureDiagnostics(header: String): String {
+        val focus = queryWindowFocusDiagnostics()
+        val dbg = com.example.ui.MainViewModel.latestDebugRecorder
+            ?.snapshot()
+            ?.takeLast(30)
+            ?.joinToString("\n  ") { "[${it.category}] ${it.event}: ${it.detail}" }
+            ?: "(no debug events)"
         val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString(maxDepth = Int.MAX_VALUE) }
             .getOrElse { it.toString() }
-        return "$header\nCompose roots:\n$roots"
+        return "$header\n" +
+            "[window focus at failure] $focus\n" +
+            "App debug events:\n  $dbg\n" +
+            "Compose roots:\n$roots"
     }
 
     private fun waitForCondition(
@@ -375,7 +385,7 @@ class RealVmDockerE2ETest {
         composeRule.onNodeWithContentDescription("Sent image 1 of 2")
             .performSemanticsAction(SemanticsActions.OnClick)
         waitForTag("attachment_viewer")
-        waitForTag("attachment_viewer_image")
+        waitForTag("attachment_viewer_image", timeoutMs = 30_000L)
         composeRule.onNodeWithTag("attachment_viewer_close").performClick()
         waitForTagGone("attachment_viewer", timeoutMs = 10_000L)
 
