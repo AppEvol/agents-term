@@ -178,6 +178,7 @@ class ChatQueueUiTest {
     fun workingAnimationsAppearOnlyWhileActiveAndStreaming() {
         val streamingMsg = ChatMessage(
             id = "msg_stream",
+            model = "model-a",
             tabId = "tab_1",
             role = "assistant",
             text = "",
@@ -189,6 +190,7 @@ class ChatQueueUiTest {
                 ChatWorkspace(
                     tab = workingTab,
                     messages = listOf(streamingMsg),
+                    throughput = mapOf("model-a" to "50 tokens/s"),
                     isLoading = false,
                     isConnected = true,
                     onSendMessage = {},
@@ -206,6 +208,7 @@ class ChatQueueUiTest {
         composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
             .assertCountEquals(0)
         composeRule.onNodeWithTag("streaming_working_badge").assertIsDisplayed()
+        composeRule.onNodeWithText("50 tokens/s").assertIsDisplayed()
         composeRule.onNodeWithTag("streaming_activity_indicator").assertIsDisplayed()
     }
 }

@@ -8,7 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.example.data.ModelThroughput
 import kotlinx.coroutines.delay
-import java.util.Locale
+import java.text.NumberFormat
 
 @Composable
 internal fun rememberThroughputLabels(rates: List<ModelThroughput>, agent: String): Map<String, String> {
@@ -22,6 +22,7 @@ internal fun rememberThroughputLabels(rates: List<ModelThroughput>, agent: Strin
         }
     }
     return remember(active) {
-        active.associate { it.model to String.format(Locale.getDefault(), "%.1f tok/s", it.tokensPerSecond) }
+        val number = NumberFormat.getNumberInstance().apply { maximumFractionDigits = 1 }
+        active.associate { it.model to "${number.format(it.tokensPerSecond)} tokens/s" }
     }
 }

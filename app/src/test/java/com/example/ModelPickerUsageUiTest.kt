@@ -76,10 +76,10 @@ class ModelPickerUsageUiTest {
                 )
             }
         }
-        composeRule.runOnIdle { rates = mapOf(sampleModels.first().id to "24.5 tok/s") }
-        composeRule.onNodeWithTag("model_option_${sampleModels.first().id}").assertTextContains("24.5 tok/s")
+        composeRule.runOnIdle { rates = mapOf(sampleModels.first().id to "24.5 tokens/s") }
+        composeRule.onNodeWithTag("model_option_${sampleModels.first().id}").assertTextContains("24.5 tokens/s")
         composeRule.runOnIdle { rates = emptyMap() }
-        composeRule.onNodeWithText("24.5 tok/s").assertDoesNotExist()
+        composeRule.onNodeWithText("24.5 tokens/s").assertDoesNotExist()
     }
 
     @Test

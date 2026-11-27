@@ -198,6 +198,7 @@ private sealed interface ChatFeedItem {
         override val key: String,
         override val addMessageGap: Boolean,
         val isStreaming: Boolean,
+        val model: String?,
     ) : ChatFeedItem {
         override val contentType: String get() = "assistant_header"
     }
@@ -317,6 +318,7 @@ private fun MutableList<ChatFeedItem>.appendAssistantFeedItems(
     add(
         ChatFeedItem.AssistantHeader(
             key = "${message.id}:header",
+            model = message.model,
             addMessageGap = addMessageGap,
             isStreaming = isStreaming,
         ),
@@ -897,6 +899,7 @@ private fun ChatFeedItemContent(
         is ChatFeedItem.UserMessage -> UserMessageBubble(item.message)
 
         is ChatFeedItem.AssistantHeader -> AssistantMessageHeader(
+            rate = throughput[item.model],
             tab = tab,
             isStreaming = item.isStreaming,
         )
@@ -954,6 +957,7 @@ private fun ChatFeedItemContent(
 
 @Composable
 private fun AssistantMessageHeader(
+    rate: String?,
     tab: TabRecord,
     isStreaming: Boolean,
 ) {
@@ -1000,6 +1004,13 @@ private fun AssistantMessageHeader(
                         color = AppTheme.colors.info,
                     )
                 }
+            }
+            if (rate != null) {
+                Text(
+                    text = rate,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
