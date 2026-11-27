@@ -7,6 +7,9 @@ on:
   pull_request:
     branches:
       - main
+  # The merge queue tests each queued pull request on top of main and the
+  # pull requests ahead of it, then merges it if the required checks pass.
+  merge_group:
   workflow_dispatch:
     inputs:
       force_daemon_tests:
@@ -81,6 +84,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           FORCE_DAEMON_TESTS: ${{ inputs.force_daemon_tests }}
         run: |
@@ -125,6 +129,8 @@ jobs:
           BASE_SHA=""
           if [ "${EVENT_NAME}" = "pull_request" ] && [ -n "${PR_BASE_SHA}" ]; then
             BASE_SHA="${PR_BASE_SHA}"
+          elif [ "${EVENT_NAME}" = "merge_group" ] && [ -n "${MERGE_GROUP_BASE_SHA}" ]; then
+            BASE_SHA="${MERGE_GROUP_BASE_SHA}"
           elif [ "${EVENT_NAME}" = "push" ] && [ -n "${PUSH_BEFORE_SHA}" ] \
             && [ "${PUSH_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
             BASE_SHA="${PUSH_BEFORE_SHA}"
@@ -142,7 +148,8 @@ jobs:
               INSTALLER_TESTS_CHANGED="true"
             fi
             # A pull request that only touches documentation cannot change the APK,
-            # so it skips the Android build and emulator jobs. Documentation means
+            # so it skips the Android build and emulator jobs, on its own run and
+            # on its merge queue run. Documentation means
             # docs/ and top-level Markdown files, except the two docs that
             # daemon-rs/build.rs embeds in the daemon binary the emulator tests run
             # against. Pushes to main and manual runs always build: they publish.
@@ -150,7 +157,8 @@ jobs:
             # so a surprise here runs the full suite rather than skipping it.
             NOT_DOCS="$(grep -vE '^(docs/|[^/]+\.md$)' <<< "${CHANGED_FILES}" || true)"
             EMBEDDED_DOCS="$(grep -E '^docs/(live-debugging|agents_debugging_tips)\.md$' <<< "${CHANGED_FILES}" || true)"
-            if [ "${EVENT_NAME}" = "pull_request" ] && [ -n "${CHANGED_FILES}" ] \
+            if { [ "${EVENT_NAME}" = "pull_request" ] || [ "${EVENT_NAME}" = "merge_group" ]; } \
+              && [ -n "${CHANGED_FILES}" ] \
               && [ -z "${NOT_DOCS}" ] && [ -z "${EMBEDDED_DOCS}" ]; then
               DOCS_ONLY="true"
             fi
