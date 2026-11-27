@@ -21,6 +21,8 @@ serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["full"] }
 urlencoding = "2"
+# Session D-Bus client for reading the Antigravity sign-in from the Secret Service keyring.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [build-dependencies]
 sha2 = "0.10"
