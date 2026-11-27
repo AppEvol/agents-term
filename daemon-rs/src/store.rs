@@ -1,16 +1,16 @@
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::Path;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::Notify;
+use std::{fs, io};
+
+mod persistence;
+use persistence::{SaveRequest, StoreFiles};
 
 use crate::attachments::normalize_attachments;
-use crate::config::{
-    ensure_config_dir, ensure_dir_0700, home_dir, tab_dir, tab_messages_path, tabs_index_path,
-    tabs_root, workspace_path, write_atomic_file,
-};
+use crate::config::{agents_term_home, home_dir, write_atomic_file};
 use crate::log::{log_error, log_warn};
 use crate::util::{derive_task_summary_from_messages, now_ms, rand_hex};
 
@@ -107,19 +107,28 @@ pub fn resolve_abs_path(raw: &str) -> String {
     }
 }
 
+#[derive(Default)]
 struct StoreInner {
     tabs: Vec<Value>,
     closed_tabs: Vec<Value>,
     active_tab_id: Option<String>,
     messages_by_tab: HashMap<String, Vec<Value>>,
-    index_dirty: bool,
-    dirty_message_tabs: HashSet<String>,
+    revision: u64,
+    index_revision: Option<u64>,
+    dirty_message_tabs: HashMap<String, u64>,
     deleted_tab_dirs: HashSet<String>,
 }
 
 impl StoreInner {
-    fn is_dirty(&self) -> bool {
-        self.index_dirty || !self.dirty_message_tabs.is_empty() || !self.deleted_tab_dirs.is_empty()
+    fn mark_index_dirty(&mut self) {
+        self.revision += 1;
+        self.index_revision = Some(self.revision);
+    }
+
+    fn mark_messages_dirty(&mut self, tab_id: &str) {
+        self.revision += 1;
+        self.dirty_message_tabs
+            .insert(tab_id.to_owned(), self.revision);
     }
 }
 
@@ -179,7 +188,7 @@ fn prune_closed_tabs_locked(inner: &mut StoreInner, now: i64) -> bool {
         }
     }
     if changed {
-        inner.index_dirty = true;
+        inner.mark_index_dirty();
     }
     changed
 }
@@ -198,49 +207,40 @@ fn tab_with_disk_state(tab: &Value, state: &str) -> Value {
 #[derive(Clone)]
 pub struct StateStore {
     inner: Arc<Mutex<StoreInner>>,
-    save_notify: Arc<Notify>,
+    writer: mpsc::SyncSender<SaveRequest>,
 }
 
 impl StateStore {
     pub fn new() -> Self {
+        Self::open(StoreFiles::new(agents_term_home()), write_atomic_file)
+    }
+
+    fn open(
+        files: StoreFiles,
+        write: impl Fn(&Path, &[u8], u32) -> io::Result<()> + Send + 'static,
+    ) -> Self {
+        let (writer, requests) = mpsc::sync_channel(1);
         let store = Self {
-            inner: Arc::new(Mutex::new(StoreInner {
-                tabs: Vec::new(),
-                closed_tabs: Vec::new(),
-                active_tab_id: None,
-                messages_by_tab: HashMap::new(),
-                index_dirty: false,
-                dirty_message_tabs: HashSet::new(),
-                deleted_tab_dirs: HashSet::new(),
-            })),
-            save_notify: Arc::new(Notify::new()),
+            inner: Arc::default(),
+            writer,
         };
-        let recovered = store.load();
+        let recovered = store.load(&files);
+        let inner = store.inner.clone();
+        std::thread::spawn(move || {
+            persistence::run_writer(requests, || files.save(&inner, &write))
+        });
         if recovered {
-            store.save_now();
+            if let Err(err) = store.save_now() {
+                log_error(&format!("Startup recovery save failed: {err}"));
+            }
         }
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let clone = store.clone();
-            handle.spawn(async move {
-                clone.save_loop().await;
-            });
             let prune_clone = store.clone();
             handle.spawn(async move {
                 prune_clone.prune_loop().await;
             });
         }
         store
-    }
-
-    async fn save_loop(&self) {
-        loop {
-            self.save_notify.notified().await;
-            tokio::time::sleep(SAVE_DEBOUNCE).await;
-            let should_save = self.inner.lock().map(|g| g.is_dirty()).unwrap_or(false);
-            if should_save {
-                self.save_now();
-            }
-        }
     }
 
     async fn prune_loop(&self) {
@@ -263,9 +263,9 @@ impl StateStore {
         changed
     }
 
-    fn load(&self) -> bool {
-        let index_path = tabs_index_path();
-        let ws_path = workspace_path();
+    fn load(&self, files: &StoreFiles) -> bool {
+        let index_path = files.index_path();
+        let ws_path = files.workspace_path();
         if !index_path.exists() && !ws_path.exists() {
             return false;
         }
@@ -370,7 +370,7 @@ impl StateStore {
 
         let mut messages_by_tab: HashMap<String, Vec<Value>> = HashMap::new();
         for tab_id in &known_ids {
-            let Some(mpath) = tab_messages_path(tab_id) else {
+            let Some(mpath) = files.messages_path(tab_id) else {
                 continue;
             };
             if !mpath.exists() {
@@ -442,7 +442,7 @@ impl StateStore {
         }
 
         let mut deleted_tab_dirs: HashSet<String> = HashSet::new();
-        if let Ok(entries) = fs::read_dir(tabs_root()) {
+        if let Ok(entries) = fs::read_dir(&files.root) {
             for entry in entries.flatten() {
                 let Ok(ft) = entry.file_type() else { continue };
                 if !ft.is_dir() {
@@ -461,8 +461,12 @@ impl StateStore {
         inner.closed_tabs = closed_tabs;
         inner.active_tab_id = active_tab_id;
         inner.messages_by_tab = messages_by_tab;
-        inner.index_dirty = index_dirty;
-        inner.dirty_message_tabs = dirty_message_tabs;
+        if index_dirty {
+            inner.mark_index_dirty();
+        }
+        for id in dirty_message_tabs {
+            inner.mark_messages_dirty(&id);
+        }
         inner.deleted_tab_dirs = deleted_tab_dirs;
         if prune_closed_tabs_locked(&mut inner, now) {
             recovered_any = true;
@@ -470,125 +474,21 @@ impl StateStore {
         recovered_any
     }
 
-    pub fn schedule_save(&self) {
-        if tokio::runtime::Handle::try_current().is_ok() {
-            self.save_notify.notify_one();
-        } else {
-            self.save_now();
+    fn schedule_save(&self) {
+        // A queued request already covers all mutations made before this call.
+        if let Err(mpsc::TrySendError::Disconnected(_)) =
+            self.writer.try_send(SaveRequest::Scheduled)
+        {
+            log_error("Store writer stopped");
         }
     }
 
-    pub fn save_now(&self) {
-        let (index_snapshot, msg_writes, dirs_to_delete) = {
-            let mut inner = self.inner.lock().unwrap();
-            prune_closed_tabs_locked(&mut inner, now_ms());
-            if !inner.is_dirty() {
-                return;
-            }
-            let index_snapshot = if inner.index_dirty {
-                inner.index_dirty = false;
-                Some((
-                    inner.active_tab_id.clone(),
-                    inner.tabs.clone(),
-                    inner.closed_tabs.clone(),
-                ))
-            } else {
-                None
-            };
-            let dirty_ids: Vec<String> = inner.dirty_message_tabs.drain().collect();
-            let mut msg_writes: Vec<(String, Vec<Value>)> = Vec::with_capacity(dirty_ids.len());
-            for tid in dirty_ids {
-                if let Some(msgs) = inner.messages_by_tab.get(&tid) {
-                    msg_writes.push((tid, msgs.clone()));
-                }
-            }
-            let dirs_to_delete: Vec<String> = inner.deleted_tab_dirs.drain().collect();
-            (index_snapshot, msg_writes, dirs_to_delete)
-        };
-
-        if let Err(err) = ensure_config_dir() {
-            log_error(&format!("Failed to create agents-term dir: {err}"));
-            return;
-        }
-        if let Err(err) = ensure_dir_0700(&tabs_root()) {
-            log_error(&format!("Failed to create agents_tabs dir: {err}"));
-            return;
-        }
-
-        for (tab_id, msgs) in msg_writes {
-            let (Some(tdir), Some(mpath)) = (tab_dir(&tab_id), tab_messages_path(&tab_id)) else {
-                log_warn(&format!(
-                    "Skipping message persistence for unsafe tab id: {tab_id}"
-                ));
-                continue;
-            };
-            if let Err(err) = ensure_dir_0700(&tdir) {
-                log_error(&format!(
-                    "Failed to create tab dir {}: {err}",
-                    tdir.display()
-                ));
-                continue;
-            }
-            match serde_json::to_string_pretty(&msgs) {
-                Ok(serialized) => {
-                    let content = format!("{serialized}\n");
-                    if let Err(err) = write_atomic_file(&mpath, content.as_bytes(), 0o600) {
-                        log_error(&format!("Failed to save messages for tab {tab_id}: {err}"));
-                    }
-                }
-                Err(err) => log_error(&format!(
-                    "Failed to serialize messages for tab {tab_id}: {err}"
-                )),
-            }
-        }
-
-        if let Some((active_tab_id, tabs, closed_tabs)) = index_snapshot {
-            let workspace = json!({
-                "schemaVersion": WORKSPACE_SCHEMA_VERSION,
-                "activeTabId": active_tab_id,
-            });
-            match serde_json::to_string_pretty(&workspace) {
-                Ok(serialized) => {
-                    let content = format!("{serialized}\n");
-                    if let Err(err) =
-                        write_atomic_file(&workspace_path(), content.as_bytes(), 0o600)
-                    {
-                        log_error(&format!("Failed to save workspace.json: {err}"));
-                    }
-                }
-                Err(err) => log_error(&format!("Failed to serialize workspace.json: {err}")),
-            }
-
-            let mut lines = String::new();
-            for tab in &tabs {
-                if let Ok(line) = serde_json::to_string(&tab_with_disk_state(tab, "open")) {
-                    lines.push_str(&line);
-                    lines.push('\n');
-                }
-            }
-            for tab in &closed_tabs {
-                if let Ok(line) = serde_json::to_string(&tab_with_disk_state(tab, "closed")) {
-                    lines.push_str(&line);
-                    lines.push('\n');
-                }
-            }
-            if let Err(err) = write_atomic_file(&tabs_index_path(), lines.as_bytes(), 0o600) {
-                log_error(&format!("Failed to save tabs.jsonl: {err}"));
-            }
-        }
-
-        for tab_id in dirs_to_delete {
-            if let Some(tdir) = tab_dir(&tab_id) {
-                if tdir.exists() {
-                    if let Err(err) = fs::remove_dir_all(&tdir) {
-                        log_warn(&format!(
-                            "Failed to remove expired tab dir {}: {err}",
-                            tdir.display()
-                        ));
-                    }
-                }
-            }
-        }
+    pub fn save_now(&self) -> io::Result<()> {
+        let (reply, result) = mpsc::channel();
+        self.writer
+            .send(SaveRequest::Flush(reply))
+            .map_err(io::Error::other)?;
+        result.recv().map_err(io::Error::other)?
     }
 
     pub fn list_tabs(&self) -> Value {
@@ -697,8 +597,8 @@ impl StateStore {
             inner.tabs.push(tab.clone());
             inner.messages_by_tab.insert(tab_id.clone(), Vec::new());
             inner.active_tab_id = Some(tab_id.clone());
-            inner.index_dirty = true;
-            inner.dirty_message_tabs.insert(tab_id.clone());
+            inner.mark_index_dirty();
+            inner.mark_messages_dirty(&tab_id);
             inner.deleted_tab_dirs.remove(&tab_id);
         }
         self.schedule_save();
@@ -719,7 +619,7 @@ impl StateStore {
             obj.insert("id".into(), json!(tab_id));
             obj.insert("updatedAt".into(), json!(now_ms()));
             let cloned = tab.clone();
-            inner.index_dirty = true;
+            inner.mark_index_dirty();
             cloned
         };
         self.schedule_save();
@@ -824,7 +724,7 @@ impl StateStore {
                 }
             }
             if interrupted_any {
-                inner.dirty_message_tabs.insert(tab_id.to_string());
+                inner.mark_messages_dirty(tab_id);
             }
             if let Some(obj) = tab.as_object_mut() {
                 if obj.get("status").and_then(Value::as_str) == Some("working") {
@@ -839,7 +739,7 @@ impl StateStore {
                 .closed_tabs
                 .retain(|t| t.get("id").and_then(Value::as_str) != Some(tab_id));
             inner.closed_tabs.insert(0, tab.clone());
-            inner.index_dirty = true;
+            inner.mark_index_dirty();
             prune_closed_tabs_locked(&mut inner, now);
             tab
         };
@@ -890,7 +790,7 @@ impl StateStore {
             inner.tabs.push(tab.clone());
             inner.active_tab_id = Some(tab_id.to_string());
             inner.messages_by_tab.entry(tab_id.to_string()).or_default();
-            inner.index_dirty = true;
+            inner.mark_index_dirty();
             inner.deleted_tab_dirs.remove(tab_id);
             Ok(tab)
         };
@@ -924,7 +824,7 @@ impl StateStore {
                     .entry(tab_id.to_string())
                     .or_default()
                     .push(msg);
-                inner.dirty_message_tabs.insert(tab_id.to_string());
+                inner.mark_messages_dirty(tab_id);
                 true
             }
         };
@@ -960,7 +860,7 @@ impl StateStore {
                 } else {
                     msgs.push(updated);
                 }
-                inner.dirty_message_tabs.insert(tab_id.to_string());
+                inner.mark_messages_dirty(tab_id);
                 true
             }
         };
@@ -969,3 +869,6 @@ impl StateStore {
         }
     }
 }
+
+#[cfg(test)]
+mod persistence_tests;
