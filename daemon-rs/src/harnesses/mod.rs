@@ -12,6 +12,9 @@ use std::path::Path;
 mod agy;
 mod claude;
 mod codex;
+pub(crate) mod turn;
+
+use turn::{PreparedTurn, TurnRequest};
 
 /// The models a harness offers and the one its CLI uses by default.
 #[derive(Default)]
@@ -36,6 +39,8 @@ pub trait Harness: Send + Sync {
     fn cached_models(&self) -> ModelList;
     /// The model list, re-read or re-discovered when `force_refresh` is set or the cache is stale.
     fn models(&self, force_refresh: bool) -> BoxFuture<'_, ModelList>;
+    /// Builds the CLI arguments for one turn and the parser for the CLI's output.
+    fn prepare_turn(&self, req: TurnRequest) -> PreparedTurn;
     /// Fetches the signed-in account's remaining usage, as the `/api/agents/{agent}/usage` body.
     fn usage<'a>(&'a self, home: &'a Path) -> BoxFuture<'a, Value>;
 }
