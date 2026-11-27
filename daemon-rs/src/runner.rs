@@ -760,7 +760,9 @@ impl AgentRunner {
         }
         self.store
             .replace_message(tab_id, assistant_message.clone());
-        self.store.save_now();
+        if let Err(err) = self.store.save_now() {
+            log_error(&format!("Immediate store flush failed: {err}"));
+        }
         (self.broadcast)(
             json!({ "type": "message_created", "tabId": tab_id, "message": user_message }),
         );
@@ -800,7 +802,9 @@ impl AgentRunner {
         let mut patch = Map::new();
         patch.insert("sessionRef".into(), new_ref);
         if let Some(updated_tab) = self.store.update_tab(tab_id, patch) {
-            self.store.save_now();
+            if let Err(err) = self.store.save_now() {
+                log_error(&format!("Immediate store flush failed: {err}"));
+            }
             log_info(&format!(
                 "Persisted sessionRef immediately for tab={tab_id} kind={kind} value={value}"
             ));
@@ -1043,7 +1047,9 @@ impl AgentRunner {
         patch.insert("statusDetail".into(), Value::Null);
         patch.insert("unread".into(), json!(true));
         let updated_tab = self.store.update_tab(tab_id, patch);
-        self.store.save_now();
+        if let Err(err) = self.store.save_now() {
+            log_error(&format!("Immediate store flush failed: {err}"));
+        }
         (self.broadcast)(
             json!({ "type": "message_updated", "tabId": tab_id, "message": final_msg }),
         );
@@ -1274,7 +1280,9 @@ impl AgentRunner {
             patch.insert("lastMessagePreview".into(), json!(truncate(&msg_text, 120)));
         }
         let updated_tab = self.store.update_tab(tab_id, patch);
-        self.store.save_now();
+        if let Err(err) = self.store.save_now() {
+            log_error(&format!("Immediate store flush failed: {err}"));
+        }
 
         (self.broadcast)(
             json!({ "type": "message_updated", "tabId": tab_id, "message": final_msg }),

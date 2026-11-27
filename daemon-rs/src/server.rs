@@ -1158,7 +1158,9 @@ pub async fn run_daemon(
             "Received {reason}; shutting down AgentsTerm daemon"
         ));
         state_shutdown.runner.shutdown_active_turns(reason);
-        state_shutdown.store.save_now();
+        if let Err(err) = state_shutdown.store.save_now() {
+            log_warn(&format!("Shutdown store flush failed: {err}"));
+        }
     };
 
     axum::serve(listener, app)
@@ -1166,6 +1168,11 @@ pub async fn run_daemon(
         .await
         .map_err(|e| format!("Server error: {e}"))?;
 
+    // Requests already in flight can still mutate the store during graceful shutdown.
+    state
+        .store
+        .save_now()
+        .map_err(|e| format!("Final store flush failed: {e}"))?;
     log_info("AgentsTerm daemon stopped");
     Ok(())
 }

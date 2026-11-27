@@ -105,14 +105,6 @@ pub fn tabs_root() -> PathBuf {
     agents_term_home().join("agents_tabs")
 }
 
-pub fn workspace_path() -> PathBuf {
-    tabs_root().join("workspace.json")
-}
-
-pub fn tabs_index_path() -> PathBuf {
-    tabs_root().join("tabs.jsonl")
-}
-
 pub fn is_safe_tab_id(tab_id: &str) -> bool {
     !tab_id.is_empty()
         && tab_id != "."
@@ -123,15 +115,15 @@ pub fn is_safe_tab_id(tab_id: &str) -> bool {
 }
 
 pub fn tab_dir(tab_id: &str) -> Option<PathBuf> {
+    tab_dir_under(&tabs_root(), tab_id)
+}
+
+pub fn tab_dir_under(root: &Path, tab_id: &str) -> Option<PathBuf> {
     if is_safe_tab_id(tab_id) {
-        Some(tabs_root().join(tab_id))
+        Some(root.join(tab_id))
     } else {
         None
     }
-}
-
-pub fn tab_messages_path(tab_id: &str) -> Option<PathBuf> {
-    tab_dir(tab_id).map(|d| d.join("messages.json"))
 }
 
 /// Folder holding the images the app attached to a tab's messages.
