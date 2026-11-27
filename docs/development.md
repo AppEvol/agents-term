@@ -55,7 +55,7 @@ gradle :app:lintDebug             # Android Lint (needs the Android SDK)
 gradle :app:testDebugUnitTest
 
 # Run protocol models, pairing URI parser, WebSocket state reducer, and SSH bootstrap tests
-gradle :app:testDebugUnitTest --tests "com.example.ModelsAndStateTest"
+gradle :app:testDebugUnitTest --tests "com.appevol.agentsterm.ModelsAndStateTest"
 
 # Re-record Markdown golden images on Linux after an intentional rendering change
 gradle :app:testDebugUnitTest --tests '*MarkdownGoldenTest*' -Pgoldens=record

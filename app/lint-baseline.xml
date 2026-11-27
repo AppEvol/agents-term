@@ -7,7 +7,7 @@
         errorLine1="            val field = global.getDeclaredField(&quot;mViews&quot;).apply { isAccessible = true }"
         errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/AndroidUiDriver.kt"
+            file="src/main/java/com/appevol/agentsterm/data/AndroidUiDriver.kt"
             line="46"
             column="25"/>
     </issue>
@@ -18,7 +18,7 @@
         errorLine1="            val global = Class.forName(&quot;android.view.WindowManagerGlobal&quot;)"
         errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/AndroidUiDriver.kt"
+            file="src/main/java/com/appevol/agentsterm/data/AndroidUiDriver.kt"
             line="44"
             column="26"/>
     </issue>
@@ -84,7 +84,7 @@
         errorLine1="    private fun composeRoots(view: View): List&lt;ViewRootForTest> {"
         errorLine2="                                               ~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/AndroidUiDriver.kt"
+            file="src/main/java/com/appevol/agentsterm/data/AndroidUiDriver.kt"
             line="153"
             column="48"/>
     </issue>
@@ -95,7 +95,7 @@
         errorLine1="            if (v is ViewRootForTest) {"
         errorLine2="                     ~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/AndroidUiDriver.kt"
+            file="src/main/java/com/appevol/agentsterm/data/AndroidUiDriver.kt"
             line="157"
             column="22"/>
     </issue>
@@ -106,7 +106,7 @@
         errorLine1="    modifier: Modifier = Modifier,"
         errorLine2="    ~~~~~~~~">
         <location
-            file="src/main/java/com/example/ui/ChatScreen.kt"
+            file="src/main/java/com/appevol/agentsterm/ui/ChatScreen.kt"
             line="141"
             column="5"/>
     </issue>
@@ -117,7 +117,7 @@
         errorLine1="    modifier: Modifier = Modifier,"
         errorLine2="    ~~~~~~~~">
         <location
-            file="src/main/java/com/example/ui/TabDrawer.kt"
+            file="src/main/java/com/appevol/agentsterm/ui/TabDrawer.kt"
             line="98"
             column="5"/>
     </issue>
@@ -128,7 +128,7 @@
         errorLine1="    modifier: Modifier = Modifier,"
         errorLine2="    ~~~~~~~~">
         <location
-            file="src/main/java/com/example/ui/WorkingIndicators.kt"
+            file="src/main/java/com/appevol/agentsterm/ui/WorkingIndicators.kt"
             line="37"
             column="5"/>
     </issue>
@@ -139,7 +139,7 @@
         errorLine1="    modifier: Modifier = Modifier,"
         errorLine2="    ~~~~~~~~">
         <location
-            file="src/main/java/com/example/ui/WorkingIndicators.kt"
+            file="src/main/java/com/appevol/agentsterm/ui/WorkingIndicators.kt"
             line="91"
             column="5"/>
     </issue>
@@ -172,7 +172,7 @@
         errorLine1="    var holdHintCounter by remember { mutableStateOf(0) }"
         errorLine2="                                      ~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/ui/ChatScreen.kt"
+            file="src/main/java/com/appevol/agentsterm/ui/ChatScreen.kt"
             line="1152"
             column="39"/>
     </issue>
@@ -183,7 +183,7 @@
         errorLine1="            firstVisibleRow = listState.firstVisibleItemIndex"
         errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/test/java/com/example/AndroidUiDriverTest.kt"
+            file="src/test/java/com/appevol/agentsterm/AndroidUiDriverTest.kt"
             line="74"
             column="31"/>
     </issue>
@@ -254,7 +254,7 @@
         errorLine1="        it !== decorView &amp;&amp; it.isAttachedToWindow &amp;&amp; it.visibility == View.VISIBLE &amp;&amp; it.width > 0 &amp;&amp; it.height > 0 &amp;&amp;"
         errorLine2="                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/AndroidUiDriver.kt"
+            file="src/main/java/com/appevol/agentsterm/data/AndroidUiDriver.kt"
             line="52"
             column="54"/>
     </issue>
@@ -265,7 +265,7 @@
         errorLine1="        val rawBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)"
         errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/DebugSystemCollector.kt"
+            file="src/main/java/com/appevol/agentsterm/data/DebugSystemCollector.kt"
             line="150"
             column="25"/>
     </issue>
@@ -276,7 +276,7 @@
         errorLine1="                Bitmap.createScaledBitmap(rawBitmap, maxWidth, scaledHeight, true).also {"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/DebugSystemCollector.kt"
+            file="src/main/java/com/appevol/agentsterm/data/DebugSystemCollector.kt"
             line="185"
             column="17"/>
     </issue>
@@ -287,7 +287,7 @@
         errorLine1="        prefs.edit()"
         errorLine2="        ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/SettingsStore.kt"
+            file="src/main/java/com/appevol/agentsterm/data/SettingsStore.kt"
             line="24"
             column="9"/>
     </issue>
@@ -298,7 +298,7 @@
         errorLine1="        prefs.edit().putString(KEY_LAST_TAB, tabId).apply()"
         errorLine2="        ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/SettingsStore.kt"
+            file="src/main/java/com/appevol/agentsterm/data/SettingsStore.kt"
             line="34"
             column="9"/>
     </issue>
@@ -309,7 +309,7 @@
         errorLine1="        val editor = prefs.edit()"
         errorLine2="                     ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/SettingsStore.kt"
+            file="src/main/java/com/appevol/agentsterm/data/SettingsStore.kt"
             line="50"
             column="22"/>
     </issue>
@@ -320,7 +320,7 @@
         errorLine1="        prefs.edit()"
         errorLine2="        ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/SettingsStore.kt"
+            file="src/main/java/com/appevol/agentsterm/data/SettingsStore.kt"
             line="78"
             column="9"/>
     </issue>
@@ -331,7 +331,7 @@
         errorLine1="        prefs.edit().putString(hostKeyPrefKey(host, port), fingerprint).apply()"
         errorLine2="        ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/SettingsStore.kt"
+            file="src/main/java/com/appevol/agentsterm/data/SettingsStore.kt"
             line="90"
             column="9"/>
     </issue>
@@ -342,7 +342,7 @@
         errorLine1="        prefs.edit().remove(hostKeyPrefKey(host, port)).apply()"
         errorLine2="        ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/SettingsStore.kt"
+            file="src/main/java/com/appevol/agentsterm/data/SettingsStore.kt"
             line="94"
             column="9"/>
     </issue>
@@ -353,7 +353,7 @@
         errorLine1="        prefs.edit().putStringSet(KEY_BOOTSTRAPPED_HOSTS, updated).apply()"
         errorLine2="        ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/SettingsStore.kt"
+            file="src/main/java/com/appevol/agentsterm/data/SettingsStore.kt"
             line="108"
             column="9"/>
     </issue>
@@ -364,7 +364,7 @@
         errorLine1="        prefs.edit()"
         errorLine2="        ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/SettingsStore.kt"
+            file="src/main/java/com/appevol/agentsterm/data/SettingsStore.kt"
             line="121"
             column="9"/>
     </issue>
@@ -375,7 +375,7 @@
         errorLine1="        prefs.edit()"
         errorLine2="        ~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/example/data/SettingsStore.kt"
+            file="src/main/java/com/appevol/agentsterm/data/SettingsStore.kt"
             line="145"
             column="9"/>
     </issue>
