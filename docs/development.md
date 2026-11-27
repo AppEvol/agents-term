@@ -11,6 +11,8 @@ sudo ./install_deps.sh       # install missing dependencies (safe to re-run)
 ./install_deps.sh --check    # verify toolchains without modifying anything
 ```
 
+The script reuses an Android SDK that is already installed: `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), then the one an earlier run recorded in `/etc/profile.d/agentsterm-dev.sh`, then `~/Android/Sdk`. Otherwise it installs one in `/opt/android-sdk`.
+
 Manual requirements:
 
 - **JDK 17 or newer** to run Gradle 9.3.1 (the Java compilation target is configured in `app/build.gradle.kts`).

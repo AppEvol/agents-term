@@ -14,8 +14,10 @@
 #                 the daemon is released for, installed for the invoking user
 #                 and linked into /usr/local/bin
 #   Gradle        the version CI uses, in /opt/gradle
-#   Android SDK   command-line tools, platform and build-tools, in
-#                 /opt/android-sdk (override with ANDROID_HOME)
+#   Android SDK   command-line tools, platform and build-tools. An SDK that
+#                 is already there is reused: ANDROID_HOME, then the one an
+#                 earlier install recorded, then ~/Android/Sdk (Android
+#                 Studio's default). Otherwise it goes in /opt/android-sdk.
 #
 # The linters used by scripts/static-checks.sh are not installed here: that
 # script downloads its own pinned copies on first use.
@@ -58,7 +60,30 @@ target_user="${SUDO_USER:-$(id -un)}"
 target_home="$(getent passwd "$target_user" | cut -d: -f6)"
 target_home="${target_home:-$HOME}"
 
-android_home="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$DEFAULT_ANDROID_HOME}}"
+# Where the Android SDK is, or where to put it. Agent shells and sudo often
+# lack ANDROID_HOME, so also look where an earlier install recorded it and in
+# Android Studio's default location before settling on the install default.
+find_android_home() {
+  local recorded
+  if [ -n "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}" ]; then
+    printf '%s\n' "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+    return
+  fi
+  if [ -r "$PROFILE_SNIPPET" ]; then
+    recorded="$(sed -n 's/^export ANDROID_HOME="\(.*\)"$/\1/p' "$PROFILE_SNIPPET")"
+    if [ -n "$recorded" ] && [ -d "$recorded" ]; then
+      printf '%s\n' "$recorded"
+      return
+    fi
+  fi
+  if [ -d "$target_home/Android/Sdk" ]; then
+    printf '%s\n' "$target_home/Android/Sdk"
+    return
+  fi
+  printf '%s\n' "$DEFAULT_ANDROID_HOME"
+}
+
+android_home="$(find_android_home)"
 export PATH="$target_home/.cargo/bin:$PATH"
 
 # --- checks ------------------------------------------------------------------
