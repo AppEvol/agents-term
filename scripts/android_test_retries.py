@@ -54,8 +54,11 @@ def read_cases(results: Path) -> Dict[Case, str]:
     cases = {}
     for report in sorted(results.rglob("TEST-*.xml")):
         root = ET.parse(report).getroot()
-        tests = root.findall("testcase")
-        if root.tag != "testsuite" or int(root.attrib["tests"]) != len(tests):
+        suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+        tests = [test for suite in suites for test in suite.findall("testcase")]
+        if root.tag not in ("testsuite", "testsuites") or int(root.attrib["tests"]) != len(tests):
+            raise ValueError(f"Incomplete JUnit suite in {report}")
+        if any(int(suite.attrib["tests"]) != len(suite.findall("testcase")) for suite in suites):
             raise ValueError(f"Incomplete JUnit suite in {report}")
         for test in tests:
             case = test.attrib["classname"], test.attrib["name"]

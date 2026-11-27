@@ -27,7 +27,9 @@ path = Path("app/build/outputs/androidTest-results/connected")
 path.mkdir(parents=True)
 failure = "" if retry else "<failure>original</failure>"
 (path / "TEST-device.xml").write_text(
+    '<testsuites tests="1">'
     f'<testsuite tests="1"><testcase classname="Example" name="{name}">{failure}</testcase></testsuite>'
+    '</testsuites>'
 )
 print("Starting 1 tests on emulator")
 if scenario != "crashed":
