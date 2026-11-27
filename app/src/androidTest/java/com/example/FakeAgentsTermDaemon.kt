@@ -58,7 +58,7 @@ class FakeAgentsTermDaemon(
     initialTabs: List<TabRecord> = emptyList(),
     initialMessages: Map<String, List<ChatMessage>> = emptyMap(),
     protocolVersion: Int? = EXPECTED_DAEMON_PROTOCOL_VERSION,
-    initialBuildHash: String = "e2e0000000000000000000000000000000000001",
+    initialBuildHash: String = BuildConfig.EXPECTED_DAEMON_BUILD_HASH,
     initialSelfUpdate: DaemonSelfUpdateInfo? = null,
 ) : AutoCloseable {
 
