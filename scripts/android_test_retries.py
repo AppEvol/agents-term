@@ -5,16 +5,20 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterator, Optional, Tuple
 
 from allure_results import convert_junit_xml
 from test_retries import record_attempt, retry_case
@@ -30,6 +34,7 @@ class Suite:
     report: Path
     parent: str
     framework: str
+    vm_wide_lock: bool = False
 
 
 SUITES = {
@@ -46,6 +51,7 @@ SUITES = {
         BUILD / "reports/androidTests/connected",
         "Android Instrumented E2E",
         "android-junit",
+        vm_wide_lock=True,
     ),
 }
 
@@ -168,20 +174,54 @@ def run_isolated(tag: str, args: list[str], folder: Path, case: Case, attempt: i
         return None
 
 
+def lock_path_for(tag: str, cwd: Optional[Path] = None) -> Path:
+    base_env = os.environ.get("AGENTSTERM_LOCK_DIR")
+    if base_env:
+        lock_dir = Path(base_env)
+        lock_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        lock_dir = Path(tempfile.gettempdir()) / f"agentsterm-locks-{os.getuid()}"
+        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if SUITES[tag].vm_wide_lock:
+        return lock_dir / f"{tag}.lock"
+    checkout = str((cwd or Path.cwd()).resolve())
+    digest = hashlib.sha256(checkout.encode("utf-8")).hexdigest()[:16]
+    return lock_dir / f"{tag}-{digest}.lock"
+
+
+@contextmanager
+def acquire_suite_lock(tag: str) -> Iterator[None]:
+    path = lock_path_for(tag)
+    scope = "on this machine" if SUITES[tag].vm_wide_lock else "in this checkout"
+    # Gradle's own lock ends before we archive results or launch an isolated retry.
+    # Keeping the lock file outside app/build ensures `gradle clean` cannot unlink a held lock.
+    with path.open("a+", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(
+                f"Another {tag} run is active {scope}; waiting for lock ({path})...",
+                file=sys.stderr,
+                flush=True,
+            )
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            lock.seek(0)
+            lock.truncate()
+            lock.write(f"pid={os.getpid()} cwd={Path.cwd().resolve()}\n")
+            lock.flush()
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def main() -> bool:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tag", choices=SUITES)
     parser.add_argument("gradle_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     folder = BUILD / "ci-test-attempts" / args.tag
-    folder.parent.mkdir(parents=True, exist_ok=True)
-    # Gradle's own lock ends before we archive results or launch an isolated retry.
-    with (folder.parent / f"{args.tag}.lock").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(f"Another {args.tag} run is active in this checkout", file=sys.stderr)
-            return False
+    with acquire_suite_lock(args.tag):
         return run_suite(args.tag, args.gradle_args, folder)
 
 
