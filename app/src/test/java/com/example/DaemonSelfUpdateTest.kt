@@ -454,7 +454,7 @@ class DaemonSelfUpdateTest {
         val server = ServerInfo(
             version = "0.3.0",
             protocolVersion = EXPECTED_DAEMON_PROTOCOL_VERSION,
-            buildHash = "a".repeat(40),
+            buildHash = BuildConfig.EXPECTED_DAEMON_BUILD_HASH,
             hostname = "dev-vm",
             selfUpdate = DaemonSelfUpdateInfo(
                 supported = true,
