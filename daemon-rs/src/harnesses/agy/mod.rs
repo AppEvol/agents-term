@@ -4,8 +4,11 @@ use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::path::Path;
 
-use super::Harness;
+use super::turn::{PreparedTurn, TurnRequest};
+use super::{Harness, ModelList};
 
+mod models;
+mod turn;
 mod usage;
 
 pub struct Agy;
@@ -29,6 +32,18 @@ impl Harness for Agy {
 
     fn binary(&self) -> &'static str {
         "agy"
+    }
+
+    fn cached_models(&self) -> ModelList {
+        models::cached_models()
+    }
+
+    fn models(&self, force_refresh: bool) -> BoxFuture<'_, ModelList> {
+        Box::pin(models::models(force_refresh))
+    }
+
+    fn prepare_turn(&self, req: TurnRequest) -> PreparedTurn {
+        turn::prepare_turn(req)
     }
 
     fn usage<'a>(&'a self, home: &'a Path) -> BoxFuture<'a, Value> {

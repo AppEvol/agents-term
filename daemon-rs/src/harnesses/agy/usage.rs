@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::models::discover_agy_models;
+use super::models::discover_agy_models;
 use crate::usage::{
     clamp_percent, curl_request, error_response, ok_response, parse_rfc3339_ms, read_json_file,
     strip_thinking_suffix,

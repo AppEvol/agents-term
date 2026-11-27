@@ -4,8 +4,11 @@ use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::path::Path;
 
-use super::Harness;
+use super::turn::{PreparedTurn, TurnRequest};
+use super::{Harness, ModelList};
 
+mod models;
+mod turn;
 mod usage;
 
 pub struct Claude;
@@ -29,6 +32,22 @@ impl Harness for Claude {
 
     fn binary(&self) -> &'static str {
         "claude"
+    }
+
+    fn cached_models(&self) -> ModelList {
+        crate::models::cached_disk_models("claude", models::read_models_from_disk)
+    }
+
+    fn models(&self, _force_refresh: bool) -> BoxFuture<'_, ModelList> {
+        // Reading the CLI's local files is cheap, so every request re-reads them.
+        Box::pin(std::future::ready(crate::models::refresh_disk_models(
+            "claude",
+            models::read_models_from_disk,
+        )))
+    }
+
+    fn prepare_turn(&self, req: TurnRequest) -> PreparedTurn {
+        turn::prepare_turn(req)
     }
 
     fn usage<'a>(&'a self, home: &'a Path) -> BoxFuture<'a, Value> {
