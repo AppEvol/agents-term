@@ -13,6 +13,7 @@
 
 - Before starting work in this repository, run `./install_deps.sh --check` from the repository root. It needs no root, changes nothing, and exits non-zero when a required toolchain (JDK, Rust with the musl targets, Gradle, Android SDK, and the base tools) is missing.
 - If the check fails, stop and ask the user to run `sudo ./install_deps.sh`, then run the check again. Do not work around a missing toolchain (for example by building in Docker), and do not push changes whose tests you could not run for that reason.
+- The check also reports whether the Android emulator is set up. It is optional (it needs x86_64 with KVM) and does not fail the check. Use it to run the instrumented tests or to try an app change without the user's phone; see "Running the Emulator" in `docs/development.md`.
 - If the check passes but notes that `ANDROID_HOME` is not set in your shell, export it as the note says before running `gradle`.
 - The app's unit tests run on Java 21 even when the default JDK is older: Gradle picks an installed JDK 21 or downloads one into `~/.gradle/jdks` on the first run. Do not switch the default JDK or set `JAVA_HOME` to work around a test failure.
 - When CI starts using a different tool or version (`.github/workflows/ci.yml`), update the versions at the top of `install_deps.sh` in the same change.

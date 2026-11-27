@@ -18,6 +18,10 @@
 #                 is already there is reused: ANDROID_HOME, then the one an
 #                 earlier install recorded, then ~/Android/Sdk (Android
 #                 Studio's default). Otherwise it goes in /opt/android-sdk.
+#   Emulator      the Android emulator, the system image CI tests on, and a
+#                 virtual device for the invoking user. Optional: it is only
+#                 installed on x86_64 machines with KVM, and --check does not
+#                 fail without it.
 #
 # The linters used by scripts/static-checks.sh are not installed here: that
 # script downloads its own pinned copies on first use.
@@ -30,6 +34,10 @@ ANDROID_PLATFORM="platforms;android-36.1"
 ANDROID_BUILD_TOOLS="build-tools;36.0.0"
 ANDROID_NDK="ndk;29.0.14206865"
 ANDROID_CMDLINE_TOOLS_BUILD=13114758
+# The image the emulator job in ci.yml runs (api-level, target, arch).
+ANDROID_EMULATOR_IMAGE="system-images;android-35;google_apis;x86_64"
+ANDROID_EMULATOR_AVD=agentsterm-api35
+ANDROID_EMULATOR_DEVICE=pixel_6
 MIN_JDK=17
 # Robolectric needs this Java version for the unit tests. app/build.gradle.kts
 # asks Gradle for it as a toolchain; keep the two in step.
@@ -145,6 +153,22 @@ android_dir() { # android_dir "platforms;android-36.1" -> <sdk>/platforms/androi
   printf '%s/%s\n' "$android_home" "${1//;//}"
 }
 
+# The emulator only runs at a usable speed on x86_64 with hardware virtualization.
+emulator_host_ok() { [ "$(uname -m)" = x86_64 ] && [ -e /dev/kvm ]; }
+
+kvm_access_ok() { [ -r /dev/kvm ] && [ -w /dev/kvm ]; }
+
+emulator_avd_ok() {
+  [ -f "${ANDROID_AVD_HOME:-$target_home/.android/avd}/$ANDROID_EMULATOR_AVD.ini" ]
+}
+
+emulator_ok() {
+  [ -x "$android_home/emulator/emulator" ] &&
+    [ -x "$android_home/platform-tools/adb" ] &&
+    [ -d "$(android_dir "$ANDROID_EMULATOR_IMAGE")" ] &&
+    emulator_avd_ok
+}
+
 check_cmd() { # check_cmd <command> [label]
   if has "$1"; then ok "${2:-$1}"; else miss "${2:-$1}"; fi
 }
@@ -185,6 +209,23 @@ run_checks() {
   check_that "Android SDK $ANDROID_NDK" test -d "$(android_dir "$ANDROID_NDK")"
   if [ -d "$android_home" ] && [ -z "${ANDROID_HOME:-}${ANDROID_SDK_ROOT:-}" ]; then
     note "ANDROID_HOME is not set in this shell. Before running gradle: export ANDROID_HOME=$android_home"
+  fi
+
+  echo "Android emulator (optional: instrumented tests and trying the app without a phone)"
+  if ! emulator_host_ok; then
+    printf '  absent   emulator\n'
+    note "the Android emulator needs an x86_64 machine with KVM (/dev/kvm); it cannot run here."
+  elif ! emulator_ok; then
+    printf '  absent   emulator, %s, virtual device %s\n' "$ANDROID_EMULATOR_IMAGE" "$ANDROID_EMULATOR_AVD"
+    note "the Android emulator is not set up; sudo ./install_deps.sh installs it. The instrumented tests cannot run here."
+  elif ! kvm_access_ok; then
+    printf '  no access  emulator (/dev/kvm)\n'
+    note "the emulator is installed but this user cannot open /dev/kvm (not in the kvm group yet; log in again)."
+  else
+    ok "emulator with virtual device $ANDROID_EMULATOR_AVD"
+    if ! has adb || ! has emulator; then
+      note "adb and emulator are not on PATH in this shell: export PATH=\"\$PATH:$android_home/platform-tools:$android_home/emulator\""
+    fi
   fi
 
   echo "Docker (only for the e2e/docker-vm tests)"
@@ -308,12 +349,32 @@ if [ ! -d "$(android_dir "$ANDROID_PLATFORM")" ] || [ ! -d "$(android_dir "$ANDR
   (yes || true) | "$sdkmanager" --sdk_root="$android_home" --licenses >/dev/null
   "$sdkmanager" --sdk_root="$android_home" "platform-tools" "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS" "$ANDROID_NDK"
 fi
+if emulator_host_ok; then
+  if [ ! -x "$android_home/emulator/emulator" ] || [ ! -d "$(android_dir "$ANDROID_EMULATOR_IMAGE")" ]; then
+    echo "  installing the emulator and $ANDROID_EMULATOR_IMAGE (a download of about 2 GB)"
+    (yes || true) | "$sdkmanager" --sdk_root="$android_home" --licenses >/dev/null
+    "$sdkmanager" --sdk_root="$android_home" "platform-tools" "emulator" "$ANDROID_EMULATOR_IMAGE"
+  fi
+  if ! as_user test -r /dev/kvm -a -w /dev/kvm && getent group kvm >/dev/null; then
+    usermod -aG kvm "$target_user"
+    echo "  added $target_user to the kvm group (takes effect at next login)"
+  fi
+else
+  echo "  skipping the emulator: it needs an x86_64 machine with KVM (/dev/kvm)"
+fi
 # Gradle writes licence and component files into the SDK, so the user owns it.
 chown -R "$target_user": "$android_home"
+# Virtual devices live in the user's home directory, so the user creates it.
+if emulator_host_ok && ! emulator_avd_ok; then
+  echo "  creating the virtual device $ANDROID_EMULATOR_AVD"
+  # avdmanager asks whether to create a custom hardware profile: no.
+  echo no | as_user env ANDROID_HOME="$android_home" "$android_home/cmdline-tools/latest/bin/avdmanager" \
+    create avd -n "$ANDROID_EMULATOR_AVD" -k "$ANDROID_EMULATOR_IMAGE" -d "$ANDROID_EMULATOR_DEVICE" >/dev/null
+fi
 cat >"$PROFILE_SNIPPET" <<EOF
 # Written by install_deps.sh in the agents-term repository.
 export ANDROID_HOME="$android_home"
-export PATH="\$PATH:\$ANDROID_HOME/platform-tools"
+export PATH="\$PATH:\$ANDROID_HOME/platform-tools:\$ANDROID_HOME/emulator"
 EOF
 chmod 644 "$PROFILE_SNIPPET"
 
