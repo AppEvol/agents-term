@@ -490,35 +490,30 @@ pub struct AgentSpec {
     pub binary: &'static str,
 }
 
-pub const AGENT_SPECS: &[AgentSpec] = &[
-    AgentSpec {
-        kind: "agy",
-        name: "Antigravity",
-        description: "Antigravity CLI",
-        binary: "agy",
-    },
-    AgentSpec {
-        kind: "claude",
-        name: "Claude Code",
-        description: "Claude CLI",
-        binary: "claude",
-    },
-    AgentSpec {
-        kind: "codex",
-        name: "Codex",
-        description: "Codex CLI",
-        binary: "codex",
-    },
-    AgentSpec {
-        kind: "shell",
-        name: "Shell",
-        description: "Persistent bash (keeps directory, env vars, and stdin)",
-        binary: "bash",
-    },
-];
+/// The shell agent; coding-agent harnesses come from [`crate::harnesses`].
+const SHELL_SPEC: AgentSpec = AgentSpec {
+    kind: "shell",
+    name: "Shell",
+    description: "Persistent bash (keeps directory, env vars, and stdin)",
+    binary: "bash",
+};
+
+/// Every agent the app can open, harnesses first and the shell last.
+pub fn agent_specs() -> Vec<AgentSpec> {
+    crate::harnesses::all()
+        .iter()
+        .map(|h| AgentSpec {
+            kind: h.kind(),
+            name: h.name(),
+            description: h.description(),
+            binary: h.binary(),
+        })
+        .chain(std::iter::once(SHELL_SPEC))
+        .collect()
+}
 
 pub fn detect_available_agents() -> Vec<Value> {
-    AGENT_SPECS
+    agent_specs()
         .iter()
         .map(|spec| {
             let (binary, binary_path) = if spec.kind == "shell" {

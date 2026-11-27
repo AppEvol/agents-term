@@ -2,6 +2,7 @@ mod app_cli;
 mod app_state;
 mod attachments;
 mod config;
+mod harnesses;
 mod http_client;
 mod install;
 mod log;

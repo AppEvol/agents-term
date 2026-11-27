@@ -37,10 +37,10 @@ pub enum ReviveTabError {
 }
 
 pub fn default_agent_label(agent: &str) -> &str {
+    if let Some(harness) = crate::harnesses::get(agent) {
+        return harness.label();
+    }
     match agent {
-        "agy" => "Antigravity",
-        "claude" => "Claude",
-        "codex" => "Codex",
         "shell" => "Shell",
         other => other,
     }
