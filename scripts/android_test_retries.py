@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import re
 import shutil
@@ -170,18 +171,30 @@ def main() -> bool:
     parser.add_argument("gradle_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     folder = BUILD / "ci-test-attempts" / args.tag
-    for old in (folder, Path("allure-results") / args.tag):
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    # Gradle's own lock ends before we archive results or launch an isolated retry.
+    with (folder.parent / f"{args.tag}.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"Another {args.tag} run is active in this checkout", file=sys.stderr)
+            return False
+        return run_suite(args.tag, args.gradle_args, folder)
+
+
+def run_suite(tag: str, gradle_args: list[str], folder: Path) -> bool:
+    for old in (folder, Path("allure-results") / tag):
         if old.is_dir():
             shutil.rmtree(old)
     try:
-        cases = run_gradle(args.tag, args.gradle_args, folder / "original", None, 0)
+        cases = run_gradle(tag, gradle_args, folder / "original", None, 0)
     except (KeyError, ValueError, ET.ParseError) as exc:
         print(f"Incomplete original suite: {exc}", file=sys.stderr)
         return False
     passed = True
     failures = (case for case, status in cases.items() if status in ("failed", "broken"))
     for index, case in enumerate(failures, 1):
-        callback = partial(run_isolated, args.tag, args.gradle_args, folder / f"failure-{index}", case)
+        callback = partial(run_isolated, tag, gradle_args, folder / f"failure-{index}", case)
         if not retry_case(".".join(case), callback):
             passed = False
     return passed
