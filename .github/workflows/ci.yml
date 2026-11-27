@@ -548,6 +548,7 @@ jobs:
           path: allure-report/
           retention-days: 30
           if-no-files-found: error
+          include-hidden-files: true
 
   publish-allure-pages:
     name: Publish Allure 3 Dashboard (GitHub Pages)
