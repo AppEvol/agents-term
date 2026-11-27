@@ -854,6 +854,14 @@ class AgentsTermE2ETest {
         composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("controlEnabled") == false }
         assertEquals(false, activeDaemon.requestAppState("tap", """{"tag":"settings_back_button"}""")["ok"])
         assertEquals("settings", screen())
+
+        // Screen recording has its own switch, off by default.
+        assertEquals(false, activeDaemon.latestAppHello()!!["recordingEnabled"])
+        assertEquals("recording_disabled", activeDaemon.requestAppState("record_status")["code"])
+        composeRule.onNodeWithTag("debug_remote_recording_switch").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.latestAppHello()?.get("recordingEnabled") == true }
+        val recording = activeDaemon.requestAppState("record_status")
+        assertEquals("idle", (recording["result"] as Map<String, Any?>)["state"])
     }
 
     @Test

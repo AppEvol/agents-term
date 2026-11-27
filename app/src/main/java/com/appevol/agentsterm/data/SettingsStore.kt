@@ -157,6 +157,7 @@ class SettingsStore(context: Context) : ConnectionSettings {
         autoUploadOnError = prefs.getBoolean(KEY_DEBUG_AUTO_UPLOAD_ERRORS, false),
         remoteInspectionEnabled = prefs.getBoolean(KEY_DEBUG_REMOTE_INSPECTION, false),
         remoteControlEnabled = prefs.getBoolean(KEY_DEBUG_REMOTE_CONTROL, false),
+        remoteRecordingEnabled = prefs.getBoolean(KEY_DEBUG_REMOTE_RECORDING, false),
     )
 
     fun saveDebugSharingSettings(settings: DebugSharingSettings) {
@@ -167,6 +168,7 @@ class SettingsStore(context: Context) : ConnectionSettings {
             .putBoolean(KEY_DEBUG_AUTO_UPLOAD_ERRORS, settings.autoUploadOnError)
             .putBoolean(KEY_DEBUG_REMOTE_INSPECTION, settings.remoteInspectionEnabled)
             .putBoolean(KEY_DEBUG_REMOTE_CONTROL, settings.remoteControlEnabled)
+            .putBoolean(KEY_DEBUG_REMOTE_RECORDING, settings.remoteRecordingEnabled)
             .apply()
     }
 
@@ -219,6 +221,7 @@ class SettingsStore(context: Context) : ConnectionSettings {
         private const val KEY_DEBUG_AUTO_UPLOAD_ERRORS = "debug_auto_upload_errors"
         private const val KEY_DEBUG_REMOTE_INSPECTION = "debug_remote_inspection"
         private const val KEY_DEBUG_REMOTE_CONTROL = "debug_remote_control"
+        private const val KEY_DEBUG_REMOTE_RECORDING = "debug_remote_recording"
         private const val KEY_DEBUG_LAST_DUMP_ID = "debug_last_dump_id"
         private const val KEY_DEBUG_LAST_REMOTE_DIR = "debug_last_remote_dir"
         private const val KEY_DEBUG_LAST_SYMLINK = "debug_last_symlink"

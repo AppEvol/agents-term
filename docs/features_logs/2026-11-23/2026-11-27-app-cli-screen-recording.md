@@ -1,0 +1,5 @@
+- **Screen recording from the VM** ([PR #171](https://github.com/AppEvol/agents-term/pull/171)):
+  - Added `agents_term_app_cli record start | stop | status`: agents can record a video of the phone screen (MP4, no audio) and download it to the VM.
+  - The app records with Android's own screen capture, so the user approves every recording in a system dialog; it shows the whole screen, keyboard and system bars included.
+  - Needs the new **Settings > Debug sharing > Allow VM agents to record the screen** switch, which is off by default.
+  - A recording stops by itself after 60 seconds by default (at most 300), or when the user stops it from the notification.

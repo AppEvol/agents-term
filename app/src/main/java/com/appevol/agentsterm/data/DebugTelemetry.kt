@@ -15,9 +15,12 @@ data class DebugSharingSettings(
     val remoteInspectionEnabled: Boolean = false,
     /** Also lets those agents tap, swipe and type in the app (agents_term_app_cli tap/swipe/type/key). */
     val remoteControlEnabled: Boolean = false,
+    /** Also lets those agents record a video of the screen (agents_term_app_cli record). */
+    val remoteRecordingEnabled: Boolean = false,
 ) {
     val remoteInspectionActive: Boolean get() = enabled && remoteInspectionEnabled
     val remoteControlActive: Boolean get() = remoteInspectionActive && remoteControlEnabled
+    val remoteRecordingActive: Boolean get() = remoteInspectionActive && remoteRecordingEnabled
 }
 
 data class DebugDumpUploadState(

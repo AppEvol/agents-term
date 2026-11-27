@@ -35,8 +35,15 @@ const NOT_READY_CODES: &[&str] = &[
     "unsupported_app",
     "inspection_disabled",
     "control_disabled",
+    "recording_disabled",
     "app_disconnected",
 ];
+
+/// How long `record start` waits: the user has to approve the recording on the phone, and the
+/// app gives up on them after 60 seconds.
+const RECORD_START_TIMEOUT_S: f64 = 75.0;
+/// Bytes of video asked for per `record_read` round trip (the app's own maximum).
+const RECORD_CHUNK_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug)]
 struct CliErr {
@@ -193,6 +200,95 @@ fn emit(val: &Value, pretty: bool) {
     let _ = stdout.flush();
 }
 
+/// Where a screenshot or recording goes: `output` if given, else a new file under
+/// `~/.agents-term/tmp/`. Creates the parent directory.
+fn capture_output_path(output: Option<&str>, kind: &str, ext: &str) -> Result<PathBuf, CliErr> {
+    let out_path = match output {
+        Some(p) => expand_tilde(p),
+        None => {
+            let root = agents_term_home();
+            let root_existed = root.exists();
+            let dir = tmp_dir();
+            if let Err(e) = fs::create_dir_all(&dir) {
+                return Err(CliErr::new(
+                    format!("Failed to create {}: {e}", dir.display()),
+                    EXIT_USAGE,
+                    Some("io_error"),
+                ));
+            }
+            if !root_existed {
+                let _ = fs::set_permissions(&root, fs::Permissions::from_mode(0o700));
+            }
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+            dir.join(format!(
+                "agentsterm-{kind}-{}-{}.{ext}",
+                Local::now().format("%Y%m%d-%H%M%S"),
+                std::process::id()
+            ))
+        }
+    };
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
+    Ok(out_path)
+}
+
+/// Downloads the app's finished recording chunk by chunk into `output` and returns its path
+/// and size.
+fn fetch_recording(
+    client: &dyn AppClient,
+    timeout_s: f64,
+    recording_id: &str,
+    output: Option<&str>,
+) -> Result<(PathBuf, u64), CliErr> {
+    let bad_chunk = |what: &str| {
+        CliErr::new(
+            format!("App returned a bad recording chunk: {what}"),
+            EXIT_APP,
+            Some("app_error"),
+        )
+    };
+    let out_path = capture_output_path(output, "recording", "mp4")?;
+    let io_err = |e: std::io::Error| {
+        CliErr::new(
+            format!("Failed to write {}: {e}", out_path.display()),
+            EXIT_USAGE,
+            Some("io_error"),
+        )
+    };
+    let mut file = fs::File::create(&out_path).map_err(io_err)?;
+    let mut offset: u64 = 0;
+    loop {
+        let resp = client.command(
+            "record_read",
+            json!({ "recordingId": recording_id, "offset": offset, "length": RECORD_CHUNK_BYTES }),
+            timeout_s,
+        )?;
+        let result = resp.get("result").ok_or_else(|| bad_chunk("no result"))?;
+        let chunk = base64::engine::general_purpose::STANDARD
+            .decode(
+                result
+                    .get("dataBase64")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim(),
+            )
+            .map_err(|e| bad_chunk(&e.to_string()))?;
+        file.write_all(&chunk).map_err(io_err)?;
+        offset += chunk.len() as u64;
+        if result.get("eof").and_then(Value::as_bool) == Some(true) {
+            break;
+        }
+        if chunk.is_empty() {
+            return Err(bad_chunk("empty before the end of the file"));
+        }
+    }
+    file.flush().map_err(io_err)?;
+    Ok((fs::canonicalize(&out_path).unwrap_or(out_path), offset))
+}
+
 fn save_screenshot(
     client: &dyn AppClient,
     timeout_s: f64,
@@ -223,35 +319,7 @@ fn save_screenshot(
             )
         })?;
 
-    let out_path = match output {
-        Some(p) => expand_tilde(p),
-        None => {
-            let root = agents_term_home();
-            let root_existed = root.exists();
-            let dir = tmp_dir();
-            if let Err(e) = fs::create_dir_all(&dir) {
-                return Err(CliErr::new(
-                    format!("Failed to create {}: {e}", dir.display()),
-                    EXIT_USAGE,
-                    Some("io_error"),
-                ));
-            }
-            if !root_existed {
-                let _ = fs::set_permissions(&root, fs::Permissions::from_mode(0o700));
-            }
-            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
-            dir.join(format!(
-                "agentsterm-screenshot-{}-{}.png",
-                Local::now().format("%Y%m%d-%H%M%S"),
-                std::process::id()
-            ))
-        }
-    };
-    if let Some(parent) = out_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            let _ = fs::create_dir_all(parent);
-        }
-    }
+    let out_path = capture_output_path(output, "screenshot", "png")?;
     fs::write(&out_path, &bytes).map_err(|e| {
         CliErr::new(
             format!("Failed to write {}: {e}", out_path.display()),
@@ -454,7 +522,10 @@ PREREQUISITES (ON THE PHONE)
      (Logcat and screenshots also follow Include Android logcat / Include screenshot.)
   3. UI control commands (tap, long-press, swipe, scroll, type, key) also require:
        Settings > Debug sharing > Allow VM agents to control the app
-  4. Screenshots, `ui`, and control commands need the app in the foreground (the user sees
+  4. Screen recording (record) also requires:
+       Settings > Debug sharing > Allow VM agents to record the screen
+     and the user approves every recording in an Android dialog.
+  5. Screenshots, `ui`, and control commands need the app in the foreground (the user sees
      a brief toast on the phone). Only drive the app when the task calls for it.
 
 RECOMMENDED AGENT WORKFLOW
@@ -501,6 +572,7 @@ INSPECTION COMMANDS (read-only; need remote inspection opt-in)
   ui                 List on-screen UI elements (--brief, --interactive, --tag, --text, --exact)
   wait               Poll `ui` until a matching element appears or disappears (--gone)
   dump               Upload full debug bundle to ~/.agents-term/debug-dumps/latest/
+  record             Record a video of the screen: `record start`, then `record stop -o PATH`
   raw                Send an arbitrary command name with a JSON object of args
 
 UI CONTROL COMMANDS (need remote control opt-in; all accept -s/--screenshot and --settle)
@@ -524,6 +596,8 @@ EXAMPLES
   {prog} wait --tag menu_app_settings --gone --wait-timeout 5
   {prog} logs --category error --category ws --limit 50
   {prog} dump --note \"repro context\"
+  {prog} record start --max-duration 120
+  {prog} record stop -o /tmp/flow.mp4
 
 OUTPUT & EXIT CODES
   Stdout is JSON (unless `--raw` or `--brief`).
@@ -531,7 +605,8 @@ OUTPUT & EXIT CODES
     0  Success
     1  Usage or local config error (`bad_args`, `bad_config`)
     2  Daemon unreachable, unauthorized, or too old (`daemon_unreachable`, `unauthorized`, `daemon_unsupported`)
-    3  App not ready (`no_app_connected`, `unsupported_app`, `inspection_disabled`, `control_disabled`, `app_disconnected`)
+    3  App not ready (`no_app_connected`, `unsupported_app`, `inspection_disabled`, `control_disabled`,
+       `recording_disabled`, `app_disconnected`)
     4  App failed, timed out, or `wait` timed out (`app_error`, `timeout`, `wait_timeout`)
 "
     )
@@ -582,6 +657,24 @@ fn subcommand_help(prog: &str, cmd: &str) -> Option<String> {
              Replaces `pngBase64` in the JSON output with `path` and `bytes`.\n\n\
              Options:\n\
                -o, --output PATH  Output PNG path (default: ~/.agents-term/tmp/agentsterm-screenshot-<timestamp>-<pid>.png)\n"
+        ),
+        "record" => format!(
+            "Usage: {prog} record start [--max-duration SEC]\n\
+             \x20      {prog} record stop [-o|--output PATH] [--no-fetch]\n\
+             \x20      {prog} record status\n\n\
+             Record a video of the phone screen (MP4, no audio), for example as evidence of a test.\n\
+             Needs Settings > Debug sharing > Allow VM agents to record the screen, and the app in the\n\
+             foreground when it starts.\n\n\
+             `start` makes Android ask the user to approve the recording, and returns once it is\n\
+             running (it waits up to 75 seconds for the user). The video shows the whole screen,\n\
+             keyboard and system bars included, in the same pixel space as `screenshot`.\n\
+             `stop` ends it and downloads the video to this machine. A recording that ended by itself\n\
+             (time limit reached, or stopped by the user) is downloaded the same way.\n\
+             `status` reports `idle`, `recording` or `finished`.\n\n\
+             Options:\n\
+               --max-duration SEC  Stop by itself after SEC seconds (default: 60, at most 300)\n\
+               -o, --output PATH   Output MP4 path (default: ~/.agents-term/tmp/agentsterm-recording-<timestamp>-<pid>.mp4)\n\
+               --no-fetch          Stop without downloading the video\n"
         ),
         "dump" => format!(
             "Usage: {prog} dump [--note TEXT] [--no-screenshot]\n\n\
@@ -1192,6 +1285,80 @@ fn run_app_cli_inner(prog: &str, raw_args: &[String]) -> Result<i32, CliErr> {
             let resp = save_screenshot(&client, timeout_s, output.as_deref())?;
             emit(&resp, pretty);
             Ok(0)
+        }
+        "record" => {
+            let Some(action) = sub_args.first().map(String::as_str) else {
+                return Err(CliErr::bad_args("record requires start, stop or status"));
+            };
+            let opts = &sub_args[1..];
+            let mut max_duration: Option<u64> = None;
+            let mut output: Option<String> = None;
+            let mut no_fetch = false;
+            let mut j = 0;
+            while j < opts.len() {
+                let (flag, inline) = split_flag(&opts[j]);
+                match (action, flag) {
+                    ("start", "--max-duration") => {
+                        let v = take_opt_val(opts, &mut j, "--max-duration", inline)?;
+                        max_duration =
+                            Some(v.parse::<u64>().ok().filter(|n| *n > 0).ok_or_else(|| {
+                                CliErr::bad_args(format!("Invalid --max-duration: {v}"))
+                            })?);
+                    }
+                    ("stop", "-o" | "--output") => {
+                        output = Some(take_opt_val(opts, &mut j, "--output", inline)?);
+                    }
+                    ("stop", "--no-fetch") => no_fetch = true,
+                    (_, other) => {
+                        return Err(CliErr::bad_args(format!(
+                            "Unknown record {action} option: {other}"
+                        )));
+                    }
+                }
+                j += 1;
+            }
+            match action {
+                "start" => {
+                    let mut args = Map::new();
+                    if let Some(secs) = max_duration {
+                        args.insert("maxDurationSec".into(), json!(secs));
+                    }
+                    let resp = client.command(
+                        "record_start",
+                        Value::Object(args),
+                        timeout_s.max(RECORD_START_TIMEOUT_S),
+                    )?;
+                    emit(&resp, pretty);
+                    Ok(0)
+                }
+                "stop" => {
+                    let mut resp = client.command("record_stop", json!({}), timeout_s)?;
+                    if !no_fetch {
+                        let id = resp
+                            .get("result")
+                            .and_then(|r| r.get("recordingId"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let (path, bytes) =
+                            fetch_recording(&client, timeout_s, &id, output.as_deref())?;
+                        if let Some(r) = resp.get_mut("result").and_then(Value::as_object_mut) {
+                            r.insert("path".into(), json!(path.to_string_lossy()));
+                            r.insert("bytes".into(), json!(bytes));
+                        }
+                    }
+                    emit(&resp, pretty);
+                    Ok(0)
+                }
+                "status" => {
+                    let resp = client.command("record_status", json!({}), timeout_s)?;
+                    emit(&resp, pretty);
+                    Ok(0)
+                }
+                other => Err(CliErr::bad_args(format!(
+                    "Unknown record action: {other} (expected start, stop or status)"
+                ))),
+            }
         }
         "dump" => {
             let mut note: Option<String> = None;

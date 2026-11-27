@@ -17,6 +17,9 @@ use std::time::Duration;
 
 const TOKEN: &str = "tok_test";
 const PNG_BYTES: &[u8] = b"\x89PNG\r\n\x1a\nfake";
+/// The stub's finished recording; `record_read` serves it at most `MP4_CHUNK` bytes at a time.
+const MP4_BYTES: &[u8] = b"\x00\x00\x00\x18ftypmp42-not-really-a-video";
+const MP4_CHUNK: usize = 10;
 
 const EXIT_USAGE: i32 = 1;
 const EXIT_DAEMON: i32 = 2;
@@ -44,6 +47,7 @@ fn make_temp_dir(prefix: &str) -> PathBuf {
 struct StubState {
     ready: bool,
     control: bool,
+    recording: bool,
     old_daemon: bool,
     non_json_ok: bool,
     ui_calls: usize,
@@ -66,6 +70,7 @@ impl StubServer {
         let state = Arc::new(Mutex::new(StubState {
             ready: true,
             control: true,
+            recording: true,
             ..Default::default()
         }));
         let stop = Arc::new(AtomicBool::new(false));
@@ -300,6 +305,41 @@ fn handle_conn(stream: &mut std::net::TcpStream, state: &Arc<Mutex<StubState>>) 
                 .as_bytes(),
             );
             return;
+        }
+        "record_start" | "record_stop" | "record_status" | "record_read" if !st.recording => {
+            write_http(
+                stream,
+                403,
+                json!({
+                    "ok": false,
+                    "code": "recording_disabled",
+                    "error": "screen recording is off"
+                })
+                .to_string()
+                .as_bytes(),
+            );
+            return;
+        }
+        "record_start" => json!({ "state": "recording", "recordingId": "rec1" }),
+        "record_status" => json!({ "state": "idle" }),
+        "record_stop" => json!({
+            "state": "finished",
+            "recordingId": "rec1",
+            "durationMs": 4200,
+            "bytes": MP4_BYTES.len(),
+        }),
+        "record_read" => {
+            let offset = (args["offset"].as_u64().unwrap_or(0) as usize).min(MP4_BYTES.len());
+            let wanted = args["length"].as_u64().unwrap_or(0) as usize;
+            let end = (offset + wanted.min(MP4_CHUNK)).min(MP4_BYTES.len());
+            json!({
+                "recordingId": "rec1",
+                "offset": offset,
+                "length": end - offset,
+                "totalBytes": MP4_BYTES.len(),
+                "eof": end == MP4_BYTES.len(),
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(&MP4_BYTES[offset..end]),
+            })
         }
         "fail" => {
             write_http(
@@ -715,6 +755,120 @@ fn control_disabled_is_not_ready() {
         assert_eq!(
             parse_json(&out.stderr)["code"],
             json!("control_disabled"),
+            "argv={argv:?}"
+        );
+    }
+}
+
+#[test]
+fn record_start_and_status_build_app_requests() {
+    let h = CliHarness::new();
+
+    let sent = h.sent(&["record", "start", "--max-duration", "120"]);
+    assert_eq!(
+        sent,
+        vec![("record_start".to_string(), json!({ "maxDurationSec": 120 }))]
+    );
+    // The user has to approve the recording on the phone, so the default 15 seconds is not enough.
+    let timeout_ms = h.server.state.lock().unwrap().requests[0]["timeoutMs"]
+        .as_u64()
+        .unwrap();
+    assert!(timeout_ms >= 75_000, "timeoutMs={timeout_ms}");
+
+    assert_eq!(
+        h.sent(&["record", "start"]),
+        vec![("record_start".to_string(), json!({}))]
+    );
+    assert_eq!(
+        h.sent(&["record", "status"]),
+        vec![("record_status".to_string(), json!({}))]
+    );
+}
+
+#[test]
+fn record_stop_downloads_the_video_in_chunks() {
+    let h = CliHarness::new();
+    let target = h.tmp.join("videos").join("flow.mp4");
+    let target_str = target.to_string_lossy().to_string();
+
+    h.server.state.lock().unwrap().requests.clear();
+    let out = h.run(&["record", "stop", "-o", &target_str]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(fs::read(&target).unwrap(), MP4_BYTES);
+
+    let result = &parse_json(&out.stdout)["result"];
+    assert_eq!(result["state"], json!("finished"));
+    assert_eq!(result["durationMs"], json!(4200));
+    assert_eq!(result["bytes"], json!(MP4_BYTES.len()));
+    assert_eq!(
+        result["path"].as_str(),
+        Some(
+            fs::canonicalize(&target)
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+
+    let requests = h.server.state.lock().unwrap().requests.clone();
+    assert_eq!(requests[0]["command"], json!("record_stop"));
+    let reads: Vec<&Value> = requests[1..].iter().collect();
+    assert_eq!(reads.len(), MP4_BYTES.len().div_ceil(MP4_CHUNK));
+    for (i, read) in reads.iter().enumerate() {
+        assert_eq!(read["command"], json!("record_read"));
+        assert_eq!(read["args"]["recordingId"], json!("rec1"));
+        assert_eq!(read["args"]["offset"], json!(i * MP4_CHUNK));
+    }
+}
+
+#[test]
+fn record_stop_defaults_to_agents_term_tmp_and_can_skip_the_download() {
+    let h = CliHarness::new();
+
+    let out = h.run(&["record", "stop"]);
+    assert_eq!(out.status.code(), Some(0));
+    let path = PathBuf::from(parse_json(&out.stdout)["result"]["path"].as_str().unwrap());
+    assert!(path.starts_with(fs::canonicalize(h.tmp.join(".agents-term").join("tmp")).unwrap()));
+    assert_eq!(path.extension().and_then(|e| e.to_str()), Some("mp4"));
+    assert_eq!(fs::read(&path).unwrap(), MP4_BYTES);
+
+    assert_eq!(
+        h.sent(&["record", "stop", "--no-fetch"]),
+        vec![("record_stop".to_string(), json!({}))]
+    );
+}
+
+#[test]
+fn record_rejects_bad_usage_and_disabled_recording_is_not_ready() {
+    let h = CliHarness::new();
+    for argv in [
+        &["record"][..],
+        &["record", "pause"][..],
+        &["record", "start", "--max-duration", "0"][..],
+        &["record", "start", "-o", "x.mp4"][..],
+        &["record", "status", "--no-fetch"][..],
+    ] {
+        let out = h.run(argv);
+        assert_eq!(out.status.code(), Some(EXIT_USAGE), "argv={argv:?}");
+        assert_eq!(parse_json(&out.stderr)["code"], json!("bad_args"));
+    }
+
+    h.server.state.lock().unwrap().recording = false;
+    for argv in [
+        &["record", "start"][..],
+        &["record", "stop"][..],
+        &["record", "status"][..],
+    ] {
+        let out = h.run(argv);
+        assert_eq!(out.status.code(), Some(EXIT_NOT_READY), "argv={argv:?}");
+        assert_eq!(
+            parse_json(&out.stderr)["code"],
+            json!("recording_disabled"),
             "argv={argv:?}"
         );
     }
