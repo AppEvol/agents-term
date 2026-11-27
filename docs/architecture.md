@@ -21,7 +21,7 @@ Android App ──HTTP/WS (Tailscale)──▶ agentsterm-daemon (Rust) ──sp
 
 ## Unified VM Directory (`$HOME/.agents-term/`)
 
-> **Status:** Implemented in [#94](https://github.com/nedn/agents-term/issues/94), replacing the legacy split across `~/.config/herdr-mobile/`, `~/.local/bin/`, `/tmp/`, and monolithic `state.json`.
+> **Status:** Implemented in [#94](https://github.com/AppEvol/agents-term/issues/94), replacing the legacy split across `~/.config/herdr-mobile/`, `~/.local/bin/`, `/tmp/`, and monolithic `state.json`.
 
 All binaries, configuration, persistent state, logs, debug dumps, and temporary files owned by AgentsTerm on the VM live under a single root directory:
 
@@ -113,7 +113,7 @@ Previously, all open tabs, recently closed tabs (up to 50 retained for 24 hours)
 - **`agents_tabs/tabs.jsonl`:** Current-state snapshot containing one compact JSON object per active or recently archived tab:
   - Always written atomically as a complete snapshot (not an unbounded append-only event log), so tools like `grep` and `jq` see exact current state without replay or compaction.
   - Distinguishes active and archived tabs explicitly (`state: "open" | "closed"`, `closedAt`).
-  - Carries compact, high-value metadata (`id`, `title`, `agent`, `cwd`, `status`, `statusDetail`, `taskSummary`, `sessionRef`, timestamps) and stays extensible for structured task/lifecycle and cross-tab awareness fields ([#30](https://github.com/nedn/agents-term/issues/30)).
+  - Carries compact, high-value metadata (`id`, `title`, `agent`, `cwd`, `status`, `statusDetail`, `taskSummary`, `sessionRef`, timestamps) and stays extensible for structured task/lifecycle and cross-tab awareness fields ([#30](https://github.com/AppEvol/agents-term/issues/30)).
 - **`agents_tabs/<tab_id>/`:** Per-tab directory holding heavy data isolated from the index:
   - `messages.json` — Normalized AgentsTerm chat history for that tab; streaming updates rewrite only this tab's file.
   - Optional diagnostic/trajectory artifacts (e.g., raw CLI stdout/stderr stream logs and references to the underlying CLI's native session/trajectory via `sessionRef`).

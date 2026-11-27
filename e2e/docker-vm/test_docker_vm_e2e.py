@@ -192,7 +192,7 @@ class MinimalWsClient:
 
 def build_rust_bootstrap_command(
     daemon_port: int,
-    release_base_url: str = "https://github.com/nedn/agents-term/releases/latest/download",
+    release_base_url: str = "https://github.com/AppEvol/agents-term/releases/latest/download",
     env_override: Optional[Dict[str, str]] = None,
 ) -> str:
     """Matches the production POSIX bootstrap command from SshBootstrapModels.kt."""

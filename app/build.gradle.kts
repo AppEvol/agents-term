@@ -17,7 +17,7 @@ val ciVersionName = providers.gradleProperty("appVersionName").orNull?.takeIf { 
     ?: "0.3"
 val daemonReleaseBaseUrl = providers.gradleProperty("daemonReleaseBaseUrl").orNull?.takeIf { it.isNotBlank() }
     ?: providers.environmentVariable("AGENTSTERM_DAEMON_RELEASE_BASE_URL").orNull?.takeIf { it.isNotBlank() }
-    ?: "https://github.com/nedn/agents-term/releases/latest/download"
+    ?: "https://github.com/AppEvol/agents-term/releases/latest/download"
 
 // "record" rewrites the golden images of the screenshot tests; anything else verifies them.
 val goldensMode = providers.gradleProperty("goldens").orNull
