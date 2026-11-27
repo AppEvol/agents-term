@@ -527,11 +527,11 @@ fun HerdrApp(viewModel: MainViewModel) {
     }
 
     if (showNewTabSheet) {
-        // createTabError is tracked on MainViewModel so NewTabSheet stays open on failure and
-        // can render createError inline once integrated with NewTabSheet's createError parameter.
         NewTabSheet(
             agents = state.serverInfo?.agents.orEmpty(),
-            canCreateTab = state.canCreateTab && !isCreatingTab,
+            canCreateTab = state.canCreateTab,
+            createError = createTabError,
+            isCreating = isCreatingTab,
             defaultCwd = resolvePreferredNewTabCwd(
                 lastCwd = state.lastCwd,
                 activeTabCwd = state.activeTab?.cwd,
@@ -1423,12 +1423,12 @@ private fun ActiveTabChatContent(
     hasCustomModel: Boolean,
     onOpenModelPicker: (() -> Unit)?,
     onSendMessage: (String) -> Unit,
-    onSendStdin: ((data: String?, eof: Boolean) -> Unit)? = null,
     onInterrupt: () -> Unit,
     onForceInterrupt: (String?) -> Unit,
     onRemoveQueuedMessage: (String) -> Unit,
     onRetryFullAccess: () -> Unit,
     modifier: Modifier = Modifier,
+    onSendStdin: ((data: String?, eof: Boolean) -> Unit)? = null,
     attachments: ComposerAttachments? = null,
 ) {
     val messages = if (activeMessagesFlow != null) {
