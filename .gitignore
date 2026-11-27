@@ -25,6 +25,8 @@ CLAUDE.local.md
 .worktrees/
 worktrees/
 debug-dumps/
+allure-results/
+allure-report/
 .tmp/
 /tmp/
 /screenshot*.png

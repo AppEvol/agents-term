@@ -1,0 +1,528 @@
+"""Unit tests for the Allure 3 result emitters, converters, merger, and summary scripts."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from typing import Any, Dict, List
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ALLURE_RESULTS_SCRIPT = REPO_ROOT / "scripts" / "allure_results.py"
+ALLURE_REPORT_SH = REPO_ROOT / "scripts" / "allure-report.sh"
+GENERATE_CI_SH = REPO_ROOT / "scripts" / "ci" / "generate_allure_report.sh"
+ALLURERC_JSON = REPO_ROOT / "allurerc.json"
+
+
+def _load_allure_results_module() -> Any:
+    spec = importlib.util.spec_from_file_location("allure_results", ALLURE_RESULTS_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+allure_results = _load_allure_results_module()
+
+
+def _read_results(results_dir: Path) -> List[Dict[str, Any]]:
+    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(results_dir.glob("*-result.json"))]
+
+
+def _label_map(result: Dict[str, Any]) -> Dict[str, List[str]]:
+    mapping: Dict[str, List[str]] = {}
+    for label in result.get("labels", []):
+        mapping.setdefault(label["name"], []).append(label["value"])
+    return mapping
+
+
+class AllureConfigAndVersionTest(unittest.TestCase):
+    def test_allurerc_json_matches_allure3_schema(self) -> None:
+        cfg = json.loads(ALLURERC_JSON.read_text(encoding="utf-8"))
+        self.assertEqual(cfg["name"], "AgentsTerm Test Report")
+        self.assertEqual(cfg["output"], "./allure-report")
+        awesome_opts = cfg["plugins"]["awesome"]["options"]
+        self.assertTrue(awesome_opts["singleFile"])
+        self.assertEqual(awesome_opts["groupBy"], ["parentSuite", "suite", "subSuite"])
+        self.assertFalse(cfg["plugins"]["agent"]["enabled"])
+
+    def test_allure_report_sh_pins_allure3_and_node22(self) -> None:
+        text = ALLURE_REPORT_SH.read_text(encoding="utf-8")
+        self.assertRegex(text, r'ALLURE_VERSION="3\.\d+\.\d+"')
+        self.assertIn("MIN_NODE_MAJOR=22", text)
+        self.assertIn("MIN_NODE_MINOR=18", text)
+
+
+class UnittestRunnerTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="agentsterm-allure-ut-"))
+        self.tests_dir = self.tmp / "suite"
+        self.tests_dir.mkdir()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_sample_suite(self, *, include_failure: bool) -> None:
+        fail_body = "self.assertEqual(1, 2)" if include_failure else "self.assertEqual(2, 2)"
+        err_body = 'raise RuntimeError("boom")' if include_failure else "self.assertTrue(True)"
+        sub_fail = "self.assertEqual(i, 0)" if include_failure else "self.assertGreaterEqual(i, 0)"
+        (self.tests_dir / "test_sample.py").write_text(
+            "\n".join(
+                [
+                    "import unittest",
+                    "",
+                    "class SampleCase(unittest.TestCase):",
+                    "    def test_pass(self):",
+                    "        self.assertTrue(True)",
+                    "",
+                    "    def test_fail(self):",
+                    f"        {fail_body}",
+                    "",
+                    "    def test_error(self):",
+                    f"        {err_body}",
+                    "",
+                    "    @unittest.skip('not applicable here')",
+                    "    def test_skip(self):",
+                    "        pass",
+                    "",
+                    "    def test_subtests(self):",
+                    "        for i in (0, 1):",
+                    "            with self.subTest(i=i):",
+                    f"                {sub_fail}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def test_emits_all_statuses_and_propagates_failure_exit_code(self) -> None:
+        self._write_sample_suite(include_failure=True)
+        out_dir = self.tmp / "out-fail"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-W",
+                "error::ResourceWarning",
+                str(ALLURE_RESULTS_SCRIPT),
+                "unittest",
+                "--start-dir",
+                str(self.tests_dir),
+                "--output",
+                str(out_dir),
+                "--parent-suite",
+                "Sample Suite",
+                "--suite",
+                "Python 3.13",
+                "--variant",
+                "py3.13",
+                "--param",
+                "python=3.13",
+                "--tag",
+                "installer",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        results = {r["name"]: r for r in _read_results(out_dir)}
+        self.assertEqual(
+            {name: r["status"] for name, r in results.items()},
+            {
+                "test_pass": "passed",
+                "test_fail": "failed",
+                "test_error": "broken",
+                "test_skip": "skipped",
+                "test_subtests": "failed",
+            },
+        )
+        self.assertIn("AssertionError", results["test_fail"]["statusDetails"]["message"])
+        self.assertIn("RuntimeError: boom", results["test_error"]["statusDetails"]["message"])
+        self.assertEqual(results["test_skip"]["statusDetails"]["message"], "not applicable here")
+        self.assertEqual(len(results["test_subtests"]["steps"]), 2)
+        labels = _label_map(results["test_pass"])
+        self.assertEqual(labels["parentSuite"], ["Sample Suite"])
+        self.assertEqual(labels["suite"], ["Python 3.13"])
+        self.assertEqual(labels["subSuite"], ["SampleCase"])
+        self.assertEqual(labels["tag"], ["installer"])
+        self.assertEqual(results["test_pass"]["parameters"], [{"name": "python", "value": "3.13"}])
+        self.assertGreaterEqual(results["test_pass"]["stop"], results["test_pass"]["start"])
+
+    def test_matrix_shards_have_distinct_history_and_testcase_ids(self) -> None:
+        self._write_sample_suite(include_failure=False)
+        out_a = self.tmp / "shard-a"
+        out_b = self.tmp / "shard-b"
+
+        for out_dir, variant, distro in (
+            (out_a, "vm-ubuntu-2404", "vm-ubuntu-2404"),
+            (out_b, "vm-alpine-321", "vm-alpine-321"),
+        ):
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-W",
+                    "error::ResourceWarning",
+                    str(ALLURE_RESULTS_SCRIPT),
+                    "unittest",
+                    "--start-dir",
+                    str(self.tests_dir),
+                    "--output",
+                    str(out_dir),
+                    "--parent-suite",
+                    "Linux VM E2E",
+                    "--suite",
+                    distro,
+                    "--variant",
+                    variant,
+                    "--param",
+                    f"vm_target={distro}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+        res_a = {r["name"]: r for r in _read_results(out_a)}
+        res_b = {r["name"]: r for r in _read_results(out_b)}
+        self.assertNotEqual(res_a["test_pass"]["historyId"], res_b["test_pass"]["historyId"])
+        self.assertNotEqual(res_a["test_pass"]["testCaseId"], res_b["test_pass"]["testCaseId"])
+        self.assertNotEqual(res_a["test_pass"]["fullName"], res_b["test_pass"]["fullName"])
+
+    def test_emits_setup_class_error_without_start_test(self) -> None:
+        (self.tests_dir / "test_fixture_err.py").write_text(
+            "\n".join(
+                [
+                    "import unittest",
+                    "",
+                    "class BrokenFixtureCase(unittest.TestCase):",
+                    "    @classmethod",
+                    "    def setUpClass(cls):",
+                    '        raise RuntimeError("fixture setup exploded")',
+                    "",
+                    "    def test_never_runs(self):",
+                    "        self.assertTrue(True)",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        out_dir = self.tmp / "out-fixture-err"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-W",
+                "error::ResourceWarning",
+                str(ALLURE_RESULTS_SCRIPT),
+                "unittest",
+                "--start-dir",
+                str(self.tests_dir),
+                "--output",
+                str(out_dir),
+                "--parent-suite",
+                "Fixture Suite",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        results = _read_results(out_dir)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["status"], "broken")
+        self.assertIn("fixture setup exploded", results[0]["statusDetails"]["message"])
+
+
+class JunitConverterTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="agentsterm-allure-junit-"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_converts_junit_xml_and_attaches_roborazzi_diffs(self) -> None:
+        xml_dir = self.tmp / "xml"
+        xml_dir.mkdir()
+        (xml_dir / "TEST-MarkdownGoldenTest.xml").write_text(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.ui.markdown.MarkdownGoldenTest" tests="3" failures="1" errors="1" skipped="1" timestamp="2026-11-26T18:00:00Z">
+  <testcase name="matchesGolden[inline_styles on COMPACT_320]" classname="com.example.ui.markdown.MarkdownGoldenTest" time="0.42">
+    <failure message="Golden mismatch">AssertionError: images differ</failure>
+    <system-out>Rendered markdown sample</system-out>
+  </testcase>
+  <testcase name="matchesGolden[tables on PIXEL_412]" classname="com.example.ui.markdown.MarkdownGoldenTest" time="0.15">
+    <error message="IllegalStateException">boom trace</error>
+  </testcase>
+  <testcase name="matchesGolden[lists on LARGE_448]" classname="com.example.ui.markdown.MarkdownGoldenTest" time="0.00">
+    <skipped message="skipped on host" />
+  </testcase>
+</testsuite>
+""",
+            encoding="utf-8",
+        )
+        roborazzi_dir = self.tmp / "roborazzi" / "nested"
+        roborazzi_dir.mkdir(parents=True)
+        (roborazzi_dir / "inline_styles__compact_320_compare.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+        (roborazzi_dir / "inline_styles__compact_320_actual.png").write_bytes(b"\x89PNG\r\n\x1a\nactual")
+
+        out_dir = self.tmp / "allure-out"
+        count = allure_results.convert_junit_xml(
+            input_path=xml_dir,
+            output_dir=out_dir,
+            parent_suite="Android Unit Tests",
+            roborazzi_dir=self.tmp / "roborazzi",
+            tags=["android-unit"],
+        )
+        self.assertEqual(count, 3)
+
+        results = {r["name"]: r for r in _read_results(out_dir)}
+        failed = results["matchesGolden[inline_styles on COMPACT_320]"]
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["stop"] - failed["start"], 420)
+        attachment_names = [a["name"] for a in failed["attachments"]]
+        self.assertIn("System output", attachment_names)
+        self.assertIn("Golden diff (inline_styles__compact_320)", attachment_names)
+        self.assertIn("Actual rendering (inline_styles__compact_320)", attachment_names)
+        for att in failed["attachments"]:
+            self.assertTrue((out_dir / att["source"]).is_file())
+
+        self.assertEqual(results["matchesGolden[tables on PIXEL_412]"]["status"], "broken")
+        self.assertEqual(results["matchesGolden[lists on LARGE_448]"]["status"], "skipped")
+        labels = _label_map(failed)
+        self.assertEqual(labels["parentSuite"], ["Android Unit Tests"])
+        self.assertEqual(labels["suite"], ["MarkdownGoldenTest"])
+        self.assertEqual(labels["package"], ["com.example.ui.markdown"])
+        self.assertEqual(labels["tag"], ["android-unit"])
+
+
+class CargoParserTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="agentsterm-allure-cargo-"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_parses_multi_target_show_output_including_failures_and_doctests(self) -> None:
+        sample_log = """\
+   Compiling agentsterm-daemon v0.3.0
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.20s
+     Running unittests src/main.rs (target/debug/deps/agentsterm_daemon-abc)
+
+running 3 tests
+test util::tests::works_ok ... ok
+test util::tests::panics_as_expected - should panic ... ok
+test util::tests::skipped_case ... ignored, requires live device
+
+successes:
+
+---- util::tests::works_ok stdout ----
+debug line from passing test
+
+
+successes:
+    util::tests::panics_as_expected
+    util::tests::works_ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/daemon_integration.rs (target/debug/deps/daemon_integration-def)
+
+running 2 tests
+test healthy_case ... ok
+test broken_case ... FAILED
+
+failures:
+
+---- broken_case stdout ----
+
+thread 'broken_case' panicked at tests/daemon_integration.rs:42:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    broken_case
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+
+   Doc-tests agentsterm_daemon
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+"""
+        out_dir = self.tmp / "rust-allure"
+        count = allure_results.parse_cargo_test_output(
+            output_text=sample_log,
+            output_dir=out_dir,
+            parent_suite="Rust VM Daemon",
+            exit_code=101,
+            tags=["rust-daemon"],
+        )
+        self.assertEqual(count, 5)
+        results = {r["fullName"]: r for r in _read_results(out_dir)}
+
+        ok_res = results["src/main.rs::util::tests::works_ok"]
+        self.assertEqual(ok_res["status"], "passed")
+        self.assertEqual(ok_res["name"], "works_ok")
+        self.assertEqual(len(ok_res["attachments"]), 1)
+        self.assertIn("debug line from passing test", (out_dir / ok_res["attachments"][0]["source"]).read_text())
+
+        panic_ok = results["src/main.rs::util::tests::panics_as_expected"]
+        self.assertEqual(panic_ok["status"], "passed")
+
+        ignored = results["src/main.rs::util::tests::skipped_case"]
+        self.assertEqual(ignored["status"], "skipped")
+        self.assertEqual(ignored["statusDetails"]["message"], "requires live device")
+
+        failed = results["tests/daemon_integration.rs::broken_case"]
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("panicked at tests/daemon_integration.rs:42:9", failed["statusDetails"]["message"])
+        self.assertIn("assertion `left == right` failed", failed["statusDetails"]["trace"])
+        self.assertEqual(_label_map(failed)["suite"], ["tests/daemon_integration.rs"])
+
+    def test_compile_failure_emits_synthetic_broken_result(self) -> None:
+        out_dir = self.tmp / "rust-compile-fail"
+        count = allure_results.parse_cargo_test_output(
+            output_text="error[E0425]: cannot find value `foo` in this scope\n",
+            output_dir=out_dir,
+            parent_suite="Rust VM Daemon",
+            exit_code=101,
+        )
+        self.assertEqual(count, 1)
+        results = _read_results(out_dir)
+        self.assertEqual(results[0]["status"], "broken")
+        self.assertIn("E0425", results[0]["statusDetails"]["trace"])
+
+    def test_partial_run_failure_after_passing_binary_emits_broken_result(self) -> None:
+        sample_log = """\
+     Running unittests src/main.rs (target/debug/deps/agentsterm_daemon-abc)
+
+running 1 test
+test util::tests::works_ok ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `--test daemon_integration`
+Caused by:
+  process didn't exit successfully (signal: 11, SIGSEGV)
+"""
+        out_dir = self.tmp / "rust-partial-fail"
+        count = allure_results.parse_cargo_test_output(
+            output_text=sample_log,
+            output_dir=out_dir,
+            parent_suite="Rust VM Daemon",
+            exit_code=101,
+        )
+        self.assertEqual(count, 2)
+        statuses = {r["name"]: r["status"] for r in _read_results(out_dir)}
+        self.assertEqual(
+            statuses,
+            {
+                "works_ok": "passed",
+                "Cargo build / test execution": "broken",
+            },
+        )
+
+
+class MergeSummaryAndCiScriptTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="agentsterm-allure-merge-"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_merge_and_summary_render_markdown_table_and_metadata(self) -> None:
+        shard1 = self.tmp / "raw" / "shard1"
+        shard2 = self.tmp / "raw" / "shard2"
+        allure_results.parse_cargo_test_output(
+            output_text=(
+                "     Running unittests src/main.rs (bin)\n"
+                "running 1 test\n"
+                "test ok_one ... ok\n"
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s\n"
+            ),
+            output_dir=shard1,
+            parent_suite="Rust VM Daemon",
+        )
+        allure_results.parse_cargo_test_output(
+            output_text=(
+                "     Running tests/app_cli.rs (bin)\n"
+                "running 1 test\n"
+                "test bad_one ... FAILED\n"
+                "failures:\n"
+                "---- bad_one stdout ----\n"
+                "thread 'bad_one' panicked at tests/app_cli.rs:10:5:\n"
+                "boom\n"
+                "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s\n"
+            ),
+            output_dir=shard2,
+            parent_suite="Android Unit Tests",
+            exit_code=101,
+        )
+
+        merged = self.tmp / "merged"
+        count = allure_results.merge_results(
+            input_dirs=[self.tmp / "raw"],
+            output_dir=merged,
+            env_pairs=[("Repository", "AppEvol/agents-term"), ("Ref", "main")],
+            executor={"name": "GitHub Actions", "type": "github", "buildOrder": "42"},
+        )
+        self.assertEqual(count, 2)
+        self.assertIn("Repository=AppEvol/agents-term", (merged / "environment.properties").read_text(encoding="utf-8"))
+        executor = json.loads((merged / "executor.json").read_text(encoding="utf-8"))
+        self.assertEqual(executor["buildOrder"], "42")
+
+        md, total = allure_results.build_markdown_summary(
+            merged,
+            artifact_name="allure-report",
+            report_url="https://github.com/AppEvol/agents-term/actions/runs/123",
+        )
+        self.assertEqual(total, 2)
+        self.assertIn("| Android Unit Tests | 0 | 1 | 0 | 0 | 1 |", md)
+        self.assertIn("| Rust VM Daemon | 1 | 0 | 0 | 0 | 1 |", md)
+        self.assertIn("| **Total** | **1** | **1** | **0** | **0** | **2** |", md)
+        self.assertIn("### Failures & Broken Tests", md)
+        self.assertIn("bad_one", md)
+
+    def test_generate_allure_report_sh_handles_zero_results_without_node(self) -> None:
+        raw_dir = self.tmp / "empty-raw"
+        raw_dir.mkdir()
+        merged_dir = self.tmp / "empty-merged"
+        report_dir = self.tmp / "empty-report"
+        step_summary = self.tmp / "step_summary.md"
+        gh_output = self.tmp / "gh_output.txt"
+
+        env = {
+            **os.environ,
+            "ALLURE_RAW_DIR": str(raw_dir),
+            "ALLURE_MERGED_DIR": str(merged_dir),
+            "ALLURE_REPORT_DIR": str(report_dir),
+            "GITHUB_STEP_SUMMARY": str(step_summary),
+            "GITHUB_OUTPUT": str(gh_output),
+        }
+        proc = subprocess.run(
+            ["bash", str(GENERATE_CI_SH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("No test results were collected", step_summary.read_text(encoding="utf-8"))
+        out_text = gh_output.read_text(encoding="utf-8")
+        self.assertIn("result_count=0", out_text)
+        self.assertIn("has_report=false", out_text)
+        self.assertFalse(report_dir.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

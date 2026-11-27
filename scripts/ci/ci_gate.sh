@@ -34,5 +34,6 @@ fi
 require_success_or_skipped "rust-daemon-build-and-test" "${RUST_DAEMON:-}"
 require_success_or_skipped "installer-tests" "${INSTALLER_TESTS:-}"
 require_success_or_skipped "docker-vm-e2e" "${DOCKER_VM_E2E:-}"
+require_success "allure-report" "${ALLURE_REPORT:-}"
 
 exit "$fail"

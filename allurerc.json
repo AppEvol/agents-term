@@ -1,0 +1,18 @@
+{
+  "name": "AgentsTerm Test Report",
+  "output": "./allure-report",
+  "plugins": {
+    "awesome": {
+      "options": {
+        "reportName": "AgentsTerm Test Report",
+        "singleFile": true,
+        "reportLanguage": "en",
+        "theme": "auto",
+        "groupBy": ["parentSuite", "suite", "subSuite"]
+      }
+    },
+    "agent": {
+      "enabled": false
+    }
+  }
+}
