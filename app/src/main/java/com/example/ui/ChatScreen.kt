@@ -38,7 +38,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.rememberTextFieldState
@@ -112,7 +111,6 @@ import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -473,6 +471,7 @@ fun ChatWorkspace(
     modifier: Modifier = Modifier,
     attachments: ComposerAttachments? = null,
     draft: TextFieldState = key(tab.id) { rememberTextFieldState() },
+    keyboard: ComposerKeyboard = ComposerKeyboard.forAgent(tab.agent),
 ) {
     val listState = rememberSaveable(tab.id, saver = LazyListState.Saver) {
         LazyListState()
@@ -717,6 +716,7 @@ fun ChatWorkspace(
         ChatComposer(
             tabId = tab.id,
             draft = draft,
+            keyboard = keyboard,
             placeholder = when {
                 isShellStdinActive ->
                     stringResource(R.string.shell_stdin_placeholder)
@@ -1592,15 +1592,17 @@ private fun BlockedPermissionCard(
 @Composable
 private fun ComposerTextField(
     draft: TextFieldState,
+    keyboard: ComposerKeyboard,
     placeholder: String,
     onImages: ((List<Uri>) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    // Key the text field on its TextFieldState so switching, creating, or closing a tab disposes
-    // the old IME input session cleanly. Reusing a focused BasicTextField across states while a
-    // bottom sheet or popup holds window focus leaves Compose 1.8's input session bound to the
-    // previous tab's state, causing typed text on the new tab to disappear into the old draft.
-    key(draft) {
+    // Key the text field on its TextFieldState and ComposerKeyboard so switching, creating, or
+    // closing a tab disposes the old IME input session cleanly. Reusing a focused BasicTextField
+    // across states while a bottom sheet or popup holds window focus leaves Compose 1.8's input
+    // session bound to the previous tab's state, causing typed text on the new tab to disappear
+    // into the old draft.
+    key(draft, keyboard) {
         val interactionSource = remember { MutableInteractionSource() }
         val colors = TextFieldDefaults.colors(
             focusedContainerColor = Color.Transparent,
@@ -1617,9 +1619,9 @@ private fun ComposerTextField(
         }
         BasicTextField(
             state = draft,
-            textStyle = LocalTextStyle.current.merge(color = MaterialTheme.colorScheme.onSurface),
+            textStyle = keyboard.textStyle(LocalTextStyle.current.merge(color = MaterialTheme.colorScheme.onSurface)),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            keyboardOptions = keyboard.keyboardOptions,
             lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
             interactionSource = interactionSource,
             decorator = { innerTextField ->
@@ -1828,6 +1830,7 @@ private fun ShellRunningControlRow(
 private fun ChatComposer(
     tabId: String,
     draft: TextFieldState,
+    keyboard: ComposerKeyboard,
     placeholder: String,
     isWorking: Boolean,
     isConnected: Boolean,
@@ -2087,6 +2090,7 @@ private fun ChatComposer(
 
                         ComposerTextField(
                             draft = draft,
+                            keyboard = keyboard,
                             placeholder = if (isConnected) {
                                 placeholder
                             } else {
