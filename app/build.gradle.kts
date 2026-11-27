@@ -171,7 +171,7 @@ val resolvedDebugKeystore = listOfNotNull(
 ).firstOrNull { it.isFile }
 
 android {
-    namespace = "com.example"
+    namespace = "com.appevol.agentsterm"
     compileSdk { version = release(36) { minorApiLevel = 1 } }
 
     defaultConfig {

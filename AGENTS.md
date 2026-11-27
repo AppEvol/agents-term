@@ -38,7 +38,7 @@
 - What runs: `ruff` (lint, import order, formatting) and `vulture` (dead code) for Python, configured in `pyproject.toml`; `ktlint` (formatting, import order, `.editorconfig`) and `detekt` (code smells, unused private code, `config/detekt/detekt.yml`) for Kotlin; `shellcheck` for shell scripts; `actionlint` for workflows. Android Lint runs separately as `gradle :app:lintDebug` (configured in `app/build.gradle.kts`).
 - Fix findings instead of silencing them. Do not add entries to `config/detekt/baseline.xml` or `app/lint-baseline.xml`: they only grandfather findings that predate the checks, and should shrink as that code is cleaned up. Suppress a single finding inline (`# noqa: RULE`, `@Suppress("Rule")`, `# shellcheck disable=SCxxxx`) only with a reason in a comment.
 
-## Markdown Rendering (`app/src/main/java/com/example/ui/markdown/`)
+## Markdown Rendering (`app/src/main/java/com/appevol/agentsterm/ui/markdown/`)
 
 - Chat Markdown is parsed by commonmark-java (`MarkdownParser`) into an immutable block tree, then drawn by the composables in that package. Change syntax handling in the parser, not with string matching in the UI.
 - `MarkdownGoldenTest` renders the documents in `app/src/test/resources/markdown-samples/` with `MarkdownText` alone, at several phone widths and densities, and compares the pixels with the golden images in `app/src/test/snapshots/markdown/`. It runs as part of `:app:testDebugUnitTest` (Robolectric, no emulator).

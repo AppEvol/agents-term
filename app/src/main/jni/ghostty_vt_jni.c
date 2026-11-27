@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define JNI_CLASS_PREFIX Java_com_example_terminal_GhosttyVtNative_
+#define JNI_CLASS_PREFIX Java_com_appevol_agentsterm_terminal_GhosttyVtNative_
 #define JNI_CONCAT_INNER(a, b) a##b
 #define JNI_CONCAT(a, b) JNI_CONCAT_INNER(a, b)
 #define JNI_FN(name) JNI_CONCAT(JNI_CLASS_PREFIX, name)

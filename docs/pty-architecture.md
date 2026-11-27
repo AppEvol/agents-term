@@ -214,7 +214,7 @@ Client                                                    Daemon
 
 ### JNI Wrapper & Compact Binary Frame Protocol
 
-[`app/src/main/jni/ghostty_vt_jni.c`](../app/src/main/jni/ghostty_vt_jni.c) exposes a flat C JNI surface bound by `GhosttyVtNative` and wrapped in the thread-safe `AutoCloseable` `GhosttyTerminalEngine` ([`GhosttyVtNative.kt`](../app/src/main/java/com/example/terminal/GhosttyVtNative.kt), [`TerminalFrame.kt`](../app/src/main/java/com/example/terminal/TerminalFrame.kt)):
+[`app/src/main/jni/ghostty_vt_jni.c`](../app/src/main/jni/ghostty_vt_jni.c) exposes a flat C JNI surface bound by `GhosttyVtNative` and wrapped in the thread-safe `AutoCloseable` `GhosttyTerminalEngine` ([`GhosttyVtNative.kt`](../app/src/main/java/com/appevol/agentsterm/terminal/GhosttyVtNative.kt), [`TerminalFrame.kt`](../app/src/main/java/com/appevol/agentsterm/terminal/TerminalFrame.kt)):
 
 - **Per-handle native state (`GhosttyHandle`):** Owns `GhosttyTerminal` (4 MiB default scrollback, `CONTINUATION_MAX_BYTES = 4096`), `GhosttyRenderState`, reusable row/cell iterators, `GhosttyKeyEncoder`, `GhosttyKeyEvent`, reusable `ByteBuf` buffers (`pty_out`, `frame_buf`), `suppress_pty_writes`, and latched `bell_rung` / `title_changed` flags.
 - **Core operations:**
@@ -239,7 +239,7 @@ Client                                                    Daemon
 
 ### Session Lifecycle (`PtySessionManager` & `PtyTabSession`)
 
-[`app/src/main/java/com/example/terminal/PtySessionManager.kt`](../app/src/main/java/com/example/terminal/PtySessionManager.kt) is owned by `MainViewModel` (`ptySessions`) and integrated into [`HerdrApp.kt`](../app/src/main/java/com/example/ui/HerdrApp.kt) (routing `activeTab.isPtyShell` to `PtyTerminalWorkspace`, keyed by `activeTab.id`) and [`NewTabSheet.kt`](../app/src/main/java/com/example/ui/NewTabSheet.kt):
+[`app/src/main/java/com/appevol/agentsterm/terminal/PtySessionManager.kt`](../app/src/main/java/com/appevol/agentsterm/terminal/PtySessionManager.kt) is owned by `MainViewModel` (`ptySessions`) and integrated into [`HerdrApp.kt`](../app/src/main/java/com/appevol/agentsterm/ui/HerdrApp.kt) (routing `activeTab.isPtyShell` to `PtyTerminalWorkspace`, keyed by `activeTab.id`) and [`NewTabSheet.kt`](../app/src/main/java/com/appevol/agentsterm/ui/NewTabSheet.kt):
 
 - **Workspace synchronization:** `observeWorkspace` collects `(config, connected, openPtyIds)` from `WorkspaceState`, propagating config updates and pruning closed PTY tabs once connected. Deleting a tab calls `remove(tabId)`; `MainViewModel.onCleared()` calls `closeAll()`.
 - **Server-switch isolation:** Tracks `lastEndpoint = (host, port)`. When the active VM endpoint changes, `getOrCreate` and `updateConfig` immediately close and evict all sessions from the previous host so old WebSockets never attempt to reconnect to a different VM.
@@ -250,7 +250,7 @@ Client                                                    Daemon
 
 ### Mobile Terminal UI (`PtyTerminalScreen.kt`)
 
-[`app/src/main/java/com/example/ui/PtyTerminalScreen.kt`](../app/src/main/java/com/example/ui/PtyTerminalScreen.kt) provides the Compose terminal canvas, IME input bridge, and extra-keys toolbar:
+[`app/src/main/java/com/appevol/agentsterm/ui/PtyTerminalScreen.kt`](../app/src/main/java/com/appevol/agentsterm/ui/PtyTerminalScreen.kt) provides the Compose terminal canvas, IME input bridge, and extra-keys toolbar:
 
 - **Three-pass `Canvas` rendering (`TerminalGridCanvas`):**
   - Uses bundled `JetBrains Mono` (`R.font.jetbrains_mono` / `jetbrains_mono_bold`, fallback `Typeface.MONOSPACE`), zoomable between `9 sp` and `22 sp` (default `13 sp`, step `1.5 sp`, saved per tab with `rememberSaveable`).
@@ -279,10 +279,10 @@ All PTY tests run in GitHub Actions (`.github/workflows/ci.yml`) and are require
 | :--- | :--- | :--- | :--- |
 | Rust daemon unit | [`daemon-rs/src/pty.rs`](../daemon-rs/src/pty.rs) | Echo, `stty size` resize, warm/cold replay, `terminate()` killing foreground + `trap '' HUP` background jobs, trailing output drained before `Exit`, `shutdown_all()` rejecting new spawns, lagging-subscriber eviction | `rust-daemon-build-and-test` |
 | Rust daemon integration | [`daemon-rs/tests/daemon_integration.rs`](../daemon-rs/tests/daemon_integration.rs) | `/api/info` `pty` capability, default `"command"` vs opt-in `"pty"`, HTTP `400` on command/stdin/interrupt APIs, auth enforcement, tab-completion, `Ctrl+C`, `stty -echo` secret non-echo, resize, warm reconnect, `?restart=1`, trailing output before `exit`, `DELETE /api/tabs/:id` killing active jobs | `rust-daemon-build-and-test` |
-| Android native JNI unit | [`GhosttyVtEngineTest.kt`](../app/src/test/java/com/example/terminal/GhosttyVtEngineTest.kt) | Styled cells & dirty-row batching, live vs. replay `WRITE_PTY` reply suppression, mode-synchronized key encoding, JNI bounds checks, paste safety & bracketed paste, alternate screen, title, scrollback, snapshot round-trip (runs against real host `libghostty_vt_jni.so`) | `build-and-unit-test` |
-| Android session unit | [`PtySessionManagerTest.kt`](../app/src/test/java/com/example/terminal/PtySessionManagerTest.kt) | Replay suppression & privacy check (no raw PTY bytes in `DebugRecorder`), warm reconnect with `afterSeq` + `sessionId`, non-retryable server errors & HTTP `404`, disconnected restart, server-switch isolation, latched `Ctrl` punctuation | `build-and-unit-test` |
-| Android Compose UI unit | [`PtyTerminalScreenTest.kt`](../app/src/test/java/com/example/ui/PtyTerminalScreenTest.kt), [`NewTabSheetTest.kt`](../app/src/test/java/com/example/ui/NewTabSheetTest.kt) | Extra-keys toolbar & `Ctrl` latch, IME `Enter` → CR & codepoint-safe emoji composing, `NewTabSheet` Command default vs. PTY opt-in and hiding selector on older daemons | `build-and-unit-test` |
-| Android Emulator ↔ Docker VM E2E | [`RealVmDockerE2ETest.kt`](../app/src/androidTest/java/com/example/RealVmDockerE2ETest.kt) (`test04_interactivePtyShellTabSupportsAutocompleteAndCtrlC`) | Real SSH bootstrap into Docker VM, creating an opt-in PTY tab, rendering live `bash` prompt on native `libghostty-vt` canvas, IME focus, and `Tab` / `^C` toolbar dispatch | `e2e-tests` |
+| Android native JNI unit | [`GhosttyVtEngineTest.kt`](../app/src/test/java/com/appevol/agentsterm/terminal/GhosttyVtEngineTest.kt) | Styled cells & dirty-row batching, live vs. replay `WRITE_PTY` reply suppression, mode-synchronized key encoding, JNI bounds checks, paste safety & bracketed paste, alternate screen, title, scrollback, snapshot round-trip (runs against real host `libghostty_vt_jni.so`) | `build-and-unit-test` |
+| Android session unit | [`PtySessionManagerTest.kt`](../app/src/test/java/com/appevol/agentsterm/terminal/PtySessionManagerTest.kt) | Replay suppression & privacy check (no raw PTY bytes in `DebugRecorder`), warm reconnect with `afterSeq` + `sessionId`, non-retryable server errors & HTTP `404`, disconnected restart, server-switch isolation, latched `Ctrl` punctuation | `build-and-unit-test` |
+| Android Compose UI unit | [`PtyTerminalScreenTest.kt`](../app/src/test/java/com/appevol/agentsterm/ui/PtyTerminalScreenTest.kt), [`NewTabSheetTest.kt`](../app/src/test/java/com/appevol/agentsterm/ui/NewTabSheetTest.kt) | Extra-keys toolbar & `Ctrl` latch, IME `Enter` → CR & codepoint-safe emoji composing, `NewTabSheet` Command default vs. PTY opt-in and hiding selector on older daemons | `build-and-unit-test` |
+| Android Emulator ↔ Docker VM E2E | [`RealVmDockerE2ETest.kt`](../app/src/androidTest/java/com/appevol/agentsterm/RealVmDockerE2ETest.kt) (`test04_interactivePtyShellTabSupportsAutocompleteAndCtrlC`) | Real SSH bootstrap into Docker VM, creating an opt-in PTY tab, rendering live `bash` prompt on native `libghostty-vt` canvas, IME focus, and `Tab` / `^C` toolbar dispatch | `e2e-tests` |
 
 ### CI Caching & Local Toolchains
 

@@ -37,7 +37,7 @@ eval "$(bash e2e/docker-vm/start_vm.sh --name agentsterm-ci-vm --ssh-port 2222 -
 adb reverse tcp:2222 tcp:2222
 adb reverse tcp:7591 tcp:7591
 gradle :app:connectedDebugAndroidTest \
-  -Pandroid.testInstrumentationRunnerArguments.class=com.example.RealVmDockerE2ETest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.appevol.agentsterm.RealVmDockerE2ETest \
   -Pandroid.testInstrumentationRunnerArguments.realVmSshHost=127.0.0.1 \
   -Pandroid.testInstrumentationRunnerArguments.realVmSshPort=2222 \
   -Pandroid.testInstrumentationRunnerArguments.realVmSshUser=vmuser \

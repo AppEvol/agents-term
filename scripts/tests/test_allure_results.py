@@ -254,15 +254,15 @@ class JunitConverterTest(unittest.TestCase):
         xml_dir.mkdir()
         (xml_dir / "TEST-MarkdownGoldenTest.xml").write_text(
             """<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.example.ui.markdown.MarkdownGoldenTest" tests="3" failures="1" errors="1" skipped="1" timestamp="2026-11-26T18:00:00Z">
-  <testcase name="matchesGolden[inline_styles on COMPACT_320]" classname="com.example.ui.markdown.MarkdownGoldenTest" time="0.42">
+<testsuite name="com.appevol.agentsterm.ui.markdown.MarkdownGoldenTest" tests="3" failures="1" errors="1" skipped="1" timestamp="2026-11-26T18:00:00Z">
+  <testcase name="matchesGolden[inline_styles on COMPACT_320]" classname="com.appevol.agentsterm.ui.markdown.MarkdownGoldenTest" time="0.42">
     <failure message="Golden mismatch">AssertionError: images differ</failure>
     <system-out>Rendered markdown sample</system-out>
   </testcase>
-  <testcase name="matchesGolden[tables on PIXEL_412]" classname="com.example.ui.markdown.MarkdownGoldenTest" time="0.15">
+  <testcase name="matchesGolden[tables on PIXEL_412]" classname="com.appevol.agentsterm.ui.markdown.MarkdownGoldenTest" time="0.15">
     <error message="IllegalStateException">boom trace</error>
   </testcase>
-  <testcase name="matchesGolden[lists on LARGE_448]" classname="com.example.ui.markdown.MarkdownGoldenTest" time="0.00">
+  <testcase name="matchesGolden[lists on LARGE_448]" classname="com.appevol.agentsterm.ui.markdown.MarkdownGoldenTest" time="0.00">
     <skipped message="skipped on host" />
   </testcase>
 </testsuite>
@@ -300,7 +300,7 @@ class JunitConverterTest(unittest.TestCase):
         labels = _label_map(failed)
         self.assertEqual(labels["parentSuite"], ["Android Unit Tests"])
         self.assertEqual(labels["suite"], ["MarkdownGoldenTest"])
-        self.assertEqual(labels["package"], ["com.example.ui.markdown"])
+        self.assertEqual(labels["package"], ["com.appevol.agentsterm.ui.markdown"])
         self.assertEqual(labels["tag"], ["android-unit"])
 
 
