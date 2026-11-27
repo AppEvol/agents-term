@@ -92,3 +92,36 @@ fn mutation_during_snapshot_write_survives_following_flush() {
     let reopened = StateStore::open(home.files(), write_atomic_file);
     assert_eq!(reopened.get_messages(&id), [first, second]);
 }
+
+#[test]
+fn resolve_abs_path_expands_tilde_and_pop_next_queued_is_fifo() {
+    let home = home_dir().to_string_lossy().to_string();
+    assert_eq!(resolve_abs_path("~"), resolve_abs_path(&home));
+    assert_eq!(
+        resolve_abs_path("~/project/sub/.."),
+        resolve_abs_path(&format!("{home}/project"))
+    );
+
+    let test_home = TestHome::new();
+    let store = StateStore::open(test_home.files(), write_atomic_file);
+    let tab_id = create_tab(&store);
+    assert!(store.pop_next_queued_message(&tab_id).is_none());
+
+    store.enqueue_message(&tab_id, "first", None, &[]).unwrap();
+    store.enqueue_message(&tab_id, "second", None, &[]).unwrap();
+    store.enqueue_message(&tab_id, "third", None, &[]).unwrap();
+
+    let (tab1, item1) = store.pop_next_queued_message(&tab_id).unwrap();
+    assert_eq!(item1["text"].as_str(), Some("first"));
+    assert_eq!(tab1["queuedMessages"].as_array().unwrap().len(), 2);
+    assert_eq!(tab1["queuedMessages"][0]["text"].as_str(), Some("second"));
+
+    let (tab2, item2) = store.pop_next_queued_message(&tab_id).unwrap();
+    assert_eq!(item2["text"].as_str(), Some("second"));
+    assert_eq!(tab2["queuedMessages"].as_array().unwrap().len(), 1);
+
+    let (tab3, item3) = store.pop_next_queued_message(&tab_id).unwrap();
+    assert_eq!(item3["text"].as_str(), Some("third"));
+    assert!(tab3["queuedMessages"].as_array().unwrap().is_empty());
+    assert!(store.pop_next_queued_message(&tab_id).is_none());
+}

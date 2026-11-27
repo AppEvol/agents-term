@@ -483,7 +483,7 @@ pub const AGENT_SPECS: &[AgentSpec] = &[
     AgentSpec {
         kind: "shell",
         name: "Shell",
-        description: "Persistent bash",
+        description: "Persistent bash (keeps directory, env vars, and stdin)",
         binary: "bash",
     },
 ];

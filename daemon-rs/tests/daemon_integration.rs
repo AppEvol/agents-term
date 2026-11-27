@@ -1678,3 +1678,475 @@ printf '{"type":"result","session_id":"sess-deny","subtype":"success","is_error"
     drop(daemon);
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn issue_49_shell_cwd_tilde_expansion_validation_and_no_home_fallback() {
+    let home = make_temp_dir("agentsterm-rs-49");
+    let project = home.join("project");
+    fs::create_dir_all(&project).unwrap();
+    let plain_file = home.join("not-a-dir.txt");
+    fs::write(&plain_file, "hello").unwrap();
+
+    let daemon = TestDaemon::start(&home, None);
+
+    // Missing absolute path fails POST /api/tabs with 400.
+    let missing_abs = home.join("does-not-exist-49");
+    let (st, err) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({ "agent": "shell", "cwd": missing_abs.to_string_lossy() })),
+    );
+    assert_eq!(st, 400, "{err}");
+    assert_eq!(
+        err["error"].as_str(),
+        Some(
+            format!(
+                "Working directory does not exist: {}",
+                missing_abs.display()
+            )
+            .as_str()
+        )
+    );
+
+    // Missing ~/path expands ~ and fails POST /api/tabs with 400.
+    let (st, err) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({ "agent": "shell", "cwd": "~/missing-sub" })),
+    );
+    assert_eq!(st, 400, "{err}");
+    assert_eq!(
+        err["error"].as_str(),
+        Some(
+            format!(
+                "Working directory does not exist: {}",
+                home.join("missing-sub").display()
+            )
+            .as_str()
+        )
+    );
+
+    // Existing file (not a directory) fails POST /api/tabs with 400.
+    let (st, err) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({ "agent": "shell", "cwd": plain_file.to_string_lossy() })),
+    );
+    assert_eq!(st, 400, "{err}");
+    assert_eq!(
+        err["error"].as_str(),
+        Some(
+            format!(
+                "Working directory is not a directory: {}",
+                plain_file.display()
+            )
+            .as_str()
+        )
+    );
+
+    // Existing ~/project expands against HOME and executes inside <home>/project.
+    let (st, created) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({ "agent": "shell", "cwd": "~/project" })),
+    );
+    assert_eq!(st, 200, "{created}");
+    assert_eq!(
+        created["tab"]["cwd"].as_str(),
+        Some(project.to_string_lossy().as_ref())
+    );
+    let tab_id = created["tab"]["id"].as_str().unwrap().to_string();
+
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{tab_id}/messages"),
+        Some(json!({ "text": "pwd" })),
+    );
+    assert_eq!(st, 200);
+    let settled = daemon.wait_settled(&tab_id, 2);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("idle"));
+    let msg1 = &settled["messages"].as_array().unwrap()[1];
+    assert_eq!(msg1["exitCode"].as_i64(), Some(0));
+    assert!(
+        msg1["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains(project.to_string_lossy().as_ref()),
+        "Expected pwd output to contain {}, got: {:?}",
+        project.display(),
+        msg1["text"]
+    );
+
+    // Removing the directory after tab creation fails the turn with an actionable error
+    // naming the path and never silently falls back to or overwrites cwd with $HOME.
+    fs::remove_dir_all(&project).unwrap();
+    let (st, _) = daemon.api(
+        "POST",
+        &format!("/api/tabs/{tab_id}/messages"),
+        Some(json!({ "text": "pwd" })),
+    );
+    assert_eq!(st, 200);
+    let settled = daemon.wait_settled(&tab_id, 4);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("error"));
+    assert_eq!(
+        settled["tab"]["cwd"].as_str(),
+        Some(project.to_string_lossy().as_ref()),
+        "tab.cwd must not be overwritten with $HOME on missing cwd"
+    );
+    let msg2 = &settled["messages"].as_array().unwrap()[3];
+    assert_eq!(msg2["status"].as_str(), Some("error"));
+    assert_eq!(
+        msg2["error"].as_str(),
+        Some(format!("Working directory does not exist: {}", project.display()).as_str())
+    );
+
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn issue_50_shell_exit_codes_and_no_empty_code_blocks() {
+    let home = make_temp_dir("agentsterm-rs-50");
+    let daemon = TestDaemon::start(&home, None);
+    let tab_id = daemon.create_tab("shell", &home);
+    let msgs_path = format!("/api/tabs/{tab_id}/messages");
+
+    // 1) Silent exit-0 command (`true`): exitCode 0, status complete, error null, empty text.
+    assert_eq!(
+        daemon
+            .api("POST", &msgs_path, Some(json!({ "text": "true" })))
+            .0,
+        200
+    );
+    let settled = daemon.wait_settled(&tab_id, 2);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("idle"));
+    let m1 = &settled["messages"].as_array().unwrap()[1];
+    assert_eq!(m1["exitCode"].as_i64(), Some(0));
+    assert_eq!(m1["status"].as_str(), Some("complete"));
+    assert!(m1["error"].is_null(), "expected null error: {m1}");
+    assert_eq!(m1["text"].as_str(), Some(""));
+    assert!(m1["segments"].as_array().unwrap().is_empty());
+
+    // 2) Silent non-zero command (`false`): exitCode 1, status error, error "Exited with code 1", empty text, tab stays idle.
+    assert_eq!(
+        daemon
+            .api("POST", &msgs_path, Some(json!({ "text": "false" })))
+            .0,
+        200
+    );
+    let settled = daemon.wait_settled(&tab_id, 4);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("idle"));
+    let m2 = &settled["messages"].as_array().unwrap()[3];
+    assert_eq!(m2["exitCode"].as_i64(), Some(1));
+    assert_eq!(m2["status"].as_str(), Some("error"));
+    assert_eq!(m2["error"].as_str(), Some("Exited with code 1"));
+    assert_eq!(m2["text"].as_str(), Some(""));
+    assert!(m2["segments"].as_array().unwrap().is_empty());
+
+    // 3) Failing command with stderr output still records exitCode, status error, and output.
+    assert_eq!(
+        daemon
+            .api(
+                "POST",
+                &msgs_path,
+                Some(json!({ "text": "echo boom >&2; (exit 3)" }))
+            )
+            .0,
+        200
+    );
+    let settled = daemon.wait_settled(&tab_id, 6);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("idle"));
+    let m3 = &settled["messages"].as_array().unwrap()[5];
+    assert_eq!(m3["exitCode"].as_i64(), Some(3));
+    assert_eq!(m3["status"].as_str(), Some("error"));
+    assert_eq!(m3["error"].as_str(), Some("Exited with code 3"));
+    assert!(m3["text"].as_str().unwrap_or("").contains("boom"));
+
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn issue_51_persistent_bash_session_stdin_and_cleanup() {
+    let home = make_temp_dir("agentsterm-rs-51");
+    let project = home.join("project");
+    fs::create_dir_all(&project).unwrap();
+    let daemon = TestDaemon::start(&home, None);
+
+    // Accurate shell description in /api/info.
+    let (st, info) = daemon.api("GET", "/api/info", None);
+    assert_eq!(st, 200);
+    let shell_spec = info["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["type"].as_str() == Some("shell"))
+        .unwrap();
+    assert_eq!(
+        shell_spec["description"].as_str(),
+        Some("Persistent bash (keeps directory, env vars, and stdin)")
+    );
+
+    let tab_id = daemon.create_tab("shell", &home);
+    let msgs_path = format!("/api/tabs/{tab_id}/messages");
+    let stdin_path = format!("/api/tabs/{tab_id}/stdin");
+
+    // Stdin API error handling when idle / bad request / missing tab.
+    let (st, err) = daemon.api(
+        "POST",
+        "/api/tabs/tab_missing/stdin",
+        Some(json!({ "data": "x\n" })),
+    );
+    assert_eq!(st, 404, "{err}");
+    let (st, err) = daemon.api("POST", &stdin_path, Some(json!({})));
+    assert_eq!(st, 400, "{err}");
+    let (st, err) = daemon.api("POST", &stdin_path, Some(json!({ "data": "x\n" })));
+    assert_eq!(st, 409, "{err}");
+    assert_eq!(
+        err["error"].as_str(),
+        Some("No running shell command accepts stdin")
+    );
+
+    // 1) cd + export + local variable + shell function persist across turns.
+    assert_eq!(
+        daemon
+            .api(
+                "POST",
+                &msgs_path,
+                Some(json!({ "text": "cd project && export SHELL_AUDIT_COLOR=blue && LOCAL_VAL=99 && myfn() { echo \"fn:$1\"; }" }))
+            )
+            .0,
+        200
+    );
+    let settled = daemon.wait_settled(&tab_id, 2);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("idle"));
+    assert_eq!(
+        settled["tab"]["cwd"].as_str(),
+        Some(project.to_string_lossy().as_ref())
+    );
+    let m1 = &settled["messages"].as_array().unwrap()[1];
+    assert_eq!(m1["exitCode"].as_i64(), Some(0));
+    assert_eq!(m1["text"].as_str(), Some(""));
+
+    assert_eq!(
+        daemon
+            .api(
+                "POST",
+                &msgs_path,
+                Some(json!({ "text": "pwd && printenv SHELL_AUDIT_COLOR && echo \"local=$LOCAL_VAL\" && myfn ok" }))
+            )
+            .0,
+        200
+    );
+    let settled = daemon.wait_settled(&tab_id, 4);
+    let m2 = &settled["messages"].as_array().unwrap()[3];
+    let m2_text = m2["text"].as_str().unwrap_or("");
+    assert_eq!(m2["exitCode"].as_i64(), Some(0));
+    assert!(
+        m2_text.contains(project.to_string_lossy().as_ref()),
+        "{m2_text}"
+    );
+    assert!(m2_text.contains("blue"), "{m2_text}");
+    assert!(m2_text.contains("local=99"), "{m2_text}");
+    assert!(m2_text.contains("fn:ok"), "{m2_text}");
+
+    // 2) Interactive stdin: read -r answer blocks until POST /stdin sends "hello\n".
+    assert_eq!(
+        daemon
+            .api(
+                "POST",
+                &msgs_path,
+                Some(json!({ "text": "read -r answer && echo \"got:$answer\"" }))
+            )
+            .0,
+        200
+    );
+    thread::sleep(Duration::from_millis(150));
+    let (_, mid) = daemon.api("GET", &msgs_path, None);
+    assert_eq!(
+        mid["tab"]["status"].as_str(),
+        Some("working"),
+        "read -r should stay blocked waiting for stdin"
+    );
+    let (st, stdin_res) = daemon.api("POST", &stdin_path, Some(json!({ "data": "hello\n" })));
+    assert_eq!(st, 200, "{stdin_res}");
+    assert_eq!(stdin_res["ok"].as_bool(), Some(true));
+    let settled = daemon.wait_settled(&tab_id, 6);
+    let m3 = &settled["messages"].as_array().unwrap()[5];
+    assert_eq!(m3["exitCode"].as_i64(), Some(0));
+    assert!(
+        m3["text"].as_str().unwrap_or("").contains("got:hello"),
+        "{m3}"
+    );
+
+    // 3) Interactive stdin EOF unblocks read.
+    assert_eq!(
+        daemon
+            .api(
+                "POST",
+                &msgs_path,
+                Some(json!({ "text": "read -r answer || echo stdin-closed" }))
+            )
+            .0,
+        200
+    );
+    thread::sleep(Duration::from_millis(150));
+    let (st, eof_res) = daemon.api("POST", &stdin_path, Some(json!({ "eof": true })));
+    assert_eq!(st, 200, "{eof_res}");
+    assert_eq!(eof_res["ok"].as_bool(), Some(true));
+    let settled = daemon.wait_settled(&tab_id, 8);
+    let m4 = &settled["messages"].as_array().unwrap()[7];
+    assert_eq!(m4["exitCode"].as_i64(), Some(0));
+    assert!(
+        m4["text"].as_str().unwrap_or("").contains("stdin-closed"),
+        "{m4}"
+    );
+
+    // 4) `exit 7` reports exact exit code 7 and automatically spawns a fresh bash on next turn.
+    assert_eq!(
+        daemon
+            .api("POST", &msgs_path, Some(json!({ "text": "exit 7" })))
+            .0,
+        200
+    );
+    let settled = daemon.wait_settled(&tab_id, 10);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("idle"));
+    let m5 = &settled["messages"].as_array().unwrap()[9];
+    assert_eq!(m5["exitCode"].as_i64(), Some(7));
+    assert_eq!(m5["status"].as_str(), Some("error"));
+    assert_eq!(m5["error"].as_str(), Some("Exited with code 7"));
+
+    assert_eq!(
+        daemon
+            .api(
+                "POST",
+                &msgs_path,
+                Some(json!({ "text": "pwd && echo respawned" }))
+            )
+            .0,
+        200
+    );
+    let settled = daemon.wait_settled(&tab_id, 12);
+    let m6 = &settled["messages"].as_array().unwrap()[11];
+    assert_eq!(m6["exitCode"].as_i64(), Some(0));
+    assert!(
+        m6["text"].as_str().unwrap_or("").contains("respawned"),
+        "{m6}"
+    );
+    assert!(
+        m6["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains(project.to_string_lossy().as_ref()),
+        "respawned shell should start in tab.cwd: {m6}"
+    );
+
+    // 5) Closing the tab cleans up the session temp directory.
+    let tmp_root = home.join(".agents-term/tmp");
+    let has_shell_dir = || {
+        fs::read_dir(&tmp_root)
+            .ok()
+            .map(|it| {
+                it.flatten().any(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .starts_with(&format!("shell-{tab_id}-"))
+                })
+            })
+            .unwrap_or(false)
+    };
+    assert!(has_shell_dir(), "expected active persistent shell temp dir");
+    assert_eq!(
+        daemon.api("DELETE", &format!("/api/tabs/{tab_id}"), None).0,
+        200
+    );
+    assert!(
+        !has_shell_dir(),
+        "closing shell tab must clean up persistent shell temp dir"
+    );
+
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn issue_53_shell_queue_preserves_submission_boundaries() {
+    let home = make_temp_dir("agentsterm-rs-53");
+    let work = home.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let daemon = TestDaemon::start(&home, None);
+    let tab_id = daemon.create_tab("shell", &work);
+    let msgs_path = format!("/api/tabs/{tab_id}/messages");
+
+    // Start a command that signals readiness then sleeps briefly.
+    let (st, _) = daemon.api(
+        "POST",
+        &msgs_path,
+        Some(json!({ "text": "touch started && sleep 0.6 && echo first-done" })),
+    );
+    assert_eq!(st, 200);
+
+    let started = work.join("started");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !started.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(started.exists(), "first shell command never started");
+
+    // Queue two separate commands while the first is running.
+    let (st, q1) = daemon.api("POST", &msgs_path, Some(json!({ "text": "set -e; false" })));
+    assert_eq!(st, 200);
+    assert_eq!(q1["queued"].as_bool(), Some(true));
+    assert_eq!(q1["tab"]["queuedMessages"].as_array().unwrap().len(), 1);
+
+    let (st, q2) = daemon.api(
+        "POST",
+        &msgs_path,
+        Some(json!({ "text": "echo second-ran" })),
+    );
+    assert_eq!(st, 200);
+    assert_eq!(q2["queued"].as_bool(), Some(true));
+    assert_eq!(q2["tab"]["queuedMessages"].as_array().unwrap().len(), 2);
+
+    // Wait until all 3 turns (6 messages) finish and queue is completely drained.
+    let settled = daemon.wait_settled(&tab_id, 6);
+    assert_eq!(settled["tab"]["status"].as_str(), Some("idle"));
+    assert!(settled["tab"]["queuedMessages"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let msgs = settled["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 6, "expected 3 separate turns: {msgs:?}");
+
+    // Turn 1
+    assert_eq!(msgs[0]["role"].as_str(), Some("user"));
+    assert_eq!(msgs[1]["exitCode"].as_i64(), Some(0));
+    assert_eq!(msgs[1]["status"].as_str(), Some("complete"));
+    assert!(msgs[1]["text"]
+        .as_str()
+        .unwrap_or("")
+        .contains("first-done"));
+
+    // Turn 2: `set -e; false` ran as its own turn, exited 1, and did NOT swallow Turn 3.
+    assert_eq!(msgs[2]["role"].as_str(), Some("user"));
+    assert_eq!(msgs[2]["text"].as_str(), Some("set -e; false"));
+    assert_eq!(msgs[3]["exitCode"].as_i64(), Some(1));
+    assert_eq!(msgs[3]["status"].as_str(), Some("error"));
+    assert_eq!(msgs[3]["error"].as_str(), Some("Exited with code 1"));
+    assert_eq!(msgs[3]["text"].as_str(), Some(""));
+
+    // Turn 3: `echo second-ran` ran cleanly in its own turn after the failing turn.
+    assert_eq!(msgs[4]["role"].as_str(), Some("user"));
+    assert_eq!(msgs[4]["text"].as_str(), Some("echo second-ran"));
+    assert_eq!(msgs[5]["exitCode"].as_i64(), Some(0));
+    assert_eq!(msgs[5]["status"].as_str(), Some("complete"));
+    assert!(msgs[5]["error"].is_null());
+    assert!(msgs[5]["text"]
+        .as_str()
+        .unwrap_or("")
+        .contains("second-ran"));
+
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}

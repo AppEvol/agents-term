@@ -1,7 +1,8 @@
 use regex::Regex;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::fs;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -11,11 +12,12 @@ use tokio::process::Command;
 
 use crate::attachments::{attachments_label, prompt_with_attachments, remove_attachment_files};
 use crate::config::{
-    agents_debugging_tips_path, enriched_path, resolve_binary, tab_attachments_dir,
+    agents_debugging_tips_path, enriched_path, home_dir, resolve_binary, tab_attachments_dir,
     WORK_DONE_SYSTEM_INSTRUCTION,
 };
 use crate::log::{log_error, log_info, log_warn};
-use crate::store::{resolve_abs_path, StateStore, RESTART_INTERRUPTED_REASON};
+use crate::shell::{signal_process_group, PersistentShell, StdinState};
+use crate::store::{validate_working_dir, StateStore, RESTART_INTERRUPTED_REASON};
 use crate::util::{
     block_separator, is_finite_number, is_number, is_task_finished_response, js_round, js_str,
     js_truthy, json_compact, json_pretty, now_ms, pad_first_prompt_for_task_summary, rand_hex,
@@ -23,7 +25,6 @@ use crate::util::{
     WorkDoneStreamFilter,
 };
 
-const CWD_MARKER: &str = "__AGENTSTERM_CWD__";
 const MAX_TOOL_OUTPUT: usize = 12_000;
 
 pub type BroadcastFn = Arc<dyn Fn(Value) + Send + Sync>;
@@ -149,14 +150,6 @@ fn truncate_chars(s: &str, max: usize) -> String {
     }
 }
 
-fn signal_process_group(pid: u32, sig: libc::c_int) {
-    let pgid = -(pid as libc::pid_t);
-    unsafe {
-        let _ = libc::kill(pgid, sig);
-        let _ = libc::kill(pid as libc::pid_t, sig);
-    }
-}
-
 struct ActiveTurn {
     assistant_msg_id: String,
     agent: String,
@@ -167,6 +160,7 @@ struct ActiveTurn {
     kill_scheduled: bool,
     signal_on_spawn: Option<libc::c_int>,
     escalation_handle: Option<tokio::task::JoinHandle<()>>,
+    stdin_rx: Option<tokio::sync::watch::Receiver<StdinState>>,
 }
 
 impl ActiveTurn {
@@ -181,6 +175,7 @@ impl ActiveTurn {
             kill_scheduled: false,
             signal_on_spawn: None,
             escalation_handle: None,
+            stdin_rx: None,
         }
     }
 
@@ -200,10 +195,18 @@ impl ActiveTurn {
 }
 
 #[derive(Clone)]
+struct ShellSessionEntry {
+    pid: u32,
+    session_dir: PathBuf,
+    shell: Arc<tokio::sync::Mutex<PersistentShell>>,
+}
+
+#[derive(Clone)]
 pub struct AgentRunner {
     store: StateStore,
     broadcast: BroadcastFn,
     active: Arc<Mutex<HashMap<String, Arc<Mutex<ActiveTurn>>>>>,
+    shell_sessions: Arc<Mutex<HashMap<String, ShellSessionEntry>>>,
     agy_prompt_dirty: Arc<Mutex<HashSet<String>>>,
     summary_filters: Arc<Mutex<HashMap<String, TaskSummaryStreamFilter>>>,
     done_filters: Arc<Mutex<HashMap<String, WorkDoneStreamFilter>>>,
@@ -216,6 +219,7 @@ impl AgentRunner {
             store,
             broadcast,
             active: Arc::new(Mutex::new(HashMap::new())),
+            shell_sessions: Arc::new(Mutex::new(HashMap::new())),
             agy_prompt_dirty: Arc::new(Mutex::new(HashSet::new())),
             summary_filters: Arc::new(Mutex::new(HashMap::new())),
             done_filters: Arc::new(Mutex::new(HashMap::new())),
@@ -234,58 +238,122 @@ impl AgentRunner {
             .insert(tab_id.to_string());
     }
 
+    pub async fn send_stdin(
+        &self,
+        tab_id: &str,
+        data: Option<&str>,
+        eof: bool,
+    ) -> Result<(), &'static str> {
+        let mut rx = {
+            let active = self.active.lock().unwrap();
+            let Some(turn_arc) = active.get(tab_id) else {
+                return Err("No running shell command accepts stdin");
+            };
+            let turn = turn_arc.lock().unwrap();
+            let Some(ref rx) = turn.stdin_rx else {
+                return Err("No running shell command accepts stdin");
+            };
+            rx.clone()
+        };
+
+        let handle = loop {
+            let state = rx.borrow_and_update().clone();
+            match state {
+                StdinState::Ready(h) => break h,
+                StdinState::Closed => return Err("No running shell command accepts stdin"),
+                StdinState::Pending => {
+                    if tokio::time::timeout(Duration::from_secs(5), rx.changed())
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .is_none()
+                    {
+                        return Err("No running shell command accepts stdin");
+                    }
+                }
+            }
+        };
+
+        handle.write_and_maybe_eof(data, eof).await
+    }
+
+    pub fn reset_shell_session(&self, tab_id: &str) {
+        let entry = self.shell_sessions.lock().unwrap().remove(tab_id);
+        if let Some(entry) = entry {
+            if let Ok(mut shell) = entry.shell.try_lock() {
+                shell.kill_and_cleanup();
+            } else {
+                signal_process_group(entry.pid, libc::SIGKILL);
+                let _ = fs::remove_dir_all(&entry.session_dir);
+            }
+        }
+    }
+
     pub fn shutdown_active_turns(&self, reason: &str) {
         self.shutting_down.store(true, Ordering::SeqCst);
         let entries: Vec<(String, Arc<Mutex<ActiveTurn>>)> = {
             let mut map = self.active.lock().unwrap();
             map.drain().collect()
         };
-        if entries.is_empty() {
-            return;
-        }
-        log_warn(&format!(
-            "Stopping {} active turn(s) due to shutdown ({reason})",
-            entries.len()
-        ));
-        for (tab_id, turn_arc) in entries {
-            let mut turn = turn_arc.lock().unwrap();
-            turn.cancel_escalation();
-            let msg_id = turn.assistant_msg_id.clone();
-            let pid = turn.pid;
+        if !entries.is_empty() {
             log_warn(&format!(
-                "Stopping active turn tab={tab_id} msg={msg_id} agent={} pid={:?}",
-                turn.agent, pid
+                "Stopping {} active turn(s) due to shutdown ({reason})",
+                entries.len()
             ));
-            turn.interrupted = true;
-            turn.interrupt_reason = Some(RESTART_INTERRUPTED_REASON.to_string());
-            turn.send_signal(libc::SIGTERM);
-            if let Some(p) = pid {
-                std::thread::sleep(Duration::from_millis(100));
-                signal_process_group(p, libc::SIGKILL);
-            }
-            // Persist explicit restart interruption reason before daemon exits (#61).
-            let mut msgs = self.store.get_messages(&tab_id);
-            if let Some(m) = msgs
-                .iter_mut()
-                .find(|m| m.get("id").and_then(Value::as_str) == Some(msg_id.as_str()))
-            {
-                if let Some(obj) = m.as_object_mut() {
-                    let st = obj.get("status").and_then(Value::as_str).unwrap_or("");
-                    if st == "streaming"
-                        || (st == "interrupted"
-                            && obj.get("error").map(Value::is_null).unwrap_or(true))
-                    {
-                        obj.insert("status".into(), json!("interrupted"));
-                        obj.insert("error".into(), json!(RESTART_INTERRUPTED_REASON));
-                        obj.insert("updatedAt".into(), json!(now_ms()));
-                        self.store.replace_message(&tab_id, m.clone());
+            for (tab_id, turn_arc) in entries {
+                let mut turn = turn_arc.lock().unwrap();
+                turn.cancel_escalation();
+                let msg_id = turn.assistant_msg_id.clone();
+                let pid = turn.pid;
+                log_warn(&format!(
+                    "Stopping active turn tab={tab_id} msg={msg_id} agent={} pid={:?}",
+                    turn.agent, pid
+                ));
+                turn.interrupted = true;
+                turn.interrupt_reason = Some(RESTART_INTERRUPTED_REASON.to_string());
+                turn.send_signal(libc::SIGTERM);
+                if let Some(p) = pid {
+                    std::thread::sleep(Duration::from_millis(100));
+                    signal_process_group(p, libc::SIGKILL);
+                }
+                // Persist explicit restart interruption reason before daemon exits (#61).
+                let mut msgs = self.store.get_messages(&tab_id);
+                if let Some(m) = msgs
+                    .iter_mut()
+                    .find(|m| m.get("id").and_then(Value::as_str) == Some(msg_id.as_str()))
+                {
+                    if let Some(obj) = m.as_object_mut() {
+                        let st = obj.get("status").and_then(Value::as_str).unwrap_or("");
+                        if st == "streaming"
+                            || (st == "interrupted"
+                                && obj.get("error").map(Value::is_null).unwrap_or(true))
+                        {
+                            obj.insert("status".into(), json!("interrupted"));
+                            obj.insert("error".into(), json!(RESTART_INTERRUPTED_REASON));
+                            obj.insert("updatedAt".into(), json!(now_ms()));
+                            self.store.replace_message(&tab_id, m.clone());
+                        }
                     }
                 }
+                let mut patch = Map::new();
+                patch.insert("status".into(), json!("idle"));
+                patch.insert("statusDetail".into(), Value::Null);
+                let _ = self.store.update_tab(&tab_id, patch);
             }
-            let mut patch = Map::new();
-            patch.insert("status".into(), json!("idle"));
-            patch.insert("statusDetail".into(), Value::Null);
-            let _ = self.store.update_tab(&tab_id, patch);
+        }
+
+        // Clean up all persistent shell sessions (both active and idle).
+        let shells: Vec<ShellSessionEntry> = {
+            let mut map = self.shell_sessions.lock().unwrap();
+            map.drain().map(|(_, entry)| entry).collect()
+        };
+        for entry in shells {
+            if let Ok(mut shell) = entry.shell.try_lock() {
+                shell.kill_and_cleanup();
+            } else {
+                signal_process_group(entry.pid, libc::SIGKILL);
+                let _ = fs::remove_dir_all(&entry.session_dir);
+            }
         }
     }
 
@@ -385,6 +453,44 @@ impl AgentRunner {
     }
 
     pub fn drain_and_start_queued(&self, tab_id: &str) -> Option<Value> {
+        let is_shell = self
+            .store
+            .get_tab(tab_id)?
+            .get("agent")
+            .and_then(Value::as_str)
+            == Some("shell");
+        if is_shell {
+            loop {
+                let (updated_tab, item) = self.store.pop_next_queued_message(tab_id)?;
+                let text = item
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .to_string();
+                let override_mode = item
+                    .get("overridePermissionMode")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                let attachments = item
+                    .get("attachments")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                (self.broadcast)(json!({ "type": "tab_updated", "tab": updated_tab }));
+                if text.is_empty() && attachments.is_empty() {
+                    continue;
+                }
+                return Some(self.start_turn(
+                    &updated_tab,
+                    &text,
+                    override_mode.as_deref(),
+                    &attachments,
+                ));
+            }
+        }
         let (updated_tab, popped) = self.store.pop_queued_messages(tab_id)?;
         if popped.is_empty() {
             return None;
@@ -456,24 +562,33 @@ impl AgentRunner {
 
             if !turn.kill_scheduled {
                 turn.kill_scheduled = true;
-                turn.send_signal(libc::SIGINT);
+                let is_shell = turn.agent == "shell";
+                turn.send_signal(if is_shell {
+                    libc::SIGTERM
+                } else {
+                    libc::SIGINT
+                });
                 let weak_turn = Arc::downgrade(&turn_arc);
                 let tid_log = tab_id.to_string();
                 let handle = tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(1500)).await;
-                    if let Some(t_arc) = weak_turn.upgrade() {
-                        let mut t = t_arc.lock().unwrap();
-                        if t.pid.is_some() {
-                            log_warn(&format!(
-                                "Escalating interrupt to SIGTERM for tab={tid_log} pid={:?}",
-                                t.pid
-                            ));
-                            t.send_signal(libc::SIGTERM);
+                    if !is_shell {
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                        if let Some(t_arc) = weak_turn.upgrade() {
+                            let mut t = t_arc.lock().unwrap();
+                            if t.pid.is_some() {
+                                log_warn(&format!(
+                                    "Escalating interrupt to SIGTERM for tab={tid_log} pid={:?}",
+                                    t.pid
+                                ));
+                                t.send_signal(libc::SIGTERM);
+                            }
+                        } else {
+                            return;
                         }
+                        tokio::time::sleep(Duration::from_millis(2000)).await;
                     } else {
-                        return;
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
                     }
-                    tokio::time::sleep(Duration::from_millis(2000)).await;
                     if let Some(t_arc) = weak_turn.upgrade() {
                         let mut t = t_arc.lock().unwrap();
                         if t.pid.is_some() {
@@ -507,21 +622,21 @@ impl AgentRunner {
     pub fn kill_if_running(&self, tab_id: &str) {
         self.agy_prompt_dirty.lock().unwrap().remove(tab_id);
         let turn_arc = self.active.lock().unwrap().remove(tab_id);
-        let Some(turn_arc) = turn_arc else {
-            return;
-        };
-        let mut turn = turn_arc.lock().unwrap();
-        self.summary_filters
-            .lock()
-            .unwrap()
-            .remove(&turn.assistant_msg_id);
-        self.done_filters
-            .lock()
-            .unwrap()
-            .remove(&turn.assistant_msg_id);
-        turn.interrupted = true;
-        turn.cancel_escalation();
-        turn.send_signal(libc::SIGKILL);
+        if let Some(turn_arc) = turn_arc {
+            let mut turn = turn_arc.lock().unwrap();
+            self.summary_filters
+                .lock()
+                .unwrap()
+                .remove(&turn.assistant_msg_id);
+            self.done_filters
+                .lock()
+                .unwrap()
+                .remove(&turn.assistant_msg_id);
+            turn.interrupted = true;
+            turn.cancel_escalation();
+            turn.send_signal(libc::SIGKILL);
+        }
+        self.reset_shell_session(tab_id);
     }
 
     fn new_message(tab_id: &str, role: &str, text: &str, status: &str, ts: i64) -> Value {
@@ -634,23 +749,37 @@ impl AgentRunner {
             (self.broadcast)(json!({ "type": "tab_updated", "tab": wt }));
         }
 
-        let run_cwd = tab
+        let raw_cwd = tab
             .get("cwd")
             .and_then(Value::as_str)
-            .filter(|p| !p.is_empty() && Path::new(p).exists())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".to_string()));
-
-        let response = json!({
-            "userMessage": user_message,
-            "assistantMessage": assistant_message.clone(),
-        });
+            .unwrap_or_else(|| home_dir().to_string_lossy().to_string());
 
         let msg_id = assistant_message
             .get("id")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
+        let msg_arc = Arc::new(Mutex::new(assistant_message));
+
+        let run_cwd = match validate_working_dir(&raw_cwd) {
+            Ok(valid) => valid,
+            Err(err_msg) => {
+                self.finish_turn_with_error(&tab_id, &msg_arc, &err_msg);
+                let final_assistant = msg_arc.lock().unwrap().clone();
+                return json!({
+                    "userMessage": user_message,
+                    "assistantMessage": final_assistant,
+                });
+            }
+        };
+
+        let response = json!({
+            "userMessage": user_message,
+            "assistantMessage": msg_arc.lock().unwrap().clone(),
+        });
 
         let is_coding_agent = matches!(agent.as_str(), "agy" | "claude" | "codex");
         if is_coding_agent {
@@ -684,7 +813,6 @@ impl AgentRunner {
             tab.get("model").and_then(Value::as_str)
         ));
 
-        let msg_arc = Arc::new(Mutex::new(assistant_message));
         match agent.as_str() {
             "shell" => self.run_shell_turn(tab.clone(), msg_arc, prompt_text.to_string(), run_cwd),
             "agy" => self.run_agy_turn(tab.clone(), msg_arc, cli_prompt, run_cwd, effective_mode),
@@ -1199,6 +1327,7 @@ impl AgentRunner {
             .unwrap_or_else(|| "full-access".to_string());
         let denied_under_full_access = turn_permission_mode == "full-access";
 
+        let is_shell = tab.get("agent").and_then(Value::as_str) == Some("shell");
         let failed = exit_code.map(|c| c != 0).unwrap_or(false);
         let mut final_status = "complete";
         let mut final_error = existing_err;
@@ -1213,6 +1342,28 @@ impl AgentRunner {
                     final_error = Some(reason);
                 } else if self.shutting_down.load(Ordering::SeqCst) {
                     final_error = Some(RESTART_INTERRUPTED_REASON.to_string());
+                }
+            }
+        } else if is_shell {
+            match exit_code {
+                Some(0) => {
+                    final_status = "complete";
+                    final_error = None;
+                    tab_status = "idle";
+                }
+                Some(code) => {
+                    final_status = "error";
+                    final_error = Some(format!("Exited with code {code}"));
+                    tab_status = "idle";
+                }
+                None => {
+                    final_status = "error";
+                    final_error = Some(if !stderr_text.trim().is_empty() {
+                        truncate(stderr_text.trim(), 240)
+                    } else {
+                        "Shell process terminated unexpectedly".to_string()
+                    });
+                    tab_status = "idle";
                 }
             }
         } else if !denied.is_empty() && !denied_under_full_access {
@@ -1233,10 +1384,7 @@ impl AgentRunner {
                 exit_code.unwrap_or(-1),
                 truncate(stderr_text.trim(), 240)
             ));
-        } else if !failed
-            && tab.get("agent").and_then(Value::as_str) != Some("shell")
-            && (work_done_detected || is_task_finished_response(Some(&msg_text)))
-        {
+        } else if !failed && (work_done_detected || is_task_finished_response(Some(&msg_text))) {
             tab_status = "done";
             status_detail = Some("Task finished".to_string());
         }
@@ -1253,6 +1401,11 @@ impl AgentRunner {
                     .map(Value::String)
                     .unwrap_or(Value::Null),
             );
+            if is_shell && !interrupted {
+                if let Some(code) = exit_code {
+                    obj.insert("exitCode".into(), json!(code));
+                }
+            }
             obj.insert("usage".into(), final_usage);
             obj.insert("updatedAt".into(), json!(now_ms()));
             m.clone()
@@ -1520,166 +1673,225 @@ impl AgentRunner {
             .unwrap_or("")
             .to_string();
         let start = now_ms();
-        let bash = resolve_binary("bash").unwrap_or_else(|| "/bin/bash".to_string());
-        let wrapped =
-            format!("{command}\n__ec=$?\nprintf \"\\n{CWD_MARKER}%s\\n\" \"$PWD\"\nexit $__ec");
         self.set_status_detail(&tab_id, &format!("$ {}", truncate(&command, 60)));
 
-        struct ShellState {
-            new_cwd: Option<String>,
-            raw: String,
-            stderr: String,
-            fence: bool,
-            pending: String,
-        }
+        let msg_id = msg_arc
+            .lock()
+            .unwrap()
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
 
-        let st = Arc::new(Mutex::new(ShellState {
-            new_cwd: None,
-            raw: String::new(),
-            stderr: String::new(),
-            fence: false,
-            pending: String::new(),
-        }));
+        let (stdin_tx, stdin_rx) = tokio::sync::watch::channel(StdinState::Pending);
+        let mut active_turn = ActiveTurn::new(msg_id, "shell".to_string());
+        active_turn.stdin_rx = Some(stdin_rx);
+        let active_arc = Arc::new(Mutex::new(active_turn));
+        self.active
+            .lock()
+            .unwrap()
+            .insert(tab_id.clone(), active_arc.clone());
 
-        let append_text = {
-            let runner = self.clone();
-            let tid = tab_id.clone();
-            let ma = msg_arc.clone();
-            move |state: &mut ShellState, chunk: &str| {
-                if chunk.is_empty() {
-                    return;
-                }
-                if !state.fence {
-                    state.fence = true;
-                    runner.emit_delta(&tid, &ma, Some(format!("```text\n{chunk}")), None, false);
+        let runner = self.clone();
+        tokio::spawn(async move {
+            let existing = runner.shell_sessions.lock().unwrap().get(&tab_id).cloned();
+            let mut reused_entry: Option<ShellSessionEntry> = None;
+            if let Some(entry) = existing {
+                let alive = {
+                    let mut guard = entry.shell.lock().await;
+                    guard.is_alive()
+                };
+                if alive {
+                    reused_entry = Some(entry);
                 } else {
-                    runner.emit_delta(&tid, &ma, Some(chunk.to_string()), None, false);
-                }
-            }
-        };
-
-        let detect_cwd = |state: &mut ShellState, candidate: &str| {
-            let trimmed = candidate.trim();
-            if !trimmed.is_empty() && Path::new(trimmed).exists() {
-                state.new_cwd = Some(resolve_abs_path(trimmed));
-            }
-        };
-
-        let st_out = st.clone();
-        let append_out = append_text.clone();
-        let marker_len = CWD_MARKER.len();
-        let on_stdout = move |chunk: String| {
-            let mut state = st_out.lock().unwrap();
-            state.pending.push_str(&chunk);
-            if let Some(idx) = state.pending.find(CWD_MARKER) {
-                let before = state.pending[..idx].to_string();
-                if !before.is_empty() {
-                    state.raw.push_str(&before);
-                    append_out(&mut state, &before);
-                }
-                let after = state.pending[idx + marker_len..].to_string();
-                if let Some(nl) = after.find('\n') {
-                    detect_cwd(&mut state, &after[..nl]);
-                    state.pending = after[nl + 1..].to_string();
-                } else {
-                    state.pending = state.pending[idx..].to_string();
-                }
-            } else if state.pending.len() > marker_len + 2 {
-                let mut flush_len = state.pending.len() - (marker_len + 2);
-                while flush_len > 0 && !state.pending.is_char_boundary(flush_len) {
-                    flush_len -= 1;
-                }
-                if flush_len > 0 {
-                    let safe = state.pending[..flush_len].to_string();
-                    state.pending = state.pending[flush_len..].to_string();
-                    state.raw.push_str(&safe);
-                    append_out(&mut state, &safe);
-                }
-            }
-        };
-
-        let st_err = st.clone();
-        let append_err = append_text.clone();
-        let on_stderr = move |chunk: String| {
-            let mut state = st_err.lock().unwrap();
-            state.stderr.push_str(&chunk);
-            append_err(&mut state, &chunk);
-        };
-
-        let runner_close = self.clone();
-        let tid_close = tab_id.clone();
-        let msg_close = msg_arc.clone();
-        let st_close = st.clone();
-        let append_close = append_text;
-        let on_close = move |code: Option<i32>, interrupted: bool| {
-            let (stderr, new_cwd) = {
-                let mut state = st_close.lock().unwrap();
-                let pending = std::mem::take(&mut state.pending);
-                if !pending.is_empty() && !pending.contains(CWD_MARKER) {
-                    state.raw.push_str(&pending);
-                    append_close(&mut state, &pending);
-                } else if let Some(idx) = pending.find(CWD_MARKER) {
-                    let before = &pending[..idx];
-                    if !before.is_empty() {
-                        append_close(&mut state, before);
+                    let mut map = runner.shell_sessions.lock().unwrap();
+                    if map
+                        .get(&tab_id)
+                        .map(|e| Arc::ptr_eq(&e.shell, &entry.shell))
+                        .unwrap_or(false)
+                    {
+                        map.remove(&tab_id);
                     }
-                    detect_cwd(&mut state, &pending[idx + marker_len..]);
                 }
+            }
 
-                if state.fence {
-                    let ends_nl = msg_close
-                        .lock()
-                        .unwrap()
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .map(|s| s.ends_with('\n'))
-                        .unwrap_or(false);
-                    runner_close.emit_delta(
-                        &tid_close,
-                        &msg_close,
-                        Some(if ends_nl { "```" } else { "\n```" }.to_string()),
-                        None,
-                        false,
-                    );
-                } else if state.raw.trim().is_empty()
-                    && state.stderr.trim().is_empty()
-                    && code == Some(0)
-                {
-                    runner_close.emit_delta(
-                        &tid_close,
-                        &msg_close,
-                        Some("_Command completed with no output._".to_string()),
-                        None,
-                        false,
-                    );
-                }
-                (state.stderr.clone(), state.new_cwd.clone())
+            let entry = match reused_entry {
+                Some(e) => e,
+                None => match PersistentShell::spawn(&tab_id, &cwd) {
+                    Ok(shell) => {
+                        let entry = ShellSessionEntry {
+                            pid: shell.pid(),
+                            session_dir: shell.session_dir().to_path_buf(),
+                            shell: Arc::new(tokio::sync::Mutex::new(shell)),
+                        };
+                        runner
+                            .shell_sessions
+                            .lock()
+                            .unwrap()
+                            .insert(tab_id.clone(), entry.clone());
+                        entry
+                    }
+                    Err(err) => {
+                        let _ = stdin_tx.send(StdinState::Closed);
+                        {
+                            let mut map = runner.active.lock().unwrap();
+                            if map
+                                .get(&tab_id)
+                                .map(|a| Arc::ptr_eq(a, &active_arc))
+                                .unwrap_or(false)
+                            {
+                                map.remove(&tab_id);
+                            }
+                        }
+                        runner.finish_turn_with_error(&tab_id, &msg_arc, &err);
+                        return;
+                    }
+                },
             };
 
-            runner_close.finalize_turn(
-                &tid_close,
-                &msg_close,
-                interrupted,
-                code,
-                &stderr,
-                now_ms() - start,
-                None,
-                new_cwd,
-                None,
-                Vec::new(),
-            );
-        };
+            {
+                let mut turn = active_arc.lock().unwrap();
+                turn.pid = Some(entry.pid);
+                if let Some(sig) = turn.signal_on_spawn.take() {
+                    signal_process_group(entry.pid, sig);
+                }
+            }
 
-        self.spawn_process(
-            tab_id,
-            msg_arc,
-            vec![bash, "-lc".to_string(), wrapped],
-            cwd,
-            "bash".to_string(),
-            on_stdout,
-            on_stderr,
-            on_close,
-        );
+            struct ShellState {
+                stderr: String,
+                fence: bool,
+            }
+
+            let st = Arc::new(Mutex::new(ShellState {
+                stderr: String::new(),
+                fence: false,
+            }));
+
+            let append_text = {
+                let runner = runner.clone();
+                let tid = tab_id.clone();
+                let ma = msg_arc.clone();
+                move |state: &mut ShellState, chunk: &str| {
+                    if chunk.is_empty() {
+                        return;
+                    }
+                    if !state.fence {
+                        state.fence = true;
+                        runner.emit_delta(
+                            &tid,
+                            &ma,
+                            Some(format!("```text\n{chunk}")),
+                            None,
+                            false,
+                        );
+                    } else {
+                        runner.emit_delta(&tid, &ma, Some(chunk.to_string()), None, false);
+                    }
+                }
+            };
+
+            let st_out = st.clone();
+            let append_out = append_text.clone();
+            let on_stdout = move |chunk: String| {
+                let mut state = st_out.lock().unwrap();
+                append_out(&mut state, &chunk);
+            };
+
+            let st_err = st.clone();
+            let append_err = append_text;
+            let on_stderr = move |chunk: String| {
+                let mut state = st_err.lock().unwrap();
+                state.stderr.push_str(&chunk);
+                append_err(&mut state, &chunk);
+            };
+
+            let stdin_tx_ready = stdin_tx.clone();
+            let outcome = {
+                let mut shell = entry.shell.lock().await;
+                let res = shell
+                    .run_command(
+                        &command,
+                        move |stdin_handle| {
+                            let _ = stdin_tx_ready.send(StdinState::Ready(stdin_handle));
+                        },
+                        on_stdout,
+                        on_stderr,
+                    )
+                    .await;
+                let _ = stdin_tx.send(StdinState::Closed);
+
+                let interrupted = active_arc.lock().unwrap().interrupted;
+                let drop_session = match &res {
+                    Ok(o) => !o.shell_alive || interrupted,
+                    Err(_) => true,
+                };
+                if drop_session {
+                    shell.kill_and_cleanup();
+                    let mut map = runner.shell_sessions.lock().unwrap();
+                    if map
+                        .get(&tab_id)
+                        .map(|e| Arc::ptr_eq(&e.shell, &entry.shell))
+                        .unwrap_or(false)
+                    {
+                        map.remove(&tab_id);
+                    }
+                }
+                res
+            };
+
+            let interrupted = active_arc.lock().unwrap().interrupted;
+            let (stderr, has_fence) = {
+                let state = st.lock().unwrap();
+                (state.stderr.clone(), state.fence)
+            };
+
+            if has_fence {
+                let ends_nl = msg_arc
+                    .lock()
+                    .unwrap()
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(|s| s.ends_with('\n'))
+                    .unwrap_or(false);
+                runner.emit_delta(
+                    &tab_id,
+                    &msg_arc,
+                    Some(if ends_nl { "```" } else { "\n```" }.to_string()),
+                    None,
+                    false,
+                );
+            }
+
+            match outcome {
+                Ok(outcome) => {
+                    runner.finalize_turn(
+                        &tab_id,
+                        &msg_arc,
+                        interrupted,
+                        outcome.exit_code,
+                        &stderr,
+                        now_ms() - start,
+                        None,
+                        outcome.new_cwd,
+                        None,
+                        Vec::new(),
+                    );
+                }
+                Err(err) => {
+                    {
+                        let mut map = runner.active.lock().unwrap();
+                        if map
+                            .get(&tab_id)
+                            .map(|a| Arc::ptr_eq(a, &active_arc))
+                            .unwrap_or(false)
+                        {
+                            map.remove(&tab_id);
+                        }
+                    }
+                    runner.finish_turn_with_error(&tab_id, &msg_arc, &err);
+                }
+            }
+        });
     }
 
     // ------------------------------------------------------------------ agy
