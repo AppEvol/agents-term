@@ -2,6 +2,7 @@
 
 [![Android CI](https://github.com/AppEvol/agents-term/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AppEvol/agents-term/actions/workflows/ci.yml)
 [![Tests](https://appevol.github.io/agents-term/badges/tests.svg)](https://appevol.github.io/agents-term/)
+[![Recovered on Retry](https://appevol.github.io/agents-term/badges/recovered.svg)](https://appevol.github.io/agents-term/flakiness.html)
 [![Pass Rate](https://appevol.github.io/agents-term/badges/pass-rate.svg)](https://appevol.github.io/agents-term/)
 [![Suites](https://appevol.github.io/agents-term/badges/suites.svg)](https://appevol.github.io/agents-term/)
 [![Test Duration](https://appevol.github.io/agents-term/badges/duration.svg)](https://appevol.github.io/agents-term/)

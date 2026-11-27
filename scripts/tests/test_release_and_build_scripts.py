@@ -234,6 +234,13 @@ class ReleaseAndBuildScriptsTest(unittest.TestCase):
                 f"""\
                 #!/usr/bin/env python3
                 import json, os, sys
+                from pathlib import Path
+                if ":app:testDebugUnitTest" in sys.argv:
+                    reports = Path("app/build/test-results/testDebugUnitTest")
+                    reports.mkdir(parents=True)
+                    (reports / "TEST-Smoke.xml").write_text(
+                        '<testsuite tests="1"><testcase classname="Smoke" name="run"/></testsuite>'
+                    )
                 with open({str(capture_file)!r}, "w", encoding="utf-8") as fh:
                     json.dump({{
                         "args": sys.argv[1:],

@@ -25,7 +25,11 @@ def _load_allure_results_module() -> Any:
     spec = importlib.util.spec_from_file_location("allure_results", ALLURE_RESULTS_SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(ALLURE_RESULTS_SCRIPT.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
@@ -497,6 +501,81 @@ class MergeSummaryAndCiScriptTest(unittest.TestCase):
         self.assertIn("https://appevol.github.io/agents-term/", md)
         self.assertIn("### Failures & Broken Tests", md)
         self.assertIn("bad_one", md)
+
+    def test_merge_keeps_attempt_evidence_and_counts_logical_verdicts(self) -> None:
+        raw = self.tmp / "runs"
+        raw.mkdir()
+        results = [
+            ("linux", ["failed", "broken", "passed", "passed"]),
+            ("mac", ["failed", "failed", "passed"]),
+            ("ok", ["passed"]),
+        ]
+        for variant, statuses in results:
+            for index, status in enumerate(statuses):
+                labels = [{"name": "parentSuite", "value": "Installer"}]
+                if index:
+                    labels.append({"name": "retryAttempt", "value": str(index)})
+                payload = {
+                    "historyId": variant,
+                    "name": "test_install",
+                    "fullName": f"[{variant}] test_install",
+                    "status": status,
+                    "start": 10 * index,
+                    "stop": 10 * index + 2,
+                    "labels": labels,
+                    "attachments": [{"source": "some-attachment.txt", "name": "logs", "type": "text/plain"}],
+                    "statusDetails": {"message": status},
+                    "steps": [{"name": "fixture", "status": status}],
+                }
+                (raw / f"{variant}-{index}-result.json").write_text(json.dumps(payload), encoding="utf-8")
+        (raw / "some-attachment.txt").write_text("log", encoding="utf-8")
+        merged = self.tmp / "merged"
+        self.assertEqual(allure_results.merge_results(input_dirs=[raw], output_dir=merged), 3)
+        cases = {r["historyId"]: r for r in _read_results(merged)}
+        self.assertTrue(cases["linux"]["statusDetails"]["flaky"])
+        self.assertEqual(cases["mac"]["status"], "failed")
+        self.assertEqual(cases["mac"]["statusDetails"]["message"], "failed")
+        self.assertEqual([step["status"] for step in cases["linux"]["steps"]], results[0][1])
+        self.assertEqual(cases["linux"]["steps"][0]["steps"][0]["name"], "fixture")
+        self.assertTrue((merged / cases["linux"]["steps"][0]["attachments"][0]["source"]).is_file())
+        self.assertEqual(len(_read_results(raw)), 8)
+
+        out_dir = self.tmp / "report"
+        out_dir.mkdir()
+        # Allure 3 history stores the final verdict, per-test labels, and matrix-specific history IDs.
+        (out_dir / "history.jsonl").write_text(
+            "\n".join(
+                json.dumps({"testResults": entries})
+                for entries in [
+                    {"linux": {"status": "skipped"}},
+                    {"linux": {**cases["linux"], "labels": [], "status": "failed"}},
+                    {"linux": cases["linux"]},
+                    cases,
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        metrics = allure_results.generate_badges(merged, out_dir)
+        for key, expected in {
+            "total": 3,
+            "first_passed": 1,
+            "recovered": 1,
+            "unresolved": 1,
+            "attempts": 8,
+            "passed": 2,
+            "duration_ms": 16,
+        }.items():
+            self.assertEqual(metrics[key], expected, key)
+        linux = next(row for row in metrics["test_history"] if row["name"] == "[linux] test_install")
+        self.assertEqual(
+            (linux["executed"], linux["first_failures"], linux["recovered"], linux["unresolved"]), (3, 3, 2, 1)
+        )
+        self.assertIn("repeated recovery", (out_dir / "flakiness.html").read_text(encoding="utf-8"))
+        self.assertIn(
+            "1 passed first try · 1 recovered on retry · 1 unresolved · 8 executed attempts",
+            allure_results.build_markdown_summary(merged)[0],
+        )
 
     def test_generate_badges_emits_valid_svgs_and_metrics_json(self) -> None:
         results_dir = self.tmp / "badge-results"

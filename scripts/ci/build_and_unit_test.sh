@@ -28,4 +28,5 @@ elif [ "$PUBLISH_PRERELEASE" = "true" ]; then
 fi
 
 echo "Building AgentsTerm ${APP_VERSION_NAME} (versionCode=${APP_VERSION_CODE})"
-gradle :app:lintDebug :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+gradle :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+python3 "$(dirname "$0")/../android_test_retries.py" android-unit

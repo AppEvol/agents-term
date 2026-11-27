@@ -71,7 +71,7 @@ jobs:
 
       - name: Run CI and utility script unit tests
         run: >-
-          python3 -W error::ResourceWarning scripts/allure_results.py unittest
+          python3 -W error::ResourceWarning scripts/native_test_retries.py unittest
           --start-dir scripts/tests
           --output allure-results/scripts
           --parent-suite "CI & Utility Script Tests"
@@ -160,12 +160,12 @@ jobs:
 
       - name: Run Rust daemon unit and integration tests
         run: >-
-          python3 -W error::ResourceWarning scripts/allure_results.py cargo
+          python3 -W error::ResourceWarning scripts/native_test_retries.py cargo
           --cwd daemon-rs
           --output allure-results/rust-daemon
           --parent-suite "Rust VM Daemon"
           --tag rust-daemon
-          -- cargo test -- --show-output
+          -- cargo test --no-fail-fast -- --show-output
 
       - name: Upload Allure results (Rust daemon)
         if: always()
@@ -262,28 +262,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-report
-          path: app/build/reports/tests/testDebugUnitTest/
+          path: app/build/ci-test-attempts/android-unit/
           if-no-files-found: ignore
 
       - name: Upload golden image differences
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: golden-image-differences
-          path: app/build/outputs/roborazzi/
+          path: app/build/ci-test-attempts/android-unit/**/goldens/
           if-no-files-found: ignore
-
-      - name: Convert Android unit test results for Allure
-        if: always()
-        run: >-
-          python3 -W error::ResourceWarning scripts/allure_results.py junit
-          --input app/build/test-results/testDebugUnitTest
-          --output allure-results/android-unit
-          --parent-suite "Android Unit Tests"
-          --framework junit4
-          --language kotlin
-          --roborazzi-dir app/build/outputs/roborazzi
-          --tag android-unit
 
       - name: Upload Allure results (Android unit tests)
         if: always()
@@ -317,7 +305,7 @@ jobs:
         env:
           PYTHON_VERSION: ${{ matrix.python }}
         run: >-
-          python3 -W error::ResourceWarning scripts/allure_results.py unittest
+          python3 -W error::ResourceWarning scripts/native_test_retries.py unittest
           --start-dir daemon-rs/tests
           --output allure-results/installer
           --parent-suite "Daemon Installer Tests"
@@ -387,7 +375,7 @@ jobs:
           E2E_VM_TARGET: ${{ matrix.vm.target }}
           VM_LABEL: ${{ matrix.vm.label }}
         run: >-
-          python3 -W error::ResourceWarning scripts/allure_results.py unittest
+          python3 -W error::ResourceWarning scripts/native_test_retries.py unittest
           --start-dir e2e/docker-vm
           --output allure-results/docker-vm
           --parent-suite "Linux VM E2E"
@@ -485,19 +473,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-android-test-report
-          path: app/build/reports/androidTests/connected/
+          path: app/build/ci-test-attempts/android-e2e/
           if-no-files-found: ignore
-
-      - name: Convert Android E2E test results for Allure
-        if: always()
-        run: >-
-          python3 -W error::ResourceWarning scripts/allure_results.py junit
-          --input app/build/outputs/androidTest-results/connected
-          --output allure-results/android-e2e
-          --parent-suite "Android Instrumented E2E"
-          --framework android-junit
-          --language kotlin
-          --tag android-e2e
 
       - name: Upload Allure results (Android E2E)
         if: always()

@@ -11,10 +11,9 @@ adb shell settings put global hide_error_dialogs 1 || true
 adb shell settings put secure anr_show_background 0 || true
 adb shell wm dismiss-keyguard || true
 
-gradle :app:connectedDebugAndroidTest \
+python3 "$(dirname "$0")/../android_test_retries.py" android-e2e \
   -Pandroid.testInstrumentationRunnerArguments.realVmSshHost=127.0.0.1 \
   -Pandroid.testInstrumentationRunnerArguments.realVmSshPort=2222 \
   -Pandroid.testInstrumentationRunnerArguments.realVmSshUser=vmuser \
   -Pandroid.testInstrumentationRunnerArguments.realVmSshPass=agentsterm-e2e-pass \
-  -Pandroid.testInstrumentationRunnerArguments.realVmDaemonPort=7591 \
-  --stacktrace
+  -Pandroid.testInstrumentationRunnerArguments.realVmDaemonPort=7591
