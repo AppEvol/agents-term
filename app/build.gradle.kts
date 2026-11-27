@@ -22,6 +22,14 @@ val daemonReleaseBaseUrl = providers.gradleProperty("daemonReleaseBaseUrl").orNu
 // "record" rewrites the golden images of the screenshot tests; anything else verifies them.
 val goldensMode = providers.gradleProperty("goldens").orNull
 
+// Robolectric needs Java 21 to run its Android SDK 36 sandbox, so unit tests always run on a
+// Java 21 toolchain, whichever JDK runs Gradle. Gradle uses an installed JDK 21 if it finds one
+// and otherwise downloads one (foojay resolver in settings.gradle.kts).
+val unitTestJavaVersion = 21
+val unitTestJavaLauncher = javaToolchains.launcherFor {
+    languageVersion = JavaLanguageVersion.of(unitTestJavaVersion)
+}
+
 // If this checkout is a linked git worktree, resolve the main checkout directory from `.git`.
 fun resolveMainWorktreeDir(projectRoot: File): File? {
     val dotGit = projectRoot.resolve(".git")
@@ -117,6 +125,7 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             all { test ->
+                test.javaLauncher = unitTestJavaLauncher
                 // Golden image tests (MarkdownGoldenTest) compare against src/test/snapshots.
                 // `-Pgoldens=record` writes new golden images instead of comparing.
                 val record = goldensMode == "record"

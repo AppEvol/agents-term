@@ -15,7 +15,8 @@ Follow these steps to compile, test, and package the Android APK from this repos
 ### Prerequisites
 On a Debian/Ubuntu VM, `sudo ./install_deps.sh` installs everything below plus the Rust toolchain for the daemon, and `./install_deps.sh --check` reports what is missing without changing anything.
 
-- **JDK 17 or 21** (Gradle 9.3.1 requires JDK 17+ to run; Java compilation target is configured in `app/build.gradle.kts`).
+- **JDK 17 or newer** to run Gradle 9.3.1 (the Java compilation target is configured in `app/build.gradle.kts`).
+- **JDK 21** to run the unit tests: Robolectric needs Java 21 for its Android SDK 36 sandbox. It does not have to be the default JDK. `app/build.gradle.kts` requests a Java 21 toolchain for the test tasks, so Gradle uses an installed JDK 21 (for example `openjdk-21-jdk-headless` in `/usr/lib/jvm`) and otherwise downloads one into `~/.gradle/jdks` on the first test run.
 - **Android SDK** with `ANDROID_SDK_ROOT` (or `ANDROID_HOME`) exported:
   - `platforms;android-36` (SDK 36, minor API level 1 / Android 16)
   - `build-tools;36.0.0` (or latest 36.x)
