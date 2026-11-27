@@ -30,6 +30,7 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToString
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -110,6 +111,16 @@ class AgentsTermE2ETest {
                     .hide(WindowInsetsCompat.Type.ime())
                 imm?.hideSoftInputFromWindow(token, 0)
             }
+        }
+        composeRule.waitUntil(timeoutMillis = 3_000L) {
+            var imeVisible = false
+            scenario?.onActivity { activity ->
+                imeVisible = appWindowRoots(activity).any { root ->
+                    ViewCompat.getRootWindowInsets(root)
+                        ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                }
+            }
+            !imeVisible
         }
         composeRule.waitForIdle()
     }
@@ -269,7 +280,9 @@ class AgentsTermE2ETest {
     /** Submits the open NewTabSheet and waits for the sheet to close before matching [expectedTitle]. */
     private fun submitNewTab(expectedTitle: String) {
         closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("create_tab_button")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
         waitForTagGone("create_tab_button")
         waitForText(expectedTitle)
     }
@@ -280,7 +293,9 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("port_input").performScrollTo().performTextReplacement(targetDaemon.port.toString())
         composeRule.onNodeWithTag("token_input").performScrollTo().performTextReplacement(token)
         closeSoftKeyboard()
-        composeRule.onNodeWithTag("connect_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("connect_button")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
     }
 
     @Test
@@ -318,7 +333,9 @@ class AgentsTermE2ETest {
         // Correcting the token succeeds and opens the connected empty workspace
         composeRule.onNodeWithTag("token_input").performScrollTo().performTextReplacement(activeDaemon.token)
         closeSoftKeyboard()
-        composeRule.onNodeWithTag("connect_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("connect_button")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
 
         waitForText("Connected to ci-test-vm")
         composeRule.onNodeWithTag("empty_new_tab_button").assertIsDisplayed().assertIsEnabled()
@@ -594,7 +611,9 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("debug_sharing_switch").performScrollTo().performClick()
         composeRule.onNodeWithTag("debug_note_input").performScrollTo().performTextInput("agy glitched on comment")
         closeSoftKeyboard()
-        composeRule.onNodeWithTag("upload_debug_dump_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("upload_debug_dump_button")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
 
         // Wait for VM upload confirmation card showing remote dump directory
         waitForTag("last_uploaded_dump_card")
@@ -609,7 +628,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("top_debug_dump_button").performClick()
         waitForTag("quick_debug_note_input")
         composeRule.onNodeWithTag("quick_debug_note_input").performTextInput("quick dump from chat")
-        composeRule.onNodeWithTag("quick_debug_upload_confirm").performClick()
+        composeRule.onNodeWithTag("quick_debug_upload_confirm").performSemanticsAction(SemanticsActions.OnClick)
 
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             activeDaemon.uploadedDebugDumps.any { it.note == "quick dump from chat" }
@@ -859,7 +878,9 @@ class AgentsTermE2ETest {
         closeSoftKeyboard()
 
         // Start SSH bootstrap against the in-process fake VM SSH server
-        composeRule.onNodeWithTag("ssh_bootstrap_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("ssh_bootstrap_button")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
 
         // App connects over real JSch, parses streamed agy JSON, extracts pairing URI,
         // verifies /api/info on FakeAgentsTermDaemon, and opens the workspace automatically.
@@ -1043,7 +1064,9 @@ class AgentsTermE2ETest {
         waitForTag("custom_model_input")
         composeRule.onNodeWithTag("custom_model_input").performScrollTo().performTextInput("claude-custom-exp")
         closeSoftKeyboard()
-        composeRule.onNodeWithTag("custom_model_apply_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("custom_model_apply_button")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
 
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             activeDaemon.tabModel("tab_1") == "claude-custom-exp" &&
@@ -1193,7 +1216,8 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("edit_tab_system_prompt_input")
             .performTextReplacement("Respond in short bullet points only.")
         closeSoftKeyboard()
-        composeRule.onNodeWithTag("edit_tab_system_prompt_save").performClick()
+        composeRule.onNodeWithTag("edit_tab_system_prompt_save")
+            .performSemanticsAction(SemanticsActions.OnClick)
 
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             activeDaemon.tabSystemPrompt("tab_1") == "Respond in short bullet points only."

@@ -27,6 +27,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToString
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
@@ -117,6 +118,16 @@ class RealVmDockerE2ETest {
                     .hide(WindowInsetsCompat.Type.ime())
                 imm?.hideSoftInputFromWindow(token, 0)
             }
+        }
+        composeRule.waitUntil(timeoutMillis = 3_000L) {
+            var imeVisible = false
+            scenario?.onActivity { activity ->
+                imeVisible = appWindowRoots(activity).any { root ->
+                    ViewCompat.getRootWindowInsets(root)
+                        ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                }
+            }
+            !imeVisible
         }
         composeRule.waitForIdle()
     }
@@ -225,7 +236,9 @@ class RealVmDockerE2ETest {
         composeRule.onNodeWithTag("ssh_password_input").performScrollTo().performTextReplacement(pass)
         closeSoftKeyboard()
 
-        composeRule.onNodeWithTag("ssh_bootstrap_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("ssh_bootstrap_button")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
         // Wait until ConnectScreen closes and the workspace top bar appears (works with 0 or >0 tabs).
         waitForTag("top_new_tab_button", timeoutMs = 60_000L)
     }
@@ -243,7 +256,9 @@ class RealVmDockerE2ETest {
         composeRule.onNodeWithTag("agent_option_$agentType").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextReplacement(name)
         closeSoftKeyboard()
-        composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("create_tab_button")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
         // Wait for NewTabSheet to dismiss first: otherwise waitForText(name) can match
         // new_tab_name_input while POST /api/tabs is still in flight.
         waitForTagGone("create_tab_button")
