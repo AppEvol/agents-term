@@ -1,0 +1,2 @@
+- **Copy user commands** ([PR #149](https://github.com/AppEvol/agents-term/pull/149))
+  - Tap the copy button beneath a user command in an agent tab to copy its full text.

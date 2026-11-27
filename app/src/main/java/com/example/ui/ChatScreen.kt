@@ -875,6 +875,9 @@ private fun UserMessageBubble(message: ChatMessage) {
                 )
             }
         }
+        if (message.text.isNotBlank()) {
+            MessageCopyButton(message.text, stringResource(R.string.action_copy_command))
+        }
     }
 }
 
@@ -1055,16 +1058,6 @@ private fun AssistantMessageFooter(
     usageSummary: String?,
     exitCode: Int? = null,
 ) {
-    val clipboard = LocalClipboardManager.current
-    var copied by remember { mutableStateOf(false) }
-
-    LaunchedEffect(copied) {
-        if (copied) {
-            delay(1800)
-            copied = false
-        }
-    }
-
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -1092,20 +1085,38 @@ private fun AssistantMessageFooter(
             }
         }
         if (text.isNotBlank()) {
-            IconButton(
-                onClick = {
-                    clipboard.setText(AnnotatedString(text))
-                    copied = true
-                },
-            ) {
-                Icon(
-                    imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                    contentDescription = stringResource(R.string.action_copy_message),
-                    modifier = Modifier.size(16.dp),
-                    tint = if (copied) AppTheme.colors.success else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            MessageCopyButton(text, stringResource(R.string.action_copy_message))
         }
+    }
+}
+
+@Composable
+private fun MessageCopyButton(
+    text: String,
+    contentDescription: String,
+) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1800)
+            copied = false
+        }
+    }
+
+    IconButton(
+        onClick = {
+            clipboard.setText(AnnotatedString(text))
+            copied = true
+        },
+    ) {
+        Icon(
+            imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(16.dp),
+            tint = if (copied) AppTheme.colors.success else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
