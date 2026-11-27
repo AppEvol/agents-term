@@ -68,7 +68,8 @@
 ## Feature Change Logs (`docs/features_logs/`)
 
 - Record notable feature changes (added, modified, removed) in `docs/features_logs/` so future retrospectives can easily track how the product evolved.
-- Start a new Markdown file each week, named with the first date of the week (Monday, `YYYY-MM-DD.md`, e.g., `docs/features_logs/2026-11-23.md`).
-- Organize each doc with concise bullet points so entries stay brief and scannable.
-- When a feature change is implemented via a branch merge, include a link to the merge commit (e.g., `[<short-sha>](https://github.com/AppEvol/agents-term/commit/<sha>)`).
+- Put each feature change in its own new Markdown file under the week's directory, named with the Monday of that week (`YYYY-MM-DD`) and a dated kebab-case slug: `docs/features_logs/<monday-YYYY-MM-DD>/<YYYY-MM-DD>-<short-slug>.md` (e.g., `docs/features_logs/2026-11-23/2026-11-26-copyable-tab-id.md`).
+- Do **not** append to a shared weekly `.md` file (such as legacy `docs/features_logs/2026-11-23.md`). Separate per-PR fragment files prevent parallel pull requests in the same week from colliding in the merge queue.
+- Keep each fragment brief and organized as concise bullet points so entries stay scannable (see `docs/features_logs/README.md` for the template).
+- Include a link to the pull request or issue (e.g., `[PR #123](https://github.com/AppEvol/agents-term/pull/123)` or `[#97](https://github.com/AppEvol/agents-term/issues/97)`).
 
