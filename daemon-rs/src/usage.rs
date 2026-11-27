@@ -1,6 +1,6 @@
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -147,12 +147,7 @@ fn read_json_file(path: &Path) -> Option<Value> {
     serde_json::from_str::<Value>(&raw).ok()
 }
 
-fn read_agy_access_token(home: &Path) -> Option<String> {
-    let path = home
-        .join(".gemini")
-        .join("antigravity-cli")
-        .join("antigravity-oauth-token");
-    let parsed = read_json_file(&path)?;
+fn parse_agy_access_token(parsed: &Value) -> Option<String> {
     parsed
         .get("token")
         .and_then(|t| t.get("access_token"))
@@ -161,6 +156,75 @@ fn read_agy_access_token(home: &Path) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+const SECRET_SERVICE: &str = "org.freedesktop.secrets";
+const AGY_KEYRING_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Reads the secret agy keeps in the Secret Service keyring (service `gemini`,
+/// username `antigravity`). Locked items are skipped: unlocking would prompt on the VM's desktop.
+async fn read_agy_keyring_secret() -> Option<String> {
+    use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value as ZValue};
+
+    let conn = zbus::Connection::session().await.ok()?;
+    let reply = conn
+        .call_method(
+            Some(SECRET_SERVICE),
+            "/org/freedesktop/secrets",
+            Some("org.freedesktop.Secret.Service"),
+            "OpenSession",
+            &("plain", ZValue::from("")),
+        )
+        .await
+        .ok()?;
+    let (_, session): (OwnedValue, OwnedObjectPath) = reply.body().deserialize().ok()?;
+
+    let attributes = HashMap::from([("service", "gemini"), ("username", "antigravity")]);
+    let reply = conn
+        .call_method(
+            Some(SECRET_SERVICE),
+            "/org/freedesktop/secrets",
+            Some("org.freedesktop.Secret.Service"),
+            "SearchItems",
+            &(attributes,),
+        )
+        .await
+        .ok()?;
+    let (unlocked, _locked): (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>) =
+        reply.body().deserialize().ok()?;
+    let item = unlocked.first()?;
+
+    let reply = conn
+        .call_method(
+            Some(SECRET_SERVICE),
+            item,
+            Some("org.freedesktop.Secret.Item"),
+            "GetSecret",
+            &(session,),
+        )
+        .await
+        .ok()?;
+    let (_, _, secret, _): (OwnedObjectPath, Vec<u8>, Vec<u8>, String) =
+        reply.body().deserialize().ok()?;
+    String::from_utf8(secret).ok()
+}
+
+/// agy keeps its sign-in in the system keyring when one is available, and in a token file otherwise.
+async fn read_agy_access_token(home: &Path) -> Option<String> {
+    let from_keyring = tokio::time::timeout(AGY_KEYRING_TIMEOUT, read_agy_keyring_secret())
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|parsed| parse_agy_access_token(&parsed));
+    if from_keyring.is_some() {
+        return from_keyring;
+    }
+    let path = home
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("antigravity-oauth-token");
+    parse_agy_access_token(&read_json_file(&path)?)
 }
 
 pub fn parse_agy_usage(data: &Value) -> Vec<Value> {
@@ -727,16 +791,16 @@ pub fn parse_codex_rpc_usage(result: &Value) -> (Option<String>, Vec<Value>) {
 }
 
 async fn fetch_agy_usage(home: &Path) -> Value {
-    let mut token = read_agy_access_token(home);
+    let mut token = read_agy_access_token(home).await;
     if token.is_none() {
         // Trigger `agy models` once in case agy can refresh credentials.
         let _ = discover_agy_models(true, Some(home)).await;
-        token = read_agy_access_token(home);
+        token = read_agy_access_token(home).await;
     }
     let Some(mut tok) = token else {
         return error_response(
             "agy",
-            "Not signed in to Antigravity CLI (~/.gemini/antigravity-cli/antigravity-oauth-token not found)",
+            "Antigravity sign-in not found in the system keyring or ~/.gemini/antigravity-cli/antigravity-oauth-token",
         );
     };
 
@@ -758,7 +822,7 @@ async fn fetch_agy_usage(home: &Path) -> Value {
             Ok((401, _)) if attempt == 0 => {
                 // Refresh OAuth token via `agy models` and retry once.
                 let _ = discover_agy_models(true, Some(home)).await;
-                if let Some(refreshed) = read_agy_access_token(home) {
+                if let Some(refreshed) = read_agy_access_token(home).await {
                     tok = refreshed;
                     continue;
                 }
@@ -1007,6 +1071,22 @@ pub async fn get_agent_usage(agent: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_agy_access_token_from_keyring_and_legacy_shapes() {
+        let keyring = json!({
+            "token": { "access_token": " tok-1 ", "refresh_token": "r", "expiry": "2026-11-27T08:56:14Z" },
+            "auth_method": "consumer"
+        });
+        assert_eq!(parse_agy_access_token(&keyring).as_deref(), Some("tok-1"));
+        let flat = json!({ "access_token": "tok-2" });
+        assert_eq!(parse_agy_access_token(&flat).as_deref(), Some("tok-2"));
+        assert_eq!(
+            parse_agy_access_token(&json!({ "token": { "access_token": "" } })),
+            None
+        );
+        assert_eq!(parse_agy_access_token(&json!({})), None);
+    }
 
     #[test]
     fn parses_agy_usage_and_groups_thinking_levels_and_gemini() {
