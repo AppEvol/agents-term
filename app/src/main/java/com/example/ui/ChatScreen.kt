@@ -129,6 +129,7 @@ import com.example.data.formatAttachmentCount
 import com.example.data.formatToolCallSummary
 import com.example.data.formatToolRunSummary
 import com.example.ui.markdown.ChatMarkdownCache
+import com.example.ui.markdown.LocalMarkdownCommitDispatcher
 import com.example.ui.markdown.LocalMarkdownParseDispatcher
 import com.example.ui.markdown.LocalMarkdownSyncParseThreshold
 import com.example.ui.markdown.MarkdownStyle
@@ -143,9 +144,11 @@ import com.example.ui.theme.ThemedButton
 import com.example.ui.theme.ThemedFilterChip
 import com.example.ui.theme.isLunaControls
 import com.example.ui.theme.themedCorner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 private const val CHAT_BOTTOM_SENTINEL_KEY = "__chat_bottom_sentinel__"
@@ -476,12 +479,14 @@ fun ChatWorkspace(
     }
     val scope = rememberCoroutineScope()
     val parseDispatcher = LocalMarkdownParseDispatcher.current
+    val commitDispatcher = LocalMarkdownCommitDispatcher.current
     val syncParseThreshold = LocalMarkdownSyncParseThreshold.current
-    val markdownCache = remember(tab.id, scope, parseDispatcher, syncParseThreshold) {
+    val markdownCache = remember(tab.id, scope, parseDispatcher, commitDispatcher, syncParseThreshold) {
         ChatMarkdownCache(
             scope = scope,
             parseDispatcher = parseDispatcher,
             syncThresholdChars = syncParseThreshold,
+            commitDispatcher = commitDispatcher,
         )
     }
     DisposableEffect(markdownCache) {
@@ -527,28 +532,32 @@ fun ChatWorkspace(
     }
 
     // Track manual scrolls (including non-touch scrolls) to pause/resume auto-scroll.
+    // Confined to Main.immediate so snapshotFlow emissions never run off the UI thread under
+    // Compose's UnconfinedTestDispatcher in instrumented tests.
     LaunchedEffect(tab.id, listState) {
-        var prevIndex = listState.firstVisibleItemIndex
-        var prevOffset = listState.firstVisibleItemScrollOffset
-        snapshotFlow {
-            ChatScrollSnapshot(
-                firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
-                canScrollForward = listState.canScrollForward,
-                isScrollInProgress = listState.isScrollInProgress,
-            )
-        }.collect { snap ->
-            val movedBackward = snap.firstVisibleItemIndex < prevIndex ||
-                (snap.firstVisibleItemIndex == prevIndex && snap.firstVisibleItemScrollOffset < prevOffset)
-            if (!isProgrammaticScroll) {
-                if (!snap.canScrollForward && !snap.isScrollInProgress) {
-                    autoScrollPinned = true
-                } else if (snap.canScrollForward && movedBackward) {
-                    autoScrollPinned = false
+        withContext(Dispatchers.Main.immediate) {
+            var prevIndex = listState.firstVisibleItemIndex
+            var prevOffset = listState.firstVisibleItemScrollOffset
+            snapshotFlow {
+                ChatScrollSnapshot(
+                    firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                    firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+                    canScrollForward = listState.canScrollForward,
+                    isScrollInProgress = listState.isScrollInProgress,
+                )
+            }.collect { snap ->
+                val movedBackward = snap.firstVisibleItemIndex < prevIndex ||
+                    (snap.firstVisibleItemIndex == prevIndex && snap.firstVisibleItemScrollOffset < prevOffset)
+                if (!isProgrammaticScroll) {
+                    if (!snap.canScrollForward && !snap.isScrollInProgress) {
+                        autoScrollPinned = true
+                    } else if (snap.canScrollForward && movedBackward) {
+                        autoScrollPinned = false
+                    }
                 }
+                prevIndex = snap.firstVisibleItemIndex
+                prevOffset = snap.firstVisibleItemScrollOffset
             }
-            prevIndex = snap.firstVisibleItemIndex
-            prevOffset = snap.firstVisibleItemScrollOffset
         }
     }
 
@@ -582,17 +591,19 @@ fun ChatWorkspace(
         sendGeneration = sendGeneration,
     )
     LaunchedEffect(tab.id, autoScrollSignal) {
-        if (messages.isEmpty() || !autoScrollPinned) return@LaunchedEffect
-        if (listState.isScrollInProgress) {
-            snapshotFlow { listState.isScrollInProgress }.first { !it }
-        }
-        val sentinelIndex = latestFeedItemCount
-        if (sentinelIndex > 0 && autoScrollPinned) {
-            isProgrammaticScroll = true
-            try {
-                listState.scrollToItem(sentinelIndex)
-            } finally {
-                isProgrammaticScroll = false
+        withContext(Dispatchers.Main.immediate) {
+            if (messages.isEmpty() || !autoScrollPinned) return@withContext
+            if (listState.isScrollInProgress) {
+                snapshotFlow { listState.isScrollInProgress }.first { !it }
+            }
+            val sentinelIndex = latestFeedItemCount
+            if (sentinelIndex > 0 && autoScrollPinned) {
+                isProgrammaticScroll = true
+                try {
+                    listState.scrollToItem(sentinelIndex)
+                } finally {
+                    isProgrammaticScroll = false
+                }
             }
         }
     }
@@ -671,7 +682,7 @@ fun ChatWorkspace(
             if (showScrollToBottom) {
                 SmallFloatingActionButton(
                     onClick = {
-                        scope.launch {
+                        scope.launch(Dispatchers.Main.immediate) {
                             val sentinelIndex = latestFeedItemCount
                             if (sentinelIndex > 0) {
                                 autoScrollPinned = true
@@ -1859,18 +1870,22 @@ private fun ChatComposer(
     }
 
     val currentDraft by rememberUpdatedState(draft)
+    val currentAttachments by rememberUpdatedState(attachments)
     val isShellStdinActive = showShellStdinControls && shellComposerMode == ShellComposerMode.STDIN
     // There is something to send once there is text or an uploaded image. Sending waits for
     // images that are still uploading, so a message never leaves without one of its images.
     val hasContent = (draft.text.isNotBlank() || attachments?.hasReady == true) && attachments?.isUploading != true
     val canSendWhileWorking = hasContent || isShellStdinActive
-    val currentHasContent by rememberUpdatedState(hasContent)
-    val currentCanSendWhileWorking by rememberUpdatedState(canSendWhileWorking)
     val currentIsShellStdinActive by rememberUpdatedState(isShellStdinActive)
     val currentHasQueued by rememberUpdatedState(queuedMessages.isNotEmpty())
     val currentOnSend by rememberUpdatedState(onSend)
     val currentOnForceInterrupt by rememberUpdatedState(onForceInterrupt)
     val currentOnShowHoldHint by rememberUpdatedState({ holdHintCounter++ })
+    fun liveHasContent(): Boolean {
+        val current = currentAttachments
+        return (currentDraft.text.isNotBlank() || current?.hasReady == true) && current?.isUploading != true
+    }
+    fun liveCanSendWhileWorking(): Boolean = liveHasContent() || currentIsShellStdinActive
     val clipboard = LocalClipboardManager.current
     var tabIdCopied by remember(tabId) { mutableStateOf(false) }
 
@@ -2138,7 +2153,7 @@ private fun ChatComposer(
                                     if (isConnected) {
                                         onClick(label = buttonDescription) {
                                             if (!isWorking) {
-                                                if (currentHasContent) {
+                                                if (liveHasContent()) {
                                                     currentOnSend()
                                                     true
                                                 } else if (currentHasQueued) {
@@ -2147,7 +2162,7 @@ private fun ChatComposer(
                                                 } else {
                                                     false
                                                 }
-                                            } else if (currentCanSendWhileWorking) {
+                                            } else if (liveCanSendWhileWorking()) {
                                                 currentOnSend()
                                                 true
                                             } else {
@@ -2175,7 +2190,7 @@ private fun ChatComposer(
                                         if (!isWorking) {
                                             val up = waitForUpOrCancellation()
                                             if (up != null) {
-                                                if (currentHasContent) {
+                                                if (liveHasContent()) {
                                                     currentOnSend()
                                                 } else if (currentHasQueued) {
                                                     currentOnForceInterrupt(null)
@@ -2229,7 +2244,7 @@ private fun ChatComposer(
                                             }
 
                                             true -> {
-                                                if (currentCanSendWhileWorking) {
+                                                if (liveCanSendWhileWorking()) {
                                                     currentOnSend()
                                                 } else {
                                                     currentOnShowHoldHint()

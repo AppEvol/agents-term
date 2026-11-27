@@ -128,9 +128,11 @@ import com.example.ui.theme.statusLabel
 import com.example.ui.theme.themedCorner
 import com.example.ui.theme.titleBarColors
 import com.example.ui.theme.titleBarTitleStyle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 // Keep the editors composed while their tabs are open, including while Settings covers the workspace.
@@ -345,7 +347,7 @@ fun HerdrApp(viewModel: MainViewModel) {
     }
 
     fun triggerQuickDebugDialog() {
-        scope.launch {
+        scope.launch(Dispatchers.Main.immediate) {
             pendingScreenshotBase64 = if (debugSettings.includeScreenshot) {
                 captureWindowScreenshotBase64(context.findActivityOrNull())
             } else {
@@ -1637,29 +1639,31 @@ internal fun QuickTabStrip(
     }
 
     LaunchedEffect(activeTabId, tabIds, scrollState.viewportSize) {
-        val targetId = activeTabId ?: return@LaunchedEffect
-        val (bounds, viewport, maxScroll) = snapshotFlow {
-            Triple(tabBounds[targetId], scrollState.viewportSize, scrollState.maxValue)
-        }.first { (bounds, viewport, maxScroll) ->
-            bounds != null && viewport > 0 && bounds.second <= viewport + maxScroll
-        }
-        val (tabLeft, tabRight) = bounds ?: return@LaunchedEffect
-        val targetScroll = computeQuickTabScrollTarget(
-            tabLeft = tabLeft,
-            tabRight = tabRight,
-            viewportWidth = viewport,
-            currentScroll = scrollState.value,
-            maxScroll = maxScroll,
-            edgeMarginPx = horizontalPaddingPx,
-        )
-        if (targetScroll != null) {
-            if (!hasAutoScrolled) {
-                scrollState.scrollTo(targetScroll)
-            } else {
-                scrollState.animateScrollTo(targetScroll)
+        withContext(Dispatchers.Main.immediate) {
+            val targetId = activeTabId ?: return@withContext
+            val (bounds, viewport, maxScroll) = snapshotFlow {
+                Triple(tabBounds[targetId], scrollState.viewportSize, scrollState.maxValue)
+            }.first { (bounds, viewport, maxScroll) ->
+                bounds != null && viewport > 0 && bounds.second <= viewport + maxScroll
             }
+            val (tabLeft, tabRight) = bounds ?: return@withContext
+            val targetScroll = computeQuickTabScrollTarget(
+                tabLeft = tabLeft,
+                tabRight = tabRight,
+                viewportWidth = viewport,
+                currentScroll = scrollState.value,
+                maxScroll = maxScroll,
+                edgeMarginPx = horizontalPaddingPx,
+            )
+            if (targetScroll != null) {
+                if (!hasAutoScrolled) {
+                    scrollState.scrollTo(targetScroll)
+                } else {
+                    scrollState.animateScrollTo(targetScroll)
+                }
+            }
+            hasAutoScrolled = true
         }
-        hasAutoScrolled = true
     }
 
     val stripBackground = if (luna) {

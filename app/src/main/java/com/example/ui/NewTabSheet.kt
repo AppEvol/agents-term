@@ -69,7 +69,9 @@ import com.example.ui.theme.ThemedSwitch
 import com.example.ui.theme.ThemedTextButton
 import com.example.ui.theme.ThemedTextField
 import com.example.ui.theme.themedCorner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun newTabButtonLabel(
@@ -204,21 +206,23 @@ internal fun NewTabSheetContent(
     }
 
     LaunchedEffect(initialCwd) {
-        fsError = null
-        val loader = onLoadInitialDirectories ?: onLoadDirectories
-        loader(initialCwd).onSuccess {
-            fsListing = it
-            setCwdWithEndSelection(it.path)
+        withContext(Dispatchers.Main.immediate) {
             fsError = null
-        }.onFailure { err ->
-            fsError = err.message ?: err::class.java.simpleName
+            val loader = onLoadInitialDirectories ?: onLoadDirectories
+            loader(initialCwd).onSuccess {
+                fsListing = it
+                setCwdWithEndSelection(it.path)
+                fsError = null
+            }.onFailure { err ->
+                fsError = err.message ?: err::class.java.simpleName
+            }
         }
     }
 
     fun browseTo(targetPath: String) {
         setCwdWithEndSelection(targetPath)
         fsError = null
-        scope.launch {
+        scope.launch(Dispatchers.Main.immediate) {
             onLoadDirectories(targetPath).onSuccess {
                 fsListing = it
                 setCwdWithEndSelection(it.path)
