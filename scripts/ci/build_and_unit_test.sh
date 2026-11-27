@@ -17,11 +17,13 @@ if [ "$PUBLISH_RELEASE" = "true" ]; then
   : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required when PUBLISH_RELEASE=true}"
   RELEASE_TAG="v${APP_VERSION_NAME}"
   export AGENTSTERM_DAEMON_RELEASE_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+  export AGENTSTERM_EXPECTED_DAEMON_RELEASE_TAG="${RELEASE_TAG}"
   echo "Building release APK pinned to daemon release ${AGENTSTERM_DAEMON_RELEASE_BASE_URL}"
 elif [ "$PUBLISH_PRERELEASE" = "true" ]; then
   : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required when PUBLISH_PRERELEASE=true}"
   PRERELEASE_TAG="v${APP_VERSION_NAME}-preview"
   export AGENTSTERM_DAEMON_RELEASE_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PRERELEASE_TAG}"
+  export AGENTSTERM_EXPECTED_DAEMON_RELEASE_TAG="${PRERELEASE_TAG}"
   echo "Building preview APK pointing daemon bootstrap at ${AGENTSTERM_DAEMON_RELEASE_BASE_URL}"
 fi
 

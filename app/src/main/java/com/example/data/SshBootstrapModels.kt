@@ -258,6 +258,30 @@ fun buildDaemonBootstrapCommand(
     return "printf '%s' '$scriptB64' | base64 -d | sh -s"
 }
 
+const val DAEMON_BREAKGLASS_ROLLBACK_COMMAND = "~/.agents-term/bin/agentsterm-daemon.prev rollback"
+
+/**
+ * Copyable breakglass SSH command shown to the user if the daemon fails to reconnect after an update.
+ */
+fun displayBreakglassRollbackCommand(daemonPort: Int = 7501): String = if (daemonPort in 1..65535 && daemonPort != 7501) {
+    "$DAEMON_BREAKGLASS_ROLLBACK_COMMAND --port $daemonPort"
+} else {
+    DAEMON_BREAKGLASS_ROLLBACK_COMMAND
+}
+
+/**
+ * Constructs the remote shell command for one-tap breakglass rollback over SSH using the known-good
+ * `.prev` daemon binary.
+ */
+fun buildDaemonRollbackCommand(daemonPort: Int = 7501): String {
+    require(daemonPort in 1..65535) { "Invalid daemon port: $daemonPort" }
+    return "PREV=\"\${AGENTSTERM_HOME:-\$HOME/.agents-term}/bin/agentsterm-daemon.prev\"; " +
+        "if [ ! -x \"\$PREV\" ]; then " +
+        "printf 'ERROR: Previous daemon backup not found at %s\\n' \"\$PREV\" >&2; exit 2; " +
+        "fi; " +
+        "exec \"\$PREV\" rollback --port $daemonPort"
+}
+
 /**
  * True when the remote bootstrap script finished with an error. `-1` means the SSH channel closed
  * without reporting a status (connection dropped), which is handled separately.

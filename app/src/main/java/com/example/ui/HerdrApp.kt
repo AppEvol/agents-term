@@ -83,12 +83,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,6 +102,9 @@ import com.example.data.ChatMessage
 import com.example.data.ConnectionState
 import com.example.data.DaemonCompatibilityInfo
 import com.example.data.ModelSlashCommand
+import com.example.data.SshAuthMethod
+import com.example.data.SshBootstrapConfig
+import com.example.data.SshProfile
 import com.example.data.TabRecord
 import com.example.data.WorkspaceState
 import com.example.data.attachmentLimitsForTab
@@ -188,6 +193,20 @@ fun HerdrApp(viewModel: MainViewModel) {
     val revivingTabId by viewModel.revivingTabId.collectAsStateWithLifecycle()
     val createTabError by viewModel.createTabError.collectAsStateWithLifecycle()
     val isCreatingTab by viewModel.isCreatingTab.collectAsStateWithLifecycle()
+    val daemonUpdateUiState by viewModel.daemonUpdateController.uiState.collectAsStateWithLifecycle()
+    val daemonUpdateActions = remember(viewModel) {
+        DaemonUpdateActions(
+            onStartSelfUpdate = { viewModel.daemonUpdateController.startUpdateForCurrentDaemon() },
+            onRestartNow = { viewModel.daemonUpdateController.forceRestartForCurrentDaemon() },
+            onCancelPendingUpdate = { viewModel.daemonUpdateController.cancelPendingUpdate() },
+            onRollbackDaemon = { viewModel.daemonUpdateController.rollbackDaemon() },
+            onDismissUpdateError = { viewModel.daemonUpdateController.dismissError() },
+            onDismissAutoRollbackError = { key -> viewModel.daemonUpdateController.dismissAutoRollbackNotice(key) },
+            onOpenSshSetup = { viewModel.openConnectionSettings(preferSsh = true) },
+            onStartSshBreakglassRollback = { cfg -> viewModel.daemonUpdateController.startSshBreakglassRollback(cfg) },
+            onClearSshRollbackState = { viewModel.daemonUpdateController.clearSshRollbackState() },
+        )
+    }
 
     if (showSettings) {
         val debugUploadState by viewModel.debugUploadState.collectAsStateWithLifecycle()
@@ -205,7 +224,9 @@ fun HerdrApp(viewModel: MainViewModel) {
             recentEventsProvider = { viewModel.recentDebugEvents() },
             onBack = { viewModel.closeAppSettings() },
             onOpenVmConnection = { viewModel.openConnectionSettings() },
-            onUpdateDaemon = { viewModel.openDaemonUpdate() },
+            onUpdateDaemon = { viewModel.openConnectionSettings(preferSsh = true) },
+            daemonUpdateUiState = daemonUpdateUiState,
+            daemonUpdateActions = daemonUpdateActions,
             onUpdateDebugSettings = { viewModel.updateDebugSettings(it) },
             onUploadDumpToVm = { note, shot ->
                 viewModel.uploadDebugDumpToVm(note = note, screenshotBase64 = shot)
@@ -446,6 +467,9 @@ fun HerdrApp(viewModel: MainViewModel) {
                 onOpenRecentlyClosed = { openRecentlyClosedSheet() },
                 onOpenSettings = { viewModel.openConnectionSettings() },
                 onUpdateDaemon = { viewModel.openDaemonUpdate() },
+                sshProfile = sshProfile,
+                daemonUpdateUiState = daemonUpdateUiState,
+                daemonUpdateActions = daemonUpdateActions,
                 onOpenAppSettings = { viewModel.openAppSettings() },
                 onReconnect = { viewModel.reconnectNow() },
                 onSendMessage = { rawText ->
@@ -1000,6 +1024,13 @@ internal fun WorkspaceScaffold(
     onOpenRecentlyClosed: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onUpdateDaemon: () -> Unit = onOpenSettings,
+    sshProfile: SshProfile = SshProfile(),
+    daemonUpdateUiState: DaemonUpdateUiState = DaemonUpdateUiState(),
+    daemonUpdateActions: DaemonUpdateActions = DaemonUpdateActions(
+        onStartSelfUpdate = onUpdateDaemon,
+        onOpenSshSetup = onOpenSettings,
+    ),
+    daemonCompatibilityOverride: DaemonCompatibilityInfo? = null,
     onOpenAppSettings: () -> Unit,
     onReconnect: () -> Unit,
     onSendMessage: (String) -> Unit,
@@ -1017,11 +1048,36 @@ internal fun WorkspaceScaffold(
     val activeTab = state.activeTab
     val finishedTabIds = state.finishedTabIds
     val activeTabFinished = activeTab != null && activeTab.id in finishedTabIds
-    val daemonCompat = remember(state.serverInfo) { evaluateDaemonCompatibility(state.serverInfo) }
+    val daemonCompat = daemonCompatibilityOverride
+        ?: remember(state.serverInfo) { evaluateDaemonCompatibility(state.serverInfo) }
     val daemonIdentity = remember(state.serverInfo, state.config.host, state.config.port) {
         state.serverInfo?.daemonIdentityKey(state.config.host, state.config.port)
     }
     var dismissedOutdatedDaemonKey by remember { mutableStateOf<String?>(null) }
+    var showForceRestartConfirm by remember { mutableStateOf(false) }
+    var showBreakglassDialog by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    val copiedRollbackMsg = stringResource(R.string.snackbar_rollback_command_copied)
+
+    fun triggerBreakglassSshRevert() {
+        showBreakglassDialog = true
+        val host = sshProfile.host.trim().ifBlank { state.config.host.trim() }
+        if (host.isNotBlank() &&
+            sshProfile.username.isNotBlank() &&
+            sshProfile.authMethod == SshAuthMethod.TAILSCALE_SSH
+        ) {
+            val port = if (state.config.port in 1..65535) state.config.port else sshProfile.daemonPort
+            daemonUpdateActions.onStartSshBreakglassRollback(
+                SshBootstrapConfig(
+                    host = host,
+                    sshPort = sshProfile.sshPort,
+                    username = sshProfile.username.trim(),
+                    authMethod = SshAuthMethod.TAILSCALE_SSH,
+                    daemonPort = port,
+                ),
+            )
+        }
+    }
     val activeModelInfo = remember(activeTab?.agent, activeTab?.model, state.serverInfo?.agents) {
         if (activeTab == null || activeTab.agent == "shell") {
             null
@@ -1304,11 +1360,15 @@ internal fun WorkspaceScaffold(
                                 modifier = Modifier.size(16.dp),
                             )
                             Text(
-                                text = when (state.connectionState) {
-                                    ConnectionState.CONNECTING ->
+                                text = when {
+                                    daemonUpdateUiState.awaitingReconnectAfterRestart &&
+                                        !daemonUpdateUiState.reconnectTimedOutAfterUpdate ->
+                                        stringResource(R.string.status_daemon_update_restarting)
+
+                                    state.connectionState == ConnectionState.CONNECTING ->
                                         stringResource(R.string.status_connecting_to, state.config.host)
 
-                                    ConnectionState.AUTH_ERROR ->
+                                    state.connectionState == ConnectionState.AUTH_ERROR ->
                                         stringResource(R.string.status_auth_error)
 
                                     else ->
@@ -1341,15 +1401,61 @@ internal fun WorkspaceScaffold(
                             }
                         }
                     }
+
+                    if (daemonUpdateUiState.reconnectTimedOutAfterUpdate) {
+                        DaemonBreakglassRecoveryBanner(
+                            daemonPort = state.config.port,
+                            onOpenRevertViaSsh = { triggerBreakglassSshRevert() },
+                            onCopyCommand = { cmd ->
+                                clipboard.setText(AnnotatedString(cmd))
+                                onShowMessage(copiedRollbackMsg)
+                            },
+                        )
+                    }
                 }
 
-                // Outdated VM daemon banner when connected to an older daemon
-                val isConnectedToOutdatedDaemon =
-                    state.connectionState == ConnectionState.CONNECTED && daemonCompat.isOutdated
-                if (isConnectedToOutdatedDaemon &&
+                // Live daemon self-update progress, deferred restart, or error strip
+                val hideTimedOutRestart = daemonUpdateUiState.reconnectTimedOutAfterUpdate &&
+                    state.daemonUpdateStatus?.isRestarting == true
+                val hasActiveStatus = state.daemonUpdateStatus?.isActiveOverlay == true && !hideTimedOutRestart
+                val hasActiveUpdateOverlay = hasActiveStatus ||
+                    daemonUpdateUiState.isSubmitting ||
+                    !daemonUpdateUiState.localError.isNullOrBlank()
+                if (hasActiveUpdateOverlay) {
+                    DaemonUpdateStatusBanner(
+                        status = state.daemonUpdateStatus,
+                        localError = daemonUpdateUiState.localError,
+                        isSubmitting = daemonUpdateUiState.isSubmitting,
+                        onRequestForceRestart = { showForceRestartConfirm = true },
+                        onCancelPending = daemonUpdateActions.onCancelPendingUpdate,
+                        onRetry = daemonUpdateActions.onStartSelfUpdate,
+                        onOpenSshSetup = daemonUpdateActions.onOpenSshSetup,
+                        onDismissError = daemonUpdateActions.onDismissUpdateError,
+                    )
+                }
+
+                // Auto-rollback notice from previous failed daemon update
+                val autoRollbackError = daemonCompat.lastAutoRollbackError
+                val autoRollbackKey = remember(daemonIdentity, autoRollbackError) {
+                    if (autoRollbackError != null) "${daemonIdentity.orEmpty()}|$autoRollbackError" else null
+                }
+                val canShowConnectedBanner = state.connectionState == ConnectionState.CONNECTED && !hasActiveUpdateOverlay
+                val isAutoRollbackVisible = autoRollbackError != null &&
+                    autoRollbackKey != null &&
+                    daemonUpdateUiState.dismissedAutoRollbackErrorKey != autoRollbackKey
+                if (canShowConnectedBanner && isAutoRollbackVisible) {
+                    DaemonAutoRollbackBanner(
+                        errorText = autoRollbackError,
+                        onRetry = daemonUpdateActions.onStartSelfUpdate,
+                        onDismiss = { daemonUpdateActions.onDismissAutoRollbackError(autoRollbackKey) },
+                    )
+                }
+
+                // Outdated / mismatched VM daemon banner (wait-for-tap)
+                val isOutdatedUndismissed = daemonCompat.isOutdated &&
                     daemonIdentity != null &&
                     dismissedOutdatedDaemonKey != daemonIdentity
-                ) {
+                if (canShowConnectedBanner && isOutdatedUndismissed) {
                     OutdatedDaemonBanner(
                         daemonCompat = daemonCompat,
                         onUpdate = onUpdateDaemon,
@@ -1428,6 +1534,38 @@ internal fun WorkspaceScaffold(
             )
         }
     }
+
+    if (showForceRestartConfirm) {
+        val activeCount = state.daemonUpdateStatus?.effectiveActiveTurnCount
+            ?.takeIf { it > 0 }
+            ?: state.tabs.count { it.status == "working" }.coerceAtLeast(1)
+        ForceRestartConfirmDialog(
+            activeTabCount = activeCount,
+            onConfirm = {
+                showForceRestartConfirm = false
+                daemonUpdateActions.onRestartNow()
+            },
+            onDismiss = { showForceRestartConfirm = false },
+        )
+    }
+
+    if (showBreakglassDialog) {
+        BreakglassSshRollbackDialog(
+            connectionConfig = state.config,
+            sshProfile = sshProfile,
+            sshRollbackState = daemonUpdateUiState.sshRollback,
+            onStartRollback = { cfg -> daemonUpdateActions.onStartSshBreakglassRollback(cfg) },
+            onOpenSshSetup = daemonUpdateActions.onOpenSshSetup,
+            onCopyCommand = { cmd ->
+                clipboard.setText(AnnotatedString(cmd))
+                onShowMessage(copiedRollbackMsg)
+            },
+            onDismiss = {
+                showBreakglassDialog = false
+                daemonUpdateActions.onClearSshRollbackState()
+            },
+        )
+    }
 }
 
 @Composable
@@ -1456,10 +1594,18 @@ private fun OutdatedDaemonBanner(
                 modifier = Modifier.size(16.dp),
             )
             Text(
-                text = stringResource(
-                    R.string.status_daemon_outdated,
-                    daemonCompat.daemonVersionLabel,
-                ),
+                text = if (daemonCompat.isBuildMismatch) {
+                    stringResource(
+                        R.string.status_daemon_build_mismatch,
+                        daemonCompat.daemonVersionLabel,
+                        daemonCompat.expectedReleaseTag.ifBlank { daemonCompat.appVersionLabel },
+                    )
+                } else {
+                    stringResource(
+                        R.string.status_daemon_outdated,
+                        daemonCompat.daemonVersionLabel,
+                    )
+                },
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,

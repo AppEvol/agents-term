@@ -39,8 +39,6 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material.icons.rounded.SystemUpdateAlt
-import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -79,6 +77,8 @@ import com.example.data.DaemonCompatibilityInfo
 import com.example.data.DebugDumpUploadState
 import com.example.data.DebugEvent
 import com.example.data.DebugSharingSettings
+import com.example.data.SshAuthMethod
+import com.example.data.SshBootstrapConfig
 import com.example.data.SshProfile
 import com.example.data.WorkspaceState
 import com.example.data.captureWindowScreenshotBase64
@@ -123,6 +123,12 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenVmConnection: () -> Unit,
     onUpdateDaemon: () -> Unit = onOpenVmConnection,
+    daemonUpdateUiState: DaemonUpdateUiState = DaemonUpdateUiState(),
+    daemonUpdateActions: DaemonUpdateActions = DaemonUpdateActions(
+        onStartSelfUpdate = onUpdateDaemon,
+        onOpenSshSetup = onOpenVmConnection,
+    ),
+    daemonCompatibilityOverride: DaemonCompatibilityInfo? = null,
     onUpdateDebugSettings: ((DebugSharingSettings) -> DebugSharingSettings) -> Unit,
     onUploadDumpToVm: (note: String?, screenshotBase64: String?) -> Unit,
     onExportOfflineZip: suspend (note: String?, screenshotBase64: String?) -> Result<File>,
@@ -139,10 +145,41 @@ fun SettingsScreen(
     var showRecentEvents by remember { mutableStateOf(false) }
     var copiedPath by remember { mutableStateOf(false) }
     var isExportingZip by remember { mutableStateOf(false) }
+    var showForceRestartConfirm by remember { mutableStateOf(false) }
+    var showRollbackConfirm by remember { mutableStateOf(false) }
+    var showBreakglassDialog by remember { mutableStateOf(false) }
 
     val isConnected = workspaceState.connectionState == ConnectionState.CONNECTED && workspaceState.config.isValid
-    val daemonCompat = remember(workspaceState.serverInfo) {
+    val daemonCompat = daemonCompatibilityOverride ?: remember(workspaceState.serverInfo) {
         evaluateDaemonCompatibility(workspaceState.serverInfo)
+    }
+    val workingTabCount = remember(workspaceState.tabs) {
+        workspaceState.tabs.count { it.status == "working" }
+    }
+    val copiedRollbackMsg = stringResource(R.string.snackbar_rollback_command_copied)
+
+    fun triggerBreakglassSshRevert() {
+        showBreakglassDialog = true
+        val host = sshProfile.host.trim().ifBlank { workspaceState.config.host.trim() }
+        if (host.isNotBlank() &&
+            sshProfile.username.isNotBlank() &&
+            sshProfile.authMethod == SshAuthMethod.TAILSCALE_SSH
+        ) {
+            val port = if (workspaceState.config.port in 1..65535) {
+                workspaceState.config.port
+            } else {
+                sshProfile.daemonPort
+            }
+            daemonUpdateActions.onStartSshBreakglassRollback(
+                SshBootstrapConfig(
+                    host = host,
+                    sshPort = sshProfile.sshPort,
+                    username = sshProfile.username.trim(),
+                    authMethod = SshAuthMethod.TAILSCALE_SSH,
+                    daemonPort = port,
+                ),
+            )
+        }
     }
 
     LaunchedEffect(copiedPath) {
@@ -279,12 +316,23 @@ fun SettingsScreen(
                             }
                         }
 
-                        if (daemonCompat.isOutdated) {
-                            OutdatedDaemonSettingsCard(
-                                daemonCompat = daemonCompat,
-                                onUpdateDaemon = onUpdateDaemon,
-                            )
-                        }
+                        DaemonSelfUpdateSettingsSection(
+                            isConnected = isConnected,
+                            daemonCompat = daemonCompat,
+                            updateStatus = workspaceState.daemonUpdateStatus,
+                            updateUiState = daemonUpdateUiState,
+                            daemonPort = workspaceState.config.port,
+                            onUpdateLegacySsh = onUpdateDaemon,
+                            onStartSelfUpdate = daemonUpdateActions.onStartSelfUpdate,
+                            onRequestForceRestart = { showForceRestartConfirm = true },
+                            onCancelPendingUpdate = daemonUpdateActions.onCancelPendingUpdate,
+                            onRequestRollback = { showRollbackConfirm = true },
+                            onDismissUpdateError = daemonUpdateActions.onDismissUpdateError,
+                            onOpenBreakglassDialog = { triggerBreakglassSshRevert() },
+                            onCopiedRollbackCommand = {
+                                scope.launch { snackbarHostState.showSnackbar(copiedRollbackMsg) }
+                            },
+                        )
 
                         ThemedOutlinedButton(
                             onClick = onOpenVmConnection,
@@ -774,6 +822,52 @@ fun SettingsScreen(
             }
         }
     }
+
+    if (showForceRestartConfirm) {
+        val activeCount = workspaceState.daemonUpdateStatus?.effectiveActiveTurnCount
+            ?.takeIf { it > 0 }
+            ?: workingTabCount.coerceAtLeast(1)
+        ForceRestartConfirmDialog(
+            activeTabCount = activeCount,
+            onConfirm = {
+                showForceRestartConfirm = false
+                daemonUpdateActions.onRestartNow()
+            },
+            onDismiss = { showForceRestartConfirm = false },
+        )
+    }
+
+    if (showRollbackConfirm) {
+        val prevShort = daemonCompat.shortPreviousBuildHash
+            ?: workspaceState.daemonUpdateStatus?.previousBuildHash?.trim()?.takeIf { it.isNotEmpty() }?.take(7)
+        RollbackConfirmDialog(
+            previousBuildHashShort = prevShort,
+            workingTabCount = workingTabCount,
+            onConfirm = {
+                showRollbackConfirm = false
+                daemonUpdateActions.onRollbackDaemon()
+            },
+            onDismiss = { showRollbackConfirm = false },
+        )
+    }
+
+    if (showBreakglassDialog) {
+        BreakglassSshRollbackDialog(
+            connectionConfig = workspaceState.config,
+            sshProfile = sshProfile,
+            sshRollbackState = daemonUpdateUiState.sshRollback,
+            onStartRollback = { cfg -> daemonUpdateActions.onStartSshBreakglassRollback(cfg) },
+            onOpenSshSetup = daemonUpdateActions.onOpenSshSetup,
+            onCopyCommand = { cmd ->
+                clipboard.setText(AnnotatedString(cmd))
+                scope.launch { snackbarHostState.showSnackbar(copiedRollbackMsg) }
+            },
+            onDismiss = {
+                showBreakglassDialog = false
+                daemonUpdateActions.onClearSshRollbackState()
+            },
+        )
+    }
 }
 
 @Composable
@@ -818,67 +912,5 @@ private fun SettingsSwitchRow(
             onCheckedChange = onCheckedChange,
             modifier = Modifier.testTag(testTag),
         )
-    }
-}
-
-@Composable
-private fun OutdatedDaemonSettingsCard(
-    daemonCompat: DaemonCompatibilityInfo,
-    onUpdateDaemon: () -> Unit,
-) {
-    Surface(
-        shape = themedCorner(12.dp),
-        color = AppTheme.colors.warning.copy(alpha = 0.14f),
-        border = BorderStroke(1.dp, AppTheme.colors.warning.copy(alpha = 0.45f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("settings_outdated_daemon_card"),
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Warning,
-                    contentDescription = null,
-                    tint = AppTheme.colors.warning,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(
-                    text = stringResource(R.string.settings_daemon_outdated_title),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            Text(
-                text = stringResource(
-                    R.string.settings_daemon_outdated_body,
-                    daemonCompat.expectedProtocolVersion,
-                    daemonCompat.daemonVersionLabel,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            ThemedButton(
-                onClick = onUpdateDaemon,
-                shape = themedCorner(10.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("settings_update_daemon_button"),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.SystemUpdateAlt,
-                    contentDescription = null,
-                    modifier = Modifier.size(17.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.settings_update_daemon_button))
-            }
-        }
     }
 }
