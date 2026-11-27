@@ -70,7 +70,20 @@ jobs:
           python-version: '3.13'
 
       - name: Run CI and utility script unit tests
-        run: python3 -W error::ResourceWarning -m unittest discover -s scripts/tests -v
+        run: >-
+          python3 -W error::ResourceWarning scripts/allure_results.py unittest
+          --start-dir scripts/tests
+          --output allure-results/scripts
+          --parent-suite "CI & Utility Script Tests"
+          --tag scripts
+
+      - name: Upload Allure results (script tests)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-scripts
+          path: allure-results/scripts/
+          if-no-files-found: ignore
 
   daemon-change-check:
     name: Daemon Change Check (reuse verified binaries when unchanged)
@@ -146,8 +159,21 @@ jobs:
           cargo clippy --all-targets -- -D warnings
 
       - name: Run Rust daemon unit and integration tests
-        working-directory: daemon-rs
-        run: cargo test -- --nocapture
+        run: >-
+          python3 -W error::ResourceWarning scripts/allure_results.py cargo
+          --cwd daemon-rs
+          --output allure-results/rust-daemon
+          --parent-suite "Rust VM Daemon"
+          --tag rust-daemon
+          -- cargo test -- --show-output
+
+      - name: Upload Allure results (Rust daemon)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-rust-daemon
+          path: allure-results/rust-daemon/
+          if-no-files-found: ignore
 
       - name: Build static musl release binaries (x86_64 and aarch64)
         if: needs.daemon-change-check.outputs.binary_changed == 'true'
@@ -239,6 +265,26 @@ jobs:
           path: app/build/outputs/roborazzi/
           if-no-files-found: ignore
 
+      - name: Convert Android unit test results for Allure
+        if: always()
+        run: >-
+          python3 -W error::ResourceWarning scripts/allure_results.py junit
+          --input app/build/test-results/testDebugUnitTest
+          --output allure-results/android-unit
+          --parent-suite "Android Unit Tests"
+          --framework junit4
+          --language kotlin
+          --roborazzi-dir app/build/outputs/roborazzi
+          --tag android-unit
+
+      - name: Upload Allure results (Android unit tests)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-android-unit
+          path: allure-results/android-unit/
+          if-no-files-found: ignore
+
   installer-tests:
     name: Daemon Installer Tests (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
@@ -260,7 +306,25 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Test the POSIX installer for the Rust daemon
-        run: python3 -W error::ResourceWarning -m unittest discover -s daemon-rs/tests -v
+        env:
+          PYTHON_VERSION: ${{ matrix.python }}
+        run: >-
+          python3 -W error::ResourceWarning scripts/allure_results.py unittest
+          --start-dir daemon-rs/tests
+          --output allure-results/installer
+          --parent-suite "Daemon Installer Tests"
+          --suite "Python ${PYTHON_VERSION}"
+          --variant "py${PYTHON_VERSION}"
+          --param "python=${PYTHON_VERSION}"
+          --tag installer
+
+      - name: Upload Allure results (installer tests)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-installer-py-${{ matrix.python }}
+          path: allure-results/installer/
+          if-no-files-found: ignore
 
   docker-vm-e2e:
     name: Rust Daemon Linux VM E2E (${{ matrix.vm.label }})
@@ -313,7 +377,24 @@ jobs:
       - name: Run headless Rust daemon E2E suite on ${{ matrix.vm.target }}
         env:
           E2E_VM_TARGET: ${{ matrix.vm.target }}
-        run: python3 -W error::ResourceWarning -m unittest discover -s e2e/docker-vm -v
+          VM_LABEL: ${{ matrix.vm.label }}
+        run: >-
+          python3 -W error::ResourceWarning scripts/allure_results.py unittest
+          --start-dir e2e/docker-vm
+          --output allure-results/docker-vm
+          --parent-suite "Linux VM E2E"
+          --suite "${VM_LABEL}"
+          --variant "${E2E_VM_TARGET}"
+          --param "vm_target=${E2E_VM_TARGET}"
+          --tag docker-vm-e2e
+
+      - name: Upload Allure results (Linux VM E2E)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-docker-vm-${{ matrix.vm.target }}
+          path: allure-results/docker-vm/
+          if-no-files-found: ignore
 
   e2e-tests:
     name: End-to-End Android Instrumented Tests
@@ -391,6 +472,79 @@ jobs:
           path: app/build/reports/androidTests/connected/
           if-no-files-found: ignore
 
+      - name: Convert Android E2E test results for Allure
+        if: always()
+        run: >-
+          python3 -W error::ResourceWarning scripts/allure_results.py junit
+          --input app/build/outputs/androidTest-results/connected
+          --output allure-results/android-e2e
+          --parent-suite "Android Instrumented E2E"
+          --framework android-junit
+          --language kotlin
+          --tag android-e2e
+
+      - name: Upload Allure results (Android E2E)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-android-e2e
+          path: allure-results/android-e2e/
+          if-no-files-found: ignore
+
+  allure-report:
+    name: Allure 3 Test Report
+    runs-on: ubuntu-latest
+    needs:
+      - script-tests
+      - daemon-change-check
+      - rust-daemon-build-and-test
+      - build-and-unit-test
+      - installer-tests
+      - docker-vm-e2e
+      - e2e-tests
+    if: always() && !cancelled()
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Cache pinned Allure 3 CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/agentsterm-allure
+          key: allure3-${{ runner.os }}-node22-${{ hashFiles('scripts/allure-report.sh') }}
+
+      - name: Download all Allure result artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: allure-results-*
+          path: allure-results-raw
+          merge-multiple: false
+
+      - name: Merge results, write step summary, and generate Allure 3 report
+        id: report
+        run: scripts/ci/generate_allure_report.sh
+
+      - name: Upload Allure 3 HTML report
+        if: steps.report.outputs.has_report == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: allure-report/
+          retention-days: 30
+          if-no-files-found: error
+
   ci-gate:
     name: All Required CI Checks
     runs-on: ubuntu-latest
@@ -403,6 +557,7 @@ jobs:
       - installer-tests
       - docker-vm-e2e
       - e2e-tests
+      - allure-report
     if: always()
     timeout-minutes: 5
 
@@ -420,13 +575,14 @@ jobs:
           INSTALLER_TESTS: ${{ needs.installer-tests.result }}
           DOCKER_VM_E2E: ${{ needs.docker-vm-e2e.result }}
           E2E_TESTS: ${{ needs.e2e-tests.result }}
+          ALLURE_REPORT: ${{ needs.allure-report.result }}
           RUN_ANDROID_BUILD: ${{ needs.daemon-change-check.outputs.run_android_build }}
         run: scripts/ci/ci_gate.sh
 
   publish-branch-prerelease:
     name: Publish Branch Pre-Release (APK + Rust Daemon Binaries)
     runs-on: ubuntu-latest
-    needs: [static-checks, script-tests, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-tests, docker-vm-e2e]
+    needs: [static-checks, script-tests, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-tests, docker-vm-e2e, allure-report]
     if: >-
       always() &&
       !cancelled() &&
@@ -435,6 +591,7 @@ jobs:
       needs.daemon-change-check.result == 'success' &&
       needs.build-and-unit-test.result == 'success' &&
       needs.e2e-tests.result == 'success' &&
+      needs.allure-report.result == 'success' &&
       (needs.rust-daemon-build-and-test.result == 'success' || needs.rust-daemon-build-and-test.result == 'skipped') &&
       (needs.installer-tests.result == 'success' || needs.installer-tests.result == 'skipped') &&
       (needs.docker-vm-e2e.result == 'success' || needs.docker-vm-e2e.result == 'skipped') &&
@@ -473,7 +630,7 @@ jobs:
   publish-apk:
     name: Publish Verified APK & Static Daemon Release
     runs-on: ubuntu-latest
-    needs: [static-checks, script-tests, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-tests, docker-vm-e2e]
+    needs: [static-checks, script-tests, daemon-change-check, rust-daemon-build-and-test, build-and-unit-test, e2e-tests, installer-tests, docker-vm-e2e, allure-report]
     if: >-
       always() &&
       !cancelled() &&
@@ -482,6 +639,7 @@ jobs:
       needs.daemon-change-check.result == 'success' &&
       needs.build-and-unit-test.result == 'success' &&
       needs.e2e-tests.result == 'success' &&
+      needs.allure-report.result == 'success' &&
       (needs.rust-daemon-build-and-test.result == 'success' || needs.rust-daemon-build-and-test.result == 'skipped') &&
       (needs.installer-tests.result == 'success' || needs.installer-tests.result == 'skipped') &&
       (needs.docker-vm-e2e.result == 'success' || needs.docker-vm-e2e.result == 'skipped') &&

@@ -20,6 +20,7 @@ ALL_GREEN_ENV: Dict[str, str] = {
     "INSTALLER_TESTS": "success",
     "DOCKER_VM_E2E": "success",
     "E2E_TESTS": "success",
+    "ALLURE_REPORT": "success",
     "RUN_ANDROID_BUILD": "true",
 }
 
@@ -67,6 +68,7 @@ class CiGateTest(unittest.TestCase):
             ("STATIC_CHECKS", "static-checks"),
             ("SCRIPT_TESTS", "script-tests"),
             ("DAEMON_CHANGE_CHECK", "daemon-change-check"),
+            ("ALLURE_REPORT", "allure-report"),
         ):
             for bad_state in ("failure", "skipped", "cancelled", ""):
                 with self.subTest(job=job, bad_state=bad_state):

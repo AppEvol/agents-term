@@ -132,22 +132,40 @@ GitHub Actions orchestration lives in [`.github/workflows/ci.yml`](https://githu
   - `scripts/daemon-build-hash.py` — Computes the 40-character `AGENTSTERM_BUILD_HASH` matching `daemon-rs/build.rs`.
   - `scripts/ensure-debug-keystore.sh` — Ensures `debug.keystore` exists (from `DEBUG_KEYSTORE_BASE64`, `debug.keystore.base64`, or `keytool`).
   - `scripts/install-android-sdk.sh` — Accepts Android SDK licenses and installs the required platform and build-tools via `sdkmanager`.
+  - `scripts/allure_results.py` — Stdlib-only CLI that emits Allure 3 JSON test results (`<uuid>-result.json` + attachments) for Python `unittest`, Gradle JUnit XML (including Roborazzi golden diff PNGs), and Rust `cargo test -- --show-output`, plus merges shards and renders Markdown summaries.
+  - `scripts/allure-report.sh` — Installs pinned `allure@3.33.0` into `~/.cache/agentsterm-allure` (Node.js >= 22.18) and builds (or opens with `--open`) the unified Allure 3 Awesome HTML report using `allurerc.json`.
 - **`scripts/ci/` — CI-only workflow scripts (snake_case):** Scripts tied to GitHub Actions runners, `GITHUB_OUTPUT` / `GITHUB_ENV` / `GITHUB_STEP_SUMMARY`, or GitHub Release publishing:
   - `scripts/ci/daemon_change_check.sh` — Verifies whether prebuilt `latest` daemon binaries match the current source hash and classifies changed files (daemon tests, installer tests, Linux VM E2E harness, docs-only PRs).
   - `scripts/ci/setup_rust_toolchain.sh` & `scripts/ci/build_rust_daemon.sh` — Installs Rust musl targets, cross-compiles static `x86_64`/`aarch64` daemon binaries, writes `.sha256` checksums, and verifies the embedded build hash.
   - `scripts/ci/build_and_unit_test.sh` — Computes APK version metadata and pinned `AGENTSTERM_DAEMON_RELEASE_BASE_URL` for release/preview builds, then runs Android Lint, unit tests, and debug/test APK assembly.
   - `scripts/ci/stage_daemon_binary.sh` — Stages the downloaded `x86_64` daemon binary for the multi-distro Linux VM E2E matrix.
   - `scripts/ci/enable_kvm.sh`, `scripts/ci/set_build_version_env.sh`, `scripts/ci/start_docker_vm.sh`, `scripts/ci/run_android_e2e.sh`, `scripts/ci/stop_docker_vm.sh` — Manages runner KVM permissions, Docker E2E VM lifecycle, and Android emulator instrumented tests.
+  - `scripts/ci/generate_allure_report.sh` — Merges downloaded `allure-results-*` artifacts with GitHub Actions `environment.properties` and `executor.json`, appends a per-suite Markdown summary table to `$GITHUB_STEP_SUMMARY`, and builds the single-file Allure 3 HTML report.
   - `scripts/ci/ci_gate.sh` — Evaluates all required and conditionally-skipped job outcomes for the `All Required CI Checks` branch-protection gate.
   - `scripts/ci/publish_branch_prerelease.sh` & `scripts/ci/publish_versioned_releases.sh` — Creates branch preview pre-releases (`v<version>-preview`) or versioned `main` releases (`v<version>`) and updates the rolling `latest` tag/release alias.
-- **`scripts/tests/` — Script unit tests:** Fast `unittest` coverage for the extracted scripts, executed unconditionally in CI via the `script-tests` job and hard-required by `ci-gate`.
+- **`scripts/tests/` — Script unit tests:** Fast `unittest` coverage for the extracted scripts and Allure 3 result helpers, executed unconditionally in CI via the `script-tests` job and hard-required by `ci-gate`.
 
 ### Job Topology & Gating
 
-1. **Always-run checks:** `static-checks`, `script-tests`, and `daemon-change-check` run on every pull request, merge queue group (`merge_group`), push to `main`, and manual dispatch.
+1. **Always-run checks:** `static-checks`, `script-tests`, `daemon-change-check`, and `allure-report` run on every pull request, merge queue group (`merge_group`), push to `main`, and manual dispatch.
 2. **Change-aware daemon checks:** When `daemon-change-check` verifies that the `latest` GitHub Release binaries already match `scripts/daemon-build-hash.py`, it reuses them as the `daemon-binaries` artifact and skips `rust-daemon-build-and-test`, `installer-tests`, and `docker-vm-e2e` unless their respective test paths changed or `force_daemon_tests` is enabled.
 3. **Documentation-only fast path:** Pull requests (and their merge queue runs) that modify only `docs/` or top-level Markdown files (excluding the daemon-embedded docs `docs/live-debugging.md` and `docs/agents_debugging_tips.md`) skip `build-and-unit-test` and `e2e-tests`; pushes to `main` and manual runs always build so releases stay verifiable.
-4. **Branch-protection gate & publishing:** `ci-gate` ("All Required CI Checks") checks out the repository and runs `scripts/ci/ci_gate.sh` to enforce that all required jobs succeeded and optional jobs were only skipped when permitted. On green `main` pushes/dispatches, `publish-apk` runs `scripts/ci/publish_versioned_releases.sh`; on manual non-`main` dispatches, `publish-branch-prerelease` runs `scripts/ci/publish_branch_prerelease.sh`.
+4. **Branch-protection gate & publishing:** `ci-gate` ("All Required CI Checks") checks out the repository and runs `scripts/ci/ci_gate.sh` to enforce that all required jobs (including `allure-report`) succeeded and optional jobs were only skipped when permitted. On green `main` pushes/dispatches, `publish-apk` runs `scripts/ci/publish_versioned_releases.sh`; on manual non-`main` dispatches, `publish-branch-prerelease` runs `scripts/ci/publish_branch_prerelease.sh`.
+
+### Test Reporting (Allure 3)
+
+Allure 3 (`allure@3.33.0`, configured via [`allurerc.json`](https://github.com/AppEvol/agents-term/blob/main/allurerc.json)) produces a unified interactive test report across every test suite in CI and locally:
+
+- **Per-suite result emission (zero extra test dependencies):**
+  - **Android Unit Tests** (`build-and-unit-test`) & **Android Instrumented E2E** (`e2e-tests`): `scripts/allure_results.py junit` converts Gradle JUnit XML reports and automatically attaches matching Roborazzi `*_compare.png` / `*_actual.png` diffs on `MarkdownGoldenTest` failures.
+  - **Rust VM Daemon** (`rust-daemon-build-and-test`): `scripts/allure_results.py cargo` wraps `cargo test -- --show-output`, preserving exact exit codes while recording every unit/integration test, panic trace, and test stdout attachment.
+  - **Daemon Installer Tests** (`installer-tests`, Python 3.11 & 3.13), **Linux VM E2E Matrix** (`docker-vm-e2e`, 7 Linux distros), and **CI & Utility Script Tests** (`script-tests`): `scripts/allure_results.py unittest` wraps `unittest` discovery with `-W error::ResourceWarning`. Matrix shards use unique artifact names (`allure-results-installer-py-<ver>`, `allure-results-docker-vm-<target>`), distinct `suite`/`parameters`, and per-shard `historyId`/`testCaseId` so Allure 3 displays every shard separately instead of collapsing them as retries.
+- **CI report aggregation (`allure-report` job):** Runs with `if: always() && !cancelled()` so failing test runs still produce a full diagnostic report. It downloads all `allure-results-*` artifacts, runs `scripts/ci/generate_allure_report.sh` to write a per-suite Markdown summary table to `$GITHUB_STEP_SUMMARY`, builds a self-contained single-file Allure 3 Awesome report (`allure-report/index.html`, using Node.js 22 and cached `~/.cache/agentsterm-allure`), and uploads the `allure-report` artifact (30-day retention).
+- **Local usage:** After running local tests (for example `gradle :app:testDebugUnitTest` or emitting results into `allure-results/`), generate and open the report with Node.js >= 22.18:
+
+```sh
+scripts/allure-report.sh --open
+```
 
 ### Verification
 
