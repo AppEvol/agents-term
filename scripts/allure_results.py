@@ -13,12 +13,14 @@ Python, Rust, or Gradle dependencies:
   - `merge`: merges shard directories and writes `environment.properties` /
     `executor.json`.
   - `summary`: renders a Markdown summary table (and optional `$GITHUB_STEP_SUMMARY`).
+  - `badges`: renders self-hosted SVG metric badges and `metrics.json` for GitHub Pages / README.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import os
 import re
@@ -771,26 +773,9 @@ def _escape_md_cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\r\n", " ").replace("\n", " ").strip()
 
 
-def build_markdown_summary(
-    results_dir: Path,
-    *,
-    artifact_name: str = "allure-report",
-    report_url: str = "",
-) -> Tuple[str, int]:
-    """Build a GitHub-Flavored Markdown summary table from merged Allure results."""
+def collect_metrics(results_dir: Path) -> Dict[str, Any]:
+    """Aggregate pass/fail/broken/skipped counts and durations from merged Allure results."""
     result_files = sorted(results_dir.glob("*-result.json")) if results_dir.is_dir() else []
-    if not result_files:
-        lines = [
-            "## Allure 3 Test Report",
-            "",
-            (
-                "No test results were collected in this run "
-                "(for example, a documentation-only change where test jobs were skipped)."
-            ),
-            "",
-        ]
-        return "\n".join(lines), 0
-
     suites: Dict[str, Dict[str, int]] = {}
     totals = {"passed": 0, "failed": 0, "broken": 0, "skipped": 0, "duration_ms": 0}
     failures: List[Tuple[str, str, str, str]] = []
@@ -823,6 +808,194 @@ def build_markdown_summary(
             failures.append((status, suite_label, str(data.get("name", "unnamed")), first_line[:160]))
 
     total_count = totals["passed"] + totals["failed"] + totals["broken"] + totals["skipped"]
+    executed_count = totals["passed"] + totals["failed"] + totals["broken"]
+    pass_rate_pct: Optional[float] = (
+        round((totals["passed"] / executed_count) * 100.0, 1) if executed_count > 0 else None
+    )
+    suites_total = len(suites)
+    suites_passing = sum(1 for s in suites.values() if s["failed"] == 0 and s["broken"] == 0)
+
+    return {
+        "total": total_count,
+        "executed": executed_count,
+        "passed": totals["passed"],
+        "failed": totals["failed"],
+        "broken": totals["broken"],
+        "skipped": totals["skipped"],
+        "pass_rate_pct": pass_rate_pct,
+        "duration_ms": totals["duration_ms"],
+        "duration_human": _format_duration_ms(totals["duration_ms"]),
+        "suites_total": suites_total,
+        "suites_passing": suites_passing,
+        "suites": suites,
+        "failures": failures,
+    }
+
+
+def _estimate_svg_text_width(text: str) -> int:
+    width = 0.0
+    for ch in text:
+        if ch in "ilI1.,|:;'! ":
+            width += 4.2
+        elif ch in "mwMW@":
+            width += 8.6
+        elif ch.isupper():
+            width += 7.1
+        else:
+            width += 6.2
+    return max(24, round(width) + 12)
+
+
+def render_svg_badge(label: str, value: str, color: str) -> str:
+    """Render a self-contained flat SVG badge (shields.io style, 20px tall)."""
+    label_w = _estimate_svg_text_width(label)
+    value_w = _estimate_svg_text_width(value)
+    total_w = label_w + value_w
+    label_x = label_w * 5
+    value_x = round((label_w + value_w / 2.0) * 10)
+    label_len = (label_w - 10) * 10
+    value_len = (value_w - 10) * 10
+
+    esc_label = html.escape(label)
+    esc_value = html.escape(value)
+    esc_color = html.escape(color)
+    esc_title = html.escape(f"{label}: {value}")
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="20" role="img" aria-label="{esc_title}">'
+        f"<title>{esc_title}</title>"
+        '<linearGradient id="s" x2="0" y2="100%">'
+        '<stop offset="0" stop-color="#bbb" stop-opacity=".1"/>'
+        '<stop offset="1" stop-opacity=".1"/>'
+        "</linearGradient>"
+        '<clipPath id="r">'
+        f'<rect width="{total_w}" height="20" rx="3" fill="#fff"/>'
+        "</clipPath>"
+        '<g clip-path="url(#r)">'
+        f'<rect width="{label_w}" height="20" fill="#555"/>'
+        f'<rect x="{label_w}" width="{value_w}" height="20" fill="{esc_color}"/>'
+        f'<rect width="{total_w}" height="20" fill="url(#s)"/>'
+        "</g>"
+        '<g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" '
+        'text-rendering="geometricPrecision" font-size="110">'
+        f'<text aria-hidden="true" x="{label_x}" y="150" fill="#010101" fill-opacity=".3" '
+        f'transform="scale(.1)" textLength="{label_len}">{esc_label}</text>'
+        f'<text x="{label_x}" y="140" transform="scale(.1)" fill="#fff" textLength="{label_len}">{esc_label}</text>'
+        f'<text aria-hidden="true" x="{value_x}" y="150" fill="#010101" fill-opacity=".3" '
+        f'transform="scale(.1)" textLength="{value_len}">{esc_value}</text>'
+        f'<text x="{value_x}" y="140" transform="scale(.1)" fill="#fff" textLength="{value_len}">'
+        f"{esc_value}</text>"
+        "</g>"
+        "</svg>\n"
+    )
+
+
+def generate_badges(
+    results_dir: Path,
+    output_dir: Path,
+    *,
+    commit_sha: str = "",
+    run_url: str = "",
+    dashboard_url: str = "",
+) -> Dict[str, Any]:
+    """Generate self-hosted SVG metric badges and `metrics.json` from merged Allure results."""
+    metrics = collect_metrics(results_dir)
+    badges_dir = output_dir / "badges"
+    badges_dir.mkdir(parents=True, exist_ok=True)
+
+    total = metrics["total"]
+    passed = metrics["passed"]
+    failing = metrics["failed"] + metrics["broken"]
+    pass_rate = metrics["pass_rate_pct"]
+    suites_total = metrics["suites_total"]
+    suites_passing = metrics["suites_passing"]
+
+    if total == 0:
+        tests_val, tests_color = "no results", "#6e7781"
+    elif failing == 0:
+        tests_val, tests_color = f"{passed} passed", "#2ea44f"
+    else:
+        tests_val, tests_color = f"{passed}/{total} passed", "#cb2431"
+
+    if pass_rate is None:
+        rate_val, rate_color = "n/a", "#6e7781"
+    else:
+        rate_str = f"{int(pass_rate)}%" if pass_rate == int(pass_rate) else f"{pass_rate:.1f}%"
+        if failing == 0:
+            rate_color = "#2ea44f"
+        elif pass_rate >= 90.0:
+            rate_color = "#dbab09"
+        else:
+            rate_color = "#cb2431"
+        rate_val = rate_str
+
+    if suites_total == 0:
+        suites_val, suites_color = "0 suites", "#6e7781"
+    elif suites_passing == suites_total:
+        suites_val, suites_color = f"{suites_passing}/{suites_total} green", "#2ea44f"
+    else:
+        suites_val, suites_color = f"{suites_passing}/{suites_total} green", "#cb2431"
+
+    duration_val = metrics["duration_human"] if total > 0 else "n/a"
+    duration_color = "#0969da" if total > 0 else "#6e7781"
+
+    (badges_dir / "tests.svg").write_text(render_svg_badge("tests", tests_val, tests_color), encoding="utf-8")
+    (badges_dir / "pass-rate.svg").write_text(render_svg_badge("pass rate", rate_val, rate_color), encoding="utf-8")
+    (badges_dir / "suites.svg").write_text(render_svg_badge("suites", suites_val, suites_color), encoding="utf-8")
+    (badges_dir / "duration.svg").write_text(
+        render_svg_badge("test time", duration_val, duration_color),
+        encoding="utf-8",
+    )
+
+    public_metrics: Dict[str, Any] = {
+        "total": total,
+        "executed": metrics["executed"],
+        "passed": passed,
+        "failed": metrics["failed"],
+        "broken": metrics["broken"],
+        "skipped": metrics["skipped"],
+        "pass_rate_pct": pass_rate,
+        "duration_ms": metrics["duration_ms"],
+        "duration_human": duration_val,
+        "suites_total": suites_total,
+        "suites_passing": suites_passing,
+        "suites": {name: dict(counts) for name, counts in sorted(metrics["suites"].items())},
+        "commit": commit_sha,
+        "run_url": run_url,
+        "dashboard_url": dashboard_url,
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    (output_dir / "metrics.json").write_text(
+        json.dumps(public_metrics, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return public_metrics
+
+
+def build_markdown_summary(
+    results_dir: Path,
+    *,
+    artifact_name: str = "allure-report",
+    report_url: str = "",
+    dashboard_url: str = "",
+) -> Tuple[str, int]:
+    """Build a GitHub-Flavored Markdown summary table from merged Allure results."""
+    metrics = collect_metrics(results_dir)
+    total_count = metrics["total"]
+    if total_count == 0:
+        lines = [
+            "## Allure 3 Test Report",
+            "",
+            (
+                "No test results were collected in this run "
+                "(for example, a documentation-only change where test jobs were skipped)."
+            ),
+            "",
+        ]
+        return "\n".join(lines), 0
+
+    suites: Dict[str, Dict[str, int]] = metrics["suites"]
+    failures: List[Tuple[str, str, str, str]] = metrics["failures"]
     lines = [
         "## Allure 3 Test Report",
         "",
@@ -837,8 +1010,8 @@ def build_markdown_summary(
             f"{s['skipped']} | {suite_total} | {_format_duration_ms(s['duration_ms'])} |"
         )
     lines.append(
-        f"| **Total** | **{totals['passed']}** | **{totals['failed']}** | **{totals['broken']}** | "
-        f"**{totals['skipped']}** | **{total_count}** | **{_format_duration_ms(totals['duration_ms'])}** |"
+        f"| **Total** | **{metrics['passed']}** | **{metrics['failed']}** | **{metrics['broken']}** | "
+        f"**{metrics['skipped']}** | **{total_count}** | **{metrics['duration_human']}** |"
     )
     lines.append("")
 
@@ -848,6 +1021,9 @@ def build_markdown_summary(
         )
     else:
         lines.append(f"- Full interactive Allure 3 Awesome report artifact: **`{artifact_name}`**")
+
+    if dashboard_url:
+        lines.append(f"- Hosted `main` Allure 3 Dashboard (GitHub Pages): {dashboard_url}")
 
     if failures:
         lines.extend(["", "### Failures & Broken Tests", ""])
@@ -989,6 +1165,7 @@ def _cmd_summary(args: argparse.Namespace) -> int:
         Path(args.results_dir),
         artifact_name=args.artifact_name,
         report_url=args.report_url or "",
+        dashboard_url=args.dashboard_url or "",
     )
     sys.stdout.write(markdown)
     if args.step_summary:
@@ -1001,6 +1178,18 @@ def _cmd_summary(args: argparse.Namespace) -> int:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("a", encoding="utf-8") as fh:
             fh.write(f"result_count={count}\n")
+    return 0
+
+
+def _cmd_badges(args: argparse.Namespace) -> int:
+    metrics = generate_badges(
+        Path(args.results_dir),
+        Path(args.output_dir),
+        commit_sha=args.commit or "",
+        run_url=args.run_url or "",
+        dashboard_url=args.dashboard_url or "",
+    )
+    print(f"Generated SVG badges and metrics.json ({metrics['passed']}/{metrics['total']} passed) in {args.output_dir}")
     return 0
 
 
@@ -1060,9 +1249,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_summary.add_argument("--results-dir", required=True, help="Merged Allure results directory")
     p_summary.add_argument("--artifact-name", default="allure-report", help="Uploaded artifact name")
     p_summary.add_argument("--report-url", default="", help="Workflow run URL")
+    p_summary.add_argument("--dashboard-url", default="", help="Hosted Allure 3 GitHub Pages URL")
     p_summary.add_argument("--step-summary", default=os.environ.get("GITHUB_STEP_SUMMARY", ""))
     p_summary.add_argument("--github-output", default="")
     p_summary.set_defaults(func=_cmd_summary)
+
+    p_badges = subparsers.add_parser("badges", help="Generate self-hosted SVG metric badges and metrics.json")
+    p_badges.add_argument("--results-dir", required=True, help="Merged Allure results directory")
+    p_badges.add_argument("--output-dir", required=True, help="Report output directory (writes badges/*.svg)")
+    p_badges.add_argument("--commit", default="", help="Commit SHA associated with the run")
+    p_badges.add_argument("--run-url", default="", help="Workflow run URL")
+    p_badges.add_argument("--dashboard-url", default="", help="Hosted Allure 3 GitHub Pages URL")
+    p_badges.set_defaults(func=_cmd_badges)
 
     return parser
 

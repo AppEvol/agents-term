@@ -27,6 +27,7 @@ worktrees/
 debug-dumps/
 allure-results/
 allure-report/
+.allure-history/
 .tmp/
 /tmp/
 /screenshot*.png

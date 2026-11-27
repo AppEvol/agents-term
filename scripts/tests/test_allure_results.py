@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -47,6 +48,8 @@ class AllureConfigAndVersionTest(unittest.TestCase):
         cfg = json.loads(ALLURERC_JSON.read_text(encoding="utf-8"))
         self.assertEqual(cfg["name"], "AgentsTerm Test Report")
         self.assertEqual(cfg["output"], "./allure-report")
+        self.assertEqual(cfg["historyPath"], "./.allure-history/history.jsonl")
+        self.assertTrue(cfg["appendHistory"])
         awesome_opts = cfg["plugins"]["awesome"]["options"]
         self.assertTrue(awesome_opts["singleFile"])
         self.assertEqual(awesome_opts["groupBy"], ["parentSuite", "suite", "subSuite"])
@@ -485,13 +488,156 @@ class MergeSummaryAndCiScriptTest(unittest.TestCase):
             merged,
             artifact_name="allure-report",
             report_url="https://github.com/AppEvol/agents-term/actions/runs/123",
+            dashboard_url="https://appevol.github.io/agents-term/",
         )
         self.assertEqual(total, 2)
         self.assertIn("| Android Unit Tests | 0 | 1 | 0 | 0 | 1 |", md)
         self.assertIn("| Rust VM Daemon | 1 | 0 | 0 | 0 | 1 |", md)
         self.assertIn("| **Total** | **1** | **1** | **0** | **0** | **2** |", md)
+        self.assertIn("https://appevol.github.io/agents-term/", md)
         self.assertIn("### Failures & Broken Tests", md)
         self.assertIn("bad_one", md)
+
+    def test_generate_badges_emits_valid_svgs_and_metrics_json(self) -> None:
+        results_dir = self.tmp / "badge-results"
+        allure_results.parse_cargo_test_output(
+            output_text=(
+                "     Running unittests src/main.rs (bin)\n"
+                "running 2 tests\n"
+                "test ok_one ... ok\n"
+                "test ok_two ... ok\n"
+                "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s\n"
+            ),
+            output_dir=results_dir,
+            parent_suite="Rust VM Daemon",
+        )
+        out_dir = self.tmp / "pages-out"
+        metrics = allure_results.generate_badges(
+            results_dir,
+            out_dir,
+            commit_sha="abc1234",
+            run_url="https://github.com/AppEvol/agents-term/actions/runs/99",
+            dashboard_url="https://appevol.github.io/agents-term/",
+        )
+        self.assertEqual(metrics["total"], 2)
+        self.assertEqual(metrics["passed"], 2)
+        self.assertEqual(metrics["pass_rate_pct"], 100.0)
+        self.assertEqual(metrics["suites_passing"], 1)
+        self.assertEqual(metrics["suites_total"], 1)
+
+        loaded_metrics = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
+        self.assertEqual(loaded_metrics["commit"], "abc1234")
+        self.assertEqual(loaded_metrics["dashboard_url"], "https://appevol.github.io/agents-term/")
+
+        for name, expected_text in (
+            ("tests.svg", "2 passed"),
+            ("pass-rate.svg", "100%"),
+            ("suites.svg", "1/1 green"),
+            ("duration.svg", "1.5s"),
+        ):
+            svg_text = (out_dir / "badges" / name).read_text(encoding="utf-8")
+            root = ET.fromstring(svg_text)
+            self.assertTrue(root.tag.endswith("svg"))
+            self.assertIn(expected_text, svg_text)
+            self.assertIn("#2ea44f" if name != "duration.svg" else "#0969da", svg_text)
+
+    def test_generate_badges_marks_failures_red_and_escapes_xml(self) -> None:
+        results_dir = self.tmp / "badge-fail"
+        allure_results.parse_cargo_test_output(
+            output_text=(
+                "     Running tests/app_cli.rs (bin)\n"
+                "running 2 tests\n"
+                "test good_case ... ok\n"
+                "test bad_case ... FAILED\n"
+                "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s\n"
+            ),
+            output_dir=results_dir,
+            parent_suite="Rust VM Daemon",
+            exit_code=101,
+        )
+        out_dir = self.tmp / "pages-fail"
+        allure_results.generate_badges(results_dir, out_dir)
+        tests_svg = (out_dir / "badges" / "tests.svg").read_text(encoding="utf-8")
+        rate_svg = (out_dir / "badges" / "pass-rate.svg").read_text(encoding="utf-8")
+        suites_svg = (out_dir / "badges" / "suites.svg").read_text(encoding="utf-8")
+        self.assertIn("1/2 passed", tests_svg)
+        self.assertIn("#cb2431", tests_svg)
+        self.assertIn("50%", rate_svg)
+        self.assertIn("#cb2431", rate_svg)
+        self.assertIn("0/1 green", suites_svg)
+        self.assertIn("#cb2431", suites_svg)
+
+        escaped = allure_results.render_svg_badge("a&b", "<100%>", "#2ea44f")
+        ET.fromstring(escaped)
+        self.assertIn("a&amp;b", escaped)
+        self.assertIn("&lt;100%&gt;", escaped)
+
+    def test_generate_allure_report_sh_bundles_pages_assets_and_caps_history(self) -> None:
+        raw_dir = self.tmp / "raw" / "shard"
+        allure_results.parse_cargo_test_output(
+            output_text=(
+                "     Running unittests src/main.rs (bin)\n"
+                "running 1 test\n"
+                "test ok_one ... ok\n"
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n"
+            ),
+            output_dir=raw_dir,
+            parent_suite="Rust VM Daemon",
+        )
+        history_file = self.tmp / "history.jsonl"
+        history_file.write_text(
+            "\n".join(json.dumps({"uuid": f"run-{i}"}) for i in range(5)) + "\n",
+            encoding="utf-8",
+        )
+        stub_report_sh = self.tmp / "fake-allure-report.sh"
+        stub_report_sh.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            'out=""\n'
+            "while [ $# -gt 0 ]; do\n"
+            '  if [ "$1" = "--output" ]; then out="$2"; shift 2; else shift; fi\n'
+            "done\n"
+            'mkdir -p "$out"\n'
+            'printf "<html><body>ok</body></html>\\n" > "$out/index.html"\n',
+            encoding="utf-8",
+        )
+        stub_report_sh.chmod(0o755)
+
+        merged_dir = self.tmp / "merged"
+        report_dir = self.tmp / "report"
+        step_summary = self.tmp / "summary.md"
+        gh_output = self.tmp / "output.txt"
+        env = {
+            **os.environ,
+            "ALLURE_RAW_DIR": str(self.tmp / "raw"),
+            "ALLURE_MERGED_DIR": str(merged_dir),
+            "ALLURE_REPORT_DIR": str(report_dir),
+            "ALLURE_HISTORY_FILE": str(history_file),
+            "ALLURE_HISTORY_MAX_ENTRIES": "3",
+            "ALLURE_PAGES_URL": "https://appevol.github.io/agents-term",
+            "ALLURE_FETCH_HISTORY": "false",
+            "ALLURE_REPORT_SCRIPT": str(stub_report_sh),
+            "GITHUB_STEP_SUMMARY": str(step_summary),
+            "GITHUB_OUTPUT": str(gh_output),
+        }
+        proc = subprocess.run(
+            ["bash", str(GENERATE_CI_SH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue((report_dir / "index.html").is_file())
+        self.assertTrue((report_dir / ".nojekyll").is_file())
+        self.assertTrue((report_dir / "metrics.json").is_file())
+        for badge in ("tests.svg", "pass-rate.svg", "suites.svg", "duration.svg"):
+            self.assertTrue((report_dir / "badges" / badge).is_file())
+        bundled_history = (report_dir / "history.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(bundled_history), 3)
+        self.assertIn("run-4", bundled_history[-1])
+        self.assertIn("has_report=true", gh_output.read_text(encoding="utf-8"))
+        self.assertIn("https://appevol.github.io/agents-term/", step_summary.read_text(encoding="utf-8"))
 
     def test_generate_allure_report_sh_handles_zero_results_without_node(self) -> None:
         raw_dir = self.tmp / "empty-raw"
