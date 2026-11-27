@@ -274,6 +274,7 @@ private sealed interface ChatFeedItem {
         val messageId: String,
         val text: String,
         val usageSummary: String?,
+        val model: String?,
         val exitCode: Int? = null,
     ) : ChatFeedItem {
         override val contentType: String get() = "assistant_footer"
@@ -405,6 +406,7 @@ private fun appendAssistantStatusAndFooter(
                 messageId = message.id,
                 text = message.text,
                 usageSummary = usageSummary,
+                model = message.model,
                 exitCode = message.exitCode,
             ),
         )
@@ -471,6 +473,7 @@ fun ChatWorkspace(
     modifier: Modifier = Modifier,
     attachments: ComposerAttachments? = null,
     draft: TextFieldState = key(tab.id) { rememberTextFieldState() },
+    throughput: Map<String, String> = emptyMap(),
     keyboard: ComposerKeyboard = ComposerKeyboard.forAgent(tab.agent),
 ) {
     val listState = rememberSaveable(tab.id, saver = LazyListState.Saver) {
@@ -649,6 +652,7 @@ fun ChatWorkspace(
                         ) {
                             ChatFeedItemContent(
                                 item = item,
+                                throughput = throughput,
                                 tab = tab,
                                 markdownStyle = markdownStyle,
                                 onRetryFullAccess = onRetryFullAccess,
@@ -883,6 +887,7 @@ private fun UserMessageBubble(message: ChatMessage) {
 
 @Composable
 private fun ChatFeedItemContent(
+    throughput: Map<String, String>,
     item: ChatFeedItem,
     tab: TabRecord,
     markdownStyle: MarkdownStyle,
@@ -941,7 +946,7 @@ private fun ChatFeedItemContent(
         is ChatFeedItem.AssistantFooter -> AssistantMessageFooter(
             messageId = item.messageId,
             text = item.text,
-            usageSummary = item.usageSummary,
+            usageSummary = listOfNotNull(item.usageSummary, throughput[item.model]).joinToString(" · ").ifEmpty { null },
             exitCode = item.exitCode,
         )
     }

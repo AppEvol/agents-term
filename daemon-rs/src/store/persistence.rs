@@ -94,6 +94,7 @@ impl StoreFiles {
                 (
                     revision,
                     inner.active_tab_id.clone(),
+                    inner.throughput.clone(),
                     inner.tabs.clone(),
                     inner.closed_tabs.clone(),
                 )
@@ -142,10 +143,10 @@ impl StoreFiles {
             }
         }
 
-        if let Some((revision, active, tabs, closed)) = index {
+        if let Some((revision, active, throughput, tabs, closed)) = index {
             write_json(
                 &self.workspace_path(),
-                &json!({"schemaVersion": WORKSPACE_SCHEMA_VERSION, "activeTabId": active}),
+                &json!({"schemaVersion": WORKSPACE_SCHEMA_VERSION, "activeTabId": active, "throughput": throughput}),
             )?;
             let mut lines = Vec::new();
             for (group, status) in [(tabs, "open"), (closed, "closed")] {

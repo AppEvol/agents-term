@@ -1180,15 +1180,18 @@ async fn handle_ws(st: Arc<AppState>, socket: WebSocket) {
     let server_info = tokio::task::spawn_blocking(move || build_server_info(Some(&host)))
         .await
         .unwrap_or_else(|_| build_server_info(None));
-    let snapshot = json!({
-        "type": "snapshot",
-        "server": server_info,
-        "tabs": listing["tabs"],
-        "activeTabId": listing["activeTabId"],
-        "closedTabs": listing["closedTabs"],
-        "ts": now_ms(),
+    st.store.with_throughput(|rates| {
+        let snapshot = json!({
+            "throughput": rates,
+            "type": "snapshot",
+            "server": server_info,
+            "tabs": listing["tabs"],
+            "activeTabId": listing["activeTabId"],
+            "closedTabs": listing["closedTabs"],
+            "ts": now_ms(),
+        });
+        let _ = tx.send(snapshot.to_string());
     });
-    let _ = tx.send(snapshot.to_string());
 
     let writer_task = tokio::spawn(async move {
         let mut ping_interval = tokio::time::interval(PING_INTERVAL);

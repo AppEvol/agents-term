@@ -462,6 +462,14 @@ data class DeniedAction(
 )
 
 @JsonClass(generateAdapter = true)
+data class ModelThroughput(
+    val agent: String,
+    val model: String,
+    val tokensPerSecond: Double,
+    val expiresAt: Long,
+)
+
+@JsonClass(generateAdapter = true)
 data class UsageStats(
     val inputTokens: Int? = null,
     val outputTokens: Int? = null,
@@ -495,6 +503,7 @@ data class ChatMessage(
     val updatedAt: Long = 0L,
     val attachments: List<MessageAttachment> = emptyList(),
     val exitCode: Int? = null,
+    val model: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -889,6 +898,7 @@ data class WsServerEnvelope(
     val requestId: String? = null,
     val command: String? = null,
     val args: Map<String, Any?>? = null,
+    val throughput: List<ModelThroughput>? = null,
 )
 
 enum class ConnectionState {

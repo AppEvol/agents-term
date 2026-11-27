@@ -1,0 +1,2 @@
+- Chat usage stats and model selection show recent output tokens per second for each measured model.
+- Each rate covers the two hours ending at that model’s latest completed sample and expires after 48 hours of inactivity.

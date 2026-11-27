@@ -74,6 +74,7 @@ fun ModelPickerSheet(
     onSelectModel: (String?) -> Unit,
     onDismiss: () -> Unit,
     nowMs: Long = System.currentTimeMillis(),
+    throughput: Map<String, String> = emptyMap(),
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -93,6 +94,7 @@ fun ModelPickerSheet(
             onUpdateDaemon = onUpdateDaemon,
             onRefresh = onRefresh,
             onSelectModel = onSelectModel,
+            throughput = throughput,
             nowMs = nowMs,
         )
     }
@@ -111,6 +113,7 @@ internal fun ModelPickerSheetContent(
     onRefresh: () -> Unit,
     onSelectModel: (String?) -> Unit,
     nowMs: Long = System.currentTimeMillis(),
+    throughput: Map<String, String> = emptyMap(),
 ) {
     var filterQuery by remember { mutableStateOf("") }
     var customModelInput by remember {
@@ -118,12 +121,16 @@ internal fun ModelPickerSheetContent(
         mutableStateOf(if (isCustom) currentModel.orEmpty() else "")
     }
 
-    val filteredModels = remember(models, filterQuery) {
+    val availableModels = remember(models, throughput.keys, currentModel) {
+        val unlisted = throughput.keys - models.map { it.id }.toSet() - setOfNotNull(currentModel)
+        models + unlisted.map { AgentModelOption(id = it, name = it) }
+    }
+    val filteredModels = remember(availableModels, filterQuery) {
         val q = filterQuery.trim()
         if (q.isEmpty()) {
-            models
+            availableModels
         } else {
-            models.filter {
+            availableModels.filter {
                 it.id.contains(q, ignoreCase = true) ||
                     it.name.contains(q, ignoreCase = true) ||
                     (it.description?.contains(q, ignoreCase = true) == true)
@@ -249,6 +256,7 @@ internal fun ModelPickerSheetContent(
                 stringResource(R.string.model_picker_default_subtitle)
             },
             modelId = null,
+            throughput = throughput[defaultModel],
             usageBadge = defaultModel?.let { defId ->
                 formatInlineUsageBadge(findUsageForModel(defId, usageItems), nowMs)
             },
@@ -263,6 +271,7 @@ internal fun ModelPickerSheetContent(
                 title = currentModel,
                 subtitle = stringResource(R.string.model_picker_custom_active),
                 modelId = currentModel,
+                throughput = throughput[currentModel],
                 usageBadge = formatInlineUsageBadge(findUsageForModel(currentModel, usageItems), nowMs),
                 selected = true,
                 onClick = { onSelectModel(currentModel) },
@@ -275,6 +284,7 @@ internal fun ModelPickerSheetContent(
                 title = model.name,
                 subtitle = model.description,
                 modelId = model.id.takeIf { it != model.name },
+                throughput = throughput[model.id],
                 usageBadge = formatInlineUsageBadge(findUsageForModel(model.id, usageItems), nowMs),
                 selected = currentModel == model.id,
                 onClick = { onSelectModel(model.id) },
@@ -522,6 +532,7 @@ private fun ModelOptionCard(
     subtitle: String?,
     modelId: String?,
     usageBadge: String?,
+    throughput: String?,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -582,6 +593,9 @@ private fun ModelOptionCard(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+                if (throughput != null) {
+                    Text(text = throughput, style = MaterialTheme.typography.labelSmall)
                 }
                 if (!usageBadge.isNullOrBlank()) {
                     Text(

@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::{fs, io};
 
 mod persistence;
+mod throughput;
 use persistence::{SaveRequest, StoreFiles};
 
 use crate::attachments::normalize_attachments;
@@ -132,6 +133,7 @@ pub fn validate_working_dir(raw: &str) -> Result<String, String> {
 
 #[derive(Default)]
 struct StoreInner {
+    throughput: throughput::Throughput,
     tabs: Vec<Value>,
     closed_tabs: Vec<Value>,
     active_tab_id: Option<String>,
@@ -272,6 +274,11 @@ impl StateStore {
         loop {
             interval.tick().await;
             self.prune_expired_closed_tabs();
+            let mut inner = self.inner.lock().unwrap();
+            if inner.throughput.prune(now_ms()) {
+                inner.mark_index_dirty();
+                self.schedule_save();
+            }
         }
     }
 
@@ -298,14 +305,20 @@ impl StateStore {
         let mut index_dirty = false;
         let mut dirty_message_tabs: HashSet<String> = HashSet::new();
 
-        let saved_active_tab_id: Option<String> = fs::read_to_string(&ws_path)
+        let workspace = fs::read_to_string(&ws_path)
             .ok()
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-            .and_then(|v| {
-                v.get("activeTabId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            });
+            .unwrap_or_default();
+        let saved_active_tab_id = strip_or_none(workspace.get("activeTabId"));
+        let mut throughput: throughput::Throughput = workspace
+            .get("throughput")
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        if throughput.prune(now) {
+            index_dirty = true;
+            recovered_any = true;
+        }
 
         let mut tabs: Vec<Value> = Vec::new();
         let mut closed_tabs: Vec<Value> = Vec::new();
@@ -480,6 +493,7 @@ impl StateStore {
         }
 
         let mut inner = self.inner.lock().unwrap();
+        inner.throughput = throughput;
         inner.tabs = tabs;
         inner.closed_tabs = closed_tabs;
         inner.active_tab_id = active_tab_id;
@@ -512,6 +526,33 @@ impl StateStore {
             .send(SaveRequest::Flush(reply))
             .map_err(io::Error::other)?;
         result.recv().map_err(io::Error::other)?
+    }
+
+    pub fn with_throughput(&self, send: impl FnOnce(Vec<Value>)) {
+        let inner = self.inner.lock().unwrap();
+        send(inner.throughput.rates(now_ms()));
+    }
+
+    pub fn record_throughput(
+        &self,
+        agent: &str,
+        model: &str,
+        tokens: u64,
+        duration_ms: u64,
+        send: impl FnOnce(Vec<Value>),
+    ) {
+        if duration_ms == 0 {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let now = now_ms();
+        inner.throughput.prune(now);
+        inner
+            .throughput
+            .record(agent, model, now, tokens, duration_ms);
+        inner.mark_index_dirty();
+        send(inner.throughput.rates(now));
+        self.schedule_save();
     }
 
     pub fn list_tabs(&self) -> Value {
