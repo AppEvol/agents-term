@@ -140,11 +140,17 @@ struct StoreInner {
     messages_by_tab: HashMap<String, Vec<Value>>,
     revision: u64,
     index_revision: Option<u64>,
+    throughput_revision: Option<u64>,
     dirty_message_tabs: HashMap<String, u64>,
     deleted_tab_dirs: HashSet<String>,
 }
 
 impl StoreInner {
+    fn mark_throughput_dirty(&mut self) {
+        self.revision += 1;
+        self.throughput_revision = Some(self.revision);
+    }
+
     fn mark_index_dirty(&mut self) {
         self.revision += 1;
         self.index_revision = Some(self.revision);
@@ -276,7 +282,7 @@ impl StateStore {
             self.prune_expired_closed_tabs();
             let mut inner = self.inner.lock().unwrap();
             if inner.throughput.prune(now_ms()) {
-                inner.mark_index_dirty();
+                inner.mark_throughput_dirty();
                 self.schedule_save();
             }
         }
@@ -296,12 +302,22 @@ impl StateStore {
     fn load(&self, files: &StoreFiles) -> bool {
         let index_path = files.index_path();
         let ws_path = files.workspace_path();
-        if !index_path.exists() && !ws_path.exists() {
-            return false;
-        }
-
         let now = now_ms();
-        let mut recovered_any = false;
+        let mut throughput: throughput::Throughput = fs::read(files.throughput_path())
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default();
+        let mut recovered_any = throughput.prune(now);
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.throughput = throughput;
+            if recovered_any {
+                inner.mark_throughput_dirty();
+            }
+        }
+        if !index_path.exists() && !ws_path.exists() {
+            return recovered_any;
+        }
         let mut index_dirty = false;
         let mut dirty_message_tabs: HashSet<String> = HashSet::new();
 
@@ -310,16 +326,6 @@ impl StateStore {
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .unwrap_or_default();
         let saved_active_tab_id = strip_or_none(workspace.get("activeTabId"));
-        let mut throughput: throughput::Throughput = workspace
-            .get("throughput")
-            .cloned()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
-        if throughput.prune(now) {
-            index_dirty = true;
-            recovered_any = true;
-        }
-
         let mut tabs: Vec<Value> = Vec::new();
         let mut closed_tabs: Vec<Value> = Vec::new();
 
@@ -493,7 +499,6 @@ impl StateStore {
         }
 
         let mut inner = self.inner.lock().unwrap();
-        inner.throughput = throughput;
         inner.tabs = tabs;
         inner.closed_tabs = closed_tabs;
         inner.active_tab_id = active_tab_id;
@@ -550,7 +555,7 @@ impl StateStore {
         inner
             .throughput
             .record(agent, model, now, tokens, duration_ms);
-        inner.mark_index_dirty();
+        inner.mark_throughput_dirty();
         send(inner.throughput.rates(now));
         self.schedule_save();
     }
