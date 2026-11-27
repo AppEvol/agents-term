@@ -53,6 +53,8 @@ Other subcommands:
 - `serve [--host HOST] [--port PORT] [--no-auth]` — run the daemon in the foreground (default subcommand; binds Tailscale IPv4 unless `--host` is given; port defaults to `$AGENT_TERMINAL_PORT` or `7501`).
 - `install [--host HOST] [--port PORT] [--force-restart]` — configure/restart the user service or detached daemon and verify health.
 - `ensure-running [--host HOST] [--port PORT]` — start the daemon if not already running (used by `@reboot` crontab).
+- `update [<version>] [--expected-hash HASH] [--stage-only] [--force] [--host HOST] [--port PORT]` — download a validated release tag (or `latest`), verify its `.sha256` checksum and `version --hash-only`, back up the current healthy binary to `~/.agents-term/bin/agentsterm-daemon.prev`, atomically install, and run `install` with automatic rollback on failure. Set `AGENTSTERM_DISABLE_SELF_UPDATE=1` to disable self-update.
+- `rollback [--host HOST] [--port PORT]` — restore `~/.agents-term/bin/agentsterm-daemon.prev` to `~/.agents-term/bin/agentsterm-daemon` and restart the service. Works both as `agentsterm-daemon rollback` and directly via `~/.agents-term/bin/agentsterm-daemon.prev rollback` (breakglass recovery if the newly installed binary cannot start).
 - `app ...` — inspect or drive the connected Android app (also installed as the `~/.agents-term/bin/agents_term_app_cli` symlink; see [Live Debugging](live-debugging.md)).
 
 To run tests for the daemon and shell installer from source, see [Development, Testing & Releases](development.md).

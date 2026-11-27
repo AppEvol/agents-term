@@ -201,6 +201,8 @@ struct ShellSessionEntry {
     shell: Arc<tokio::sync::Mutex<PersistentShell>>,
 }
 
+pub type OnIdleFn = Arc<dyn Fn() + Send + Sync>;
+
 #[derive(Clone)]
 pub struct AgentRunner {
     store: StateStore,
@@ -211,6 +213,7 @@ pub struct AgentRunner {
     summary_filters: Arc<Mutex<HashMap<String, TaskSummaryStreamFilter>>>,
     done_filters: Arc<Mutex<HashMap<String, WorkDoneStreamFilter>>>,
     shutting_down: Arc<AtomicBool>,
+    on_idle: Arc<Mutex<Option<OnIdleFn>>>,
 }
 
 impl AgentRunner {
@@ -224,6 +227,30 @@ impl AgentRunner {
             summary_filters: Arc::new(Mutex::new(HashMap::new())),
             done_filters: Arc::new(Mutex::new(HashMap::new())),
             shutting_down: Arc::new(AtomicBool::new(false)),
+            on_idle: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn set_on_idle(&self, cb: Arc<dyn Fn() + Send + Sync>) {
+        *self.on_idle.lock().unwrap() = Some(cb);
+    }
+
+    pub fn active_tab_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.active.lock().unwrap().keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    fn notify_if_idle(&self) {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return;
+        }
+        if !self.active.lock().unwrap().is_empty() {
+            return;
+        }
+        let cb = self.on_idle.lock().unwrap().clone();
+        if let Some(cb) = cb {
+            cb();
         }
     }
 
@@ -637,6 +664,7 @@ impl AgentRunner {
             turn.send_signal(libc::SIGKILL);
         }
         self.reset_shell_session(tab_id);
+        self.notify_if_idle();
     }
 
     fn new_message(tab_id: &str, role: &str, text: &str, status: &str, ts: i64) -> Value {
@@ -1454,6 +1482,7 @@ impl AgentRunner {
         if should_drain && has_queue {
             self.drain_and_start_queued(tab_id);
         }
+        self.notify_if_idle();
     }
 
     #[allow(clippy::too_many_arguments)]

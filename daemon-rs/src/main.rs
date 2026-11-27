@@ -11,6 +11,7 @@ mod runner;
 mod server;
 mod shell;
 mod store;
+mod update;
 mod usage;
 mod util;
 
@@ -23,11 +24,13 @@ use crate::config::{
     rotate_token, save_config, BUILD_HASH, SERVER_VERSION,
 };
 
-const USAGE: &str = "usage: agentsterm-daemon [serve|install|ensure-running|pairing|rotate-token|version|app] [options]\n\
+const USAGE: &str = "usage: agentsterm-daemon [serve|install|ensure-running|update|rollback|pairing|rotate-token|version|app] [options]\n\
 \n\
   serve           run the daemon (default); binds the Tailscale IPv4 unless --host is given\n\
   install         install/update systemd --user or detached+@reboot service and verify health\n\
   ensure-running  start the daemon if not already running (used by @reboot crontab)\n\
+  update          download, verify, and install a daemon release (<version>|latest)\n\
+  rollback        restore the previous known-good daemon binary (.prev) and restart\n\
   pairing         print the herdr://connect pairing URI for the Android app\n\
   rotate-token    generate a new bearer token (restart the daemon to apply)\n\
   version         print the daemon version and build hash (--hash-only for hash only)\n\
@@ -75,6 +78,15 @@ fn main() -> ExitCode {
                 libc::signal(libc::SIGPIPE, libc::SIG_DFL);
             }
             return ExitCode::from(app_cli::run_app_cli("agentsterm-daemon app", &argv[1..]) as u8);
+        }
+        if first == "update" {
+            return ExitCode::from(update::run_update_cli(&argv[1..], default_port()) as u8);
+        }
+        if first == "rollback" {
+            return ExitCode::from(update::run_rollback_cli(&argv[1..], default_port()) as u8);
+        }
+        if first == "rollback-watch" {
+            return ExitCode::from(update::run_rollback_watch_cli(&argv[1..], default_port()) as u8);
         }
     }
 
@@ -166,7 +178,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "serve" => {
-            let _daemon_lock = match acquire_daemon_lock() {
+            let daemon_lock = match acquire_daemon_lock() {
                 Ok(lock) => lock,
                 Err(err) => {
                     eprintln!("Failed to acquire daemon lock: {err}");
@@ -187,17 +199,56 @@ fn main() -> ExitCode {
                 cfg.port = Some(port);
                 let _ = save_config(&cfg);
             }
+
+            let mut serve_args = vec![
+                "serve".to_string(),
+                "--host".to_string(),
+                bind_host.clone(),
+                "--port".to_string(),
+                port.to_string(),
+            ];
+            if no_auth {
+                serve_args.push("--no-auth".to_string());
+            }
+
+            match update::check_startup_crash_loop_guard(&serve_args) {
+                Ok(Some(plan)) => {
+                    drop(daemon_lock);
+                    if let Err(err) = plan.exec() {
+                        eprintln!("Failed to execv rollback daemon: {err}");
+                        return ExitCode::from(1);
+                    }
+                    return ExitCode::SUCCESS;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    eprintln!("Startup crash-loop rollback failed: {err}");
+                }
+            }
+
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .expect("failed to build tokio runtime");
-            match rt.block_on(server::run_daemon(
+            let run_result = rt.block_on(server::run_daemon(
                 bind_host.clone(),
                 port,
                 cfg.token,
                 no_auth,
-            )) {
-                Ok(()) => ExitCode::SUCCESS,
+            ));
+            drop(rt);
+            drop(daemon_lock);
+
+            match run_result {
+                Ok(Some(plan)) => {
+                    if let Err(err) = plan.exec() {
+                        eprintln!("Failed to execv updated daemon: {err}");
+                        ExitCode::from(1)
+                    } else {
+                        ExitCode::SUCCESS
+                    }
+                }
+                Ok(None) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("Failed to start daemon on {bind_host}:{port}: {err}");
                     ExitCode::from(1)

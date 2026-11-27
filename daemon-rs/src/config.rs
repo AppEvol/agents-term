@@ -78,6 +78,30 @@ pub fn bin_dir() -> PathBuf {
     agents_term_home().join("bin")
 }
 
+pub fn installed_daemon_path() -> PathBuf {
+    bin_dir().join("agentsterm-daemon")
+}
+
+pub fn prev_daemon_path() -> PathBuf {
+    bin_dir().join("agentsterm-daemon.prev")
+}
+
+pub fn staged_daemon_path() -> PathBuf {
+    bin_dir().join(".agentsterm-daemon.staged")
+}
+
+pub fn update_pending_path() -> PathBuf {
+    agents_term_home().join("update-pending.json")
+}
+
+pub fn update_prev_meta_path() -> PathBuf {
+    agents_term_home().join("update-prev.json")
+}
+
+pub fn update_last_error_path() -> PathBuf {
+    agents_term_home().join("update-last-error.json")
+}
+
 pub fn config_path() -> PathBuf {
     agents_term_home().join("config.json")
 }
@@ -553,6 +577,7 @@ pub fn build_server_info(bind_host: Option<&str>) -> Value {
             "maxRows": PTY_MAX_ROWS,
             "bufferBytes": PTY_BUFFER_BYTES,
         },
+        "selfUpdate": crate::update::self_update_info(),
     })
 }
 

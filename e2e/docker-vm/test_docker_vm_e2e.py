@@ -1670,6 +1670,164 @@ grep -q "restart agentsterm-daemon.service" "$SCRATCH/systemctl.log"
             res.returncode, 0, f"systemd --user E2E check failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
         )
 
+    def test_13_self_update_cli_http_and_rollback(self) -> None:
+        self.ensure_bootstrapped()
+
+        v2_hash = "2222222222222222222222222222222222222222"
+        st, info_before = self.api("GET", "/api/info")
+        self.assertEqual(st, 200)
+        self.assertTrue(info_before["selfUpdate"]["supported"])
+        self.assertFalse(info_before["selfUpdate"]["rollbackAvailable"])
+
+        # Save original release artifacts and publish a valid v2 wrapper binary to the local mirror
+        # served by vm-entrypoint.sh (exercising curl on curl-distros and BusyBox/GNU wget on wget-only distros).
+        prep = self.docker_exec(
+            f"""
+set -eu
+RAW_ARCH=$(uname -m)
+case "$RAW_ARCH" in
+  x86_64|amd64) ARCH="x86_64" ;;
+  aarch64|arm64) ARCH="aarch64" ;;
+  *) exit 1 ;;
+esac
+ASSET="agentsterm-daemon-linux-$ARCH"
+rm -rf /tmp/orig-release && mkdir -p /tmp/orig-release
+cp -a /opt/agentsterm-release/. /tmp/orig-release/
+cp "$HOME/.agents-term/bin/agentsterm-daemon" /tmp/real-agentsterm-daemon-v1
+chmod 755 /tmp/real-agentsterm-daemon-v1
+cat > "/opt/agentsterm-release/$ASSET" <<'SH'
+#!/bin/sh
+if [ "${{1:-}}" = "version" ] && [ "${{2:-}}" = "--hash-only" ]; then
+  echo "{v2_hash}"
+  exit 0
+fi
+if [ "${{1:-}}" = "version" ]; then
+  echo "0.3.0 {v2_hash}"
+  exit 0
+fi
+export AGENTSTERM_DAEMON_COMMIT="{v2_hash}"
+exec /tmp/real-agentsterm-daemon-v1 "$@"
+SH
+chmod 755 "/opt/agentsterm-release/$ASSET"
+(cd /opt/agentsterm-release && sha256sum "$ASSET" > "$ASSET.sha256")
+""",
+            timeout=30,
+        )
+        self.assertEqual(prep.returncode, 0, prep.stdout + prep.stderr)
+
+        marker_tab_id: Optional[str] = None
+        try:
+            # 1. CLI `update --stage-only` and full CLI `update` (curl or wget depending on distro).
+            stage_res = self.docker_exec(
+                f"$HOME/.agents-term/bin/agentsterm-daemon update v0.3.2-2222222 "
+                f"--expected-hash {v2_hash} --stage-only",
+                timeout=45,
+            )
+            self.assertEqual(stage_res.returncode, 0, stage_res.stdout + stage_res.stderr)
+            self.assertEqual(self.docker_exec("test -x ~/.agents-term/bin/.agentsterm-daemon.staged").returncode, 0)
+
+            cli_upd = self.docker_exec(
+                f"$HOME/.agents-term/bin/agentsterm-daemon update v0.3.2-2222222 "
+                f"--expected-hash {v2_hash} --host 127.0.0.1 --port {self.daemon_port}",
+                timeout=45,
+            )
+            self.assertEqual(cli_upd.returncode, 0, cli_upd.stdout + cli_upd.stderr)
+            info_v2 = self.wait_for_daemon_healthy()
+            self.assertEqual(info_v2["commit"], v2_hash)
+            self.assertTrue(info_v2["selfUpdate"]["rollbackAvailable"])
+            self.assertEqual(info_v2["selfUpdate"]["previousBuildHash"], self.binary_hash)
+
+            # 2. Breakglass CLI rollback via `~/.agents-term/bin/agentsterm-daemon.prev rollback`.
+            cli_rb = self.docker_exec(
+                f"$HOME/.agents-term/bin/agentsterm-daemon.prev rollback --host 127.0.0.1 --port {self.daemon_port}",
+                timeout=45,
+            )
+            self.assertEqual(cli_rb.returncode, 0, cli_rb.stdout + cli_rb.stderr)
+            info_v1 = self.wait_for_daemon_healthy()
+            self.assertEqual(info_v1["commit"], self.binary_hash)
+            self.assertFalse(info_v1["selfUpdate"]["rollbackAvailable"])
+
+            # 3. HTTP `POST /api/daemon/update` + WS `daemon_update_status` + in-place execv() preserving PID & tab.
+            st, created = self.api(
+                "POST",
+                "/api/tabs",
+                {"agent": "shell", "title": "Self-Update Persist", "cwd": "/home/vmuser"},
+            )
+            self.assertEqual(st, 200)
+            marker_tab_id = created["tab"]["id"]
+            self.assertEqual(
+                self.api("POST", f"/api/tabs/{marker_tab_id}/messages", {"text": "echo E2E_EXECV_PERSIST"})[0],
+                200,
+            )
+            self.wait_for_tab_idle(marker_tab_id)
+
+            pid_before = self.docker_exec("cat ~/.agents-term/daemon.lock").stdout.strip()
+            self.assertTrue(pid_before.isdigit())
+
+            ws = MinimalWsClient("127.0.0.1", self.daemon_port, "/ws", self.token)
+            try:
+                self.assertEqual(ws.recv_json()["type"], "snapshot")
+                upd_st, upd_body = self.api(
+                    "POST",
+                    "/api/daemon/update",
+                    {"version": "v0.3.2-2222222", "expectedHash": v2_hash},
+                )
+                self.assertEqual(upd_st, 202, f"Unexpected status {upd_st}: {upd_body}")
+                ev = ws.recv_until(lambda e: e.get("type") == "daemon_update_status", timeout=10.0)
+                self.assertIn("update", ev)
+                self.assertIn("state", ev["update"])
+            finally:
+                ws.close()
+
+            deadline = time.time() + 15.0
+            while time.time() < deadline:
+                try:
+                    st, info = self.api("GET", "/api/info")
+                    if st == 200 and info.get("commit") == v2_hash:
+                        break
+                except OSError:
+                    pass
+                time.sleep(0.2)
+            info_after_http = self.wait_for_daemon_healthy()
+            self.assertEqual(info_after_http["commit"], v2_hash)
+            self.assertTrue(info_after_http["selfUpdate"]["rollbackAvailable"])
+            self.assertEqual(info_after_http["selfUpdate"]["previousBuildHash"], self.binary_hash)
+            pid_after_http = self.docker_exec("cat ~/.agents-term/daemon.lock").stdout.strip()
+            self.assertEqual(pid_before, pid_after_http, "in-place execv() must preserve daemon PID")
+
+            # 4. HTTP `POST /api/daemon/rollback` reverts in-place while preserving PID and tab history.
+            rb_st, rb_body = self.api("POST", "/api/daemon/rollback", {})
+            self.assertEqual(rb_st, 202, f"Unexpected rollback status {rb_st}: {rb_body}")
+
+            deadline = time.time() + 15.0
+            while time.time() < deadline:
+                try:
+                    st, info = self.api("GET", "/api/info")
+                    if st == 200 and info.get("commit") == self.binary_hash:
+                        break
+                except OSError:
+                    pass
+                time.sleep(0.2)
+            info_after_rb = self.wait_for_daemon_healthy()
+            self.assertEqual(info_after_rb["commit"], self.binary_hash)
+            self.assertFalse(info_after_rb["selfUpdate"]["rollbackAvailable"])
+            pid_after_rb = self.docker_exec("cat ~/.agents-term/daemon.lock").stdout.strip()
+            self.assertEqual(pid_before, pid_after_rb, "rollback execv() must preserve daemon PID")
+
+            st, msgs_resp = self.api("GET", f"/api/tabs/{marker_tab_id}/messages")
+            self.assertEqual(st, 200)
+            self.assertTrue(any("E2E_EXECV_PERSIST" in m.get("text", "") for m in msgs_resp["messages"]))
+        finally:
+            if marker_tab_id:
+                try:
+                    self.api("DELETE", f"/api/tabs/{marker_tab_id}")
+                except OSError:
+                    pass
+            self.docker_exec(
+                "if [ -d /tmp/orig-release ]; then cp -a /tmp/orig-release/. /opt/agentsterm-release/ && rm -rf /tmp/orig-release; fi; "
+                "rm -f /tmp/real-agentsterm-daemon-v1"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
