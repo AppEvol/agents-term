@@ -1,5 +1,12 @@
 # AgentsTerm
 
+[![Android CI](https://github.com/AppEvol/agents-term/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AppEvol/agents-term/actions/workflows/ci.yml)
+[![Tests](https://appevol.github.io/agents-term/badges/tests.svg)](https://appevol.github.io/agents-term/)
+[![Pass Rate](https://appevol.github.io/agents-term/badges/pass-rate.svg)](https://appevol.github.io/agents-term/)
+[![Suites](https://appevol.github.io/agents-term/badges/suites.svg)](https://appevol.github.io/agents-term/)
+[![Test Duration](https://appevol.github.io/agents-term/badges/duration.svg)](https://appevol.github.io/agents-term/)
+[![Allure 3 Dashboard](https://img.shields.io/badge/Allure%203-Test%20Dashboard-6f42c1)](https://appevol.github.io/agents-term/)
+
 Android app for running persistent coding agents (**Antigravity (`agy`)**, **Claude Code (`claude`)**, **Codex (`codex`)**, and **Shell**) on your Linux VM over [Tailscale](https://tailscale.com/).
 
 Sessions run inside a lightweight daemon on your VM, so agents keep working even when you leave the app or lock your phone.
@@ -63,3 +70,4 @@ For token rotation, manual daemon setup, and other VM issues, see [VM Daemon Set
 - [Architecture](docs/architecture.md) — System topology, `$HOME/.agents-term/` layout, and tab storage
 - [Development & Releases](docs/development.md) — Building the Android APK, running tests, static checks, and CI releases
 - [Live Debugging](docs/live-debugging.md) — Inspecting and driving the app from VM agents (`agents_term_app_cli`)
+- [Test Dashboard (Allure 3)](https://appevol.github.io/agents-term/) — Live test results, per-suite metrics, and multi-run trend history from `main`

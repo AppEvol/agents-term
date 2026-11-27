@@ -1,0 +1,1 @@
+- Published the Allure 3 test report (`allure-report/`) to GitHub Pages (`https://appevol.github.io/agents-term/`) on `main` runs with 30-run `history.jsonl` trend retention (`publish-allure-pages` job) and added self-hosted SVG test metric badges (`tests`, `pass rate`, `suites`, `test time`) plus a live dashboard link to `README.md`.

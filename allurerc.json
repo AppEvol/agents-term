@@ -1,6 +1,8 @@
 {
   "name": "AgentsTerm Test Report",
   "output": "./allure-report",
+  "historyPath": "./.allure-history/history.jsonl",
+  "appendHistory": true,
   "plugins": {
     "awesome": {
       "options": {
