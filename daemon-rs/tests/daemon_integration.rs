@@ -1045,9 +1045,13 @@ fn split_per_tab_storage_rewrites_only_dirty_tab_and_cleans_orphans() {
         include_bytes!("../../docs/agents_debugging_tips.md").as_slice()
     );
 
-    // Verify /api/info system prompt references custom AGENTSTERM_HOME and read-only rule.
+    // Verify /api/info exposes protocolVersion/commit/buildHash/runtime and custom system prompt.
     let (st, info) = daemon.api("GET", "/api/info", None);
     assert_eq!(st, 200);
+    assert_eq!(info["protocolVersion"].as_u64(), Some(1));
+    assert_eq!(info["runtime"].as_str(), Some("rust"));
+    assert!(!info["commit"].as_str().unwrap_or("").is_empty());
+    assert!(!info["buildHash"].as_str().unwrap_or("").is_empty());
     let sp = info["defaultSystemPrompt"].as_str().unwrap_or("");
     assert!(sp.contains(
         &custom_app_home

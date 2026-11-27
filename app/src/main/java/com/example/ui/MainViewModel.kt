@@ -122,6 +122,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _showConnectScreen = MutableStateFlow(!settings.loadConnection().isValid)
     val showConnectScreen: StateFlow<Boolean> = _showConnectScreen.asStateFlow()
 
+    private val _preferSshModeForConnect = MutableStateFlow(false)
+    val preferSshModeForConnect: StateFlow<Boolean> = _preferSshModeForConnect.asStateFlow()
+
     private val _showSettingsScreen = MutableStateFlow(false)
     val showSettingsScreen: StateFlow<Boolean> = _showSettingsScreen.asStateFlow()
 
@@ -267,14 +270,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _pendingSshAutofill.value = null
     }
 
-    fun openConnectionSettings() {
+    fun openConnectionSettings(preferSsh: Boolean = false) {
         _sshProfile.value = settings.loadSshProfile()
+        _preferSshModeForConnect.value = preferSsh
         _showSettingsScreen.value = false
         _showConnectScreen.value = true
     }
 
+    fun openDaemonUpdate() = openConnectionSettings(preferSsh = true)
+
     fun closeConnectionSettingsIfConfigured() {
         if (state.value.config.isValid) {
+            _preferSshModeForConnect.value = false
             _showConnectScreen.value = false
         }
     }
@@ -557,10 +564,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun appendBootstrapLog(line: String) {
         debugRecorder.record("ssh", "bootstrap_log", line)
-        _bootstrapState.update { cur ->
-            val nextLogs = (cur.logs + line).takeLast(MAX_BOOTSTRAP_LOG_LINES)
-            cur.copy(logs = nextLogs)
-        }
+        _bootstrapState.update { cur -> cur.copy(logs = (cur.logs + line).takeLast(MAX_BOOTSTRAP_LOG_LINES)) }
     }
 
     fun reconnectNow() {
@@ -568,20 +572,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repo.connect()
     }
 
-    fun selectTab(tabId: String) {
-        repo.selectTab(tabId)
-    }
+    fun selectTab(tabId: String) = repo.selectTab(tabId)
 
     fun renameTab(tabId: String, newTitle: String) {
-        viewModelScope.launch {
-            repo.updateTab(tabId, UpdateTabRequest(title = newTitle))
-        }
+        viewModelScope.launch { repo.updateTab(tabId, UpdateTabRequest(title = newTitle)) }
     }
 
     fun updatePermissionMode(tabId: String, mode: String) {
-        viewModelScope.launch {
-            repo.updateTab(tabId, UpdateTabRequest(permissionMode = mode))
-        }
+        viewModelScope.launch { repo.updateTab(tabId, UpdateTabRequest(permissionMode = mode)) }
     }
 
     fun updateTabModel(
@@ -589,12 +587,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         model: String?,
         onUpdated: ((com.example.data.TabRecord) -> Unit)? = null,
     ) {
-        viewModelScope.launch {
-            val res = repo.updateTabModel(tabId, model)
-            res.onSuccess { updated ->
-                onUpdated?.invoke(updated)
-            }
-        }
+        viewModelScope.launch { repo.updateTabModel(tabId, model).onSuccess { onUpdated?.invoke(it) } }
     }
 
     fun updateTabSystemPrompt(
@@ -602,12 +595,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         systemPrompt: String?,
         onUpdated: ((com.example.data.TabRecord) -> Unit)? = null,
     ) {
-        viewModelScope.launch {
-            val res = repo.updateTabSystemPrompt(tabId, systemPrompt)
-            res.onSuccess { updated ->
-                onUpdated?.invoke(updated)
-            }
-        }
+        viewModelScope.launch { repo.updateTabSystemPrompt(tabId, systemPrompt).onSuccess { onUpdated?.invoke(it) } }
     }
 
     fun refreshModelsForAgent(agent: String, forceRefresh: Boolean = false) {
@@ -622,13 +610,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteTab(
-        tabId: String,
-        onDeleted: ((com.example.data.TabRecord?) -> Unit)? = null,
-    ) {
+    fun deleteTab(tabId: String, onDeleted: ((com.example.data.TabRecord?) -> Unit)? = null) {
         viewModelScope.launch {
-            val res = repo.deleteTab(tabId)
-            res.onSuccess { archived ->
+            repo.deleteTab(tabId).onSuccess { archived ->
                 ptySessions.remove(tabId)
                 onDeleted?.invoke(archived)
             }
@@ -646,35 +630,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun reviveClosedTab(
-        tabId: String,
-        onRevived: ((com.example.data.TabRecord) -> Unit)? = null,
-    ) {
+    fun reviveClosedTab(tabId: String, onRevived: ((com.example.data.TabRecord) -> Unit)? = null) {
         if (_revivingTabId.value != null) return
         viewModelScope.launch {
             _revivingTabId.value = tabId
             try {
-                val res = repo.reviveClosedTab(tabId)
-                res.onSuccess { revived ->
-                    onRevived?.invoke(revived)
-                }
+                repo.reviveClosedTab(tabId).onSuccess { onRevived?.invoke(it) }
             } finally {
                 _revivingTabId.value = null
             }
         }
     }
 
-    fun updateTabStatus(
-        tabId: String,
-        status: String,
-        onUpdated: ((com.example.data.TabRecord) -> Unit)? = null,
-    ) {
-        viewModelScope.launch {
-            val res = repo.updateTabStatus(tabId, status)
-            res.onSuccess { updated ->
-                onUpdated?.invoke(updated)
-            }
-        }
+    fun updateTabStatus(tabId: String, status: String, onUpdated: ((com.example.data.TabRecord) -> Unit)? = null) {
+        viewModelScope.launch { repo.updateTabStatus(tabId, status).onSuccess { onUpdated?.invoke(it) } }
     }
 
     fun closeFinishedTabs(

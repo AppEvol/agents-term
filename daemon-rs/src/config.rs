@@ -20,6 +20,10 @@ use crate::models::get_cached_agent_models;
 use crate::pty::{PTY_BUFFER_BYTES, PTY_MAX_COLS, PTY_MAX_ROWS, PTY_PROTOCOL_VERSION};
 
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Monotonically increasing API protocol version advertised in `/api/info` and WS `snapshot`.
+/// Bump whenever new daemon endpoints or required protocol capabilities are introduced so the
+/// Android app can detect older daemons and prompt the user to update.
+pub const PROTOCOL_VERSION: u32 = 1;
 pub const BUILD_HASH: &str = env!("AGENTSTERM_BUILD_HASH");
 pub const EMBEDDED_LIVE_DEBUGGING_MD: &str = include_str!("../../docs/live-debugging.md");
 
@@ -557,6 +561,7 @@ pub fn build_server_info(bind_host: Option<&str>) -> Value {
     let commit = daemon_commit();
     json!({
         "version": SERVER_VERSION,
+        "protocolVersion": PROTOCOL_VERSION,
         "commit": commit,
         "buildHash": BUILD_HASH,
         "runtime": "rust",

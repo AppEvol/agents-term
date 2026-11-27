@@ -2,6 +2,8 @@ package com.example.ui
 
 import com.example.data.AgentUsageUiState
 import com.example.data.HerdrRepository
+import com.example.data.formatDaemonRequestError
+import com.example.data.isUnknownEndpointError
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,7 +41,8 @@ class AgentUsageController(
                         AgentUsageUiState(
                             isLoading = false,
                             response = prev?.response,
-                            error = err.message ?: "Failed to check usage",
+                            error = formatDaemonRequestError(err, "Failed to check usage"),
+                            needsDaemonUpdate = err.isUnknownEndpointError,
                         )
                     },
                 )

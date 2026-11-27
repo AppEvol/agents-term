@@ -69,6 +69,7 @@ fun ModelPickerSheet(
     isRefreshing: Boolean,
     usageState: AgentUsageUiState = AgentUsageUiState(),
     onCheckUsage: () -> Unit = {},
+    onUpdateDaemon: (() -> Unit)? = null,
     onRefresh: () -> Unit,
     onSelectModel: (String?) -> Unit,
     onDismiss: () -> Unit,
@@ -89,6 +90,7 @@ fun ModelPickerSheet(
             isRefreshing = isRefreshing,
             usageState = usageState,
             onCheckUsage = onCheckUsage,
+            onUpdateDaemon = onUpdateDaemon,
             onRefresh = onRefresh,
             onSelectModel = onSelectModel,
             nowMs = nowMs,
@@ -105,6 +107,7 @@ internal fun ModelPickerSheetContent(
     isRefreshing: Boolean,
     usageState: AgentUsageUiState = AgentUsageUiState(),
     onCheckUsage: () -> Unit = {},
+    onUpdateDaemon: (() -> Unit)? = null,
     onRefresh: () -> Unit,
     onSelectModel: (String?) -> Unit,
     nowMs: Long = System.currentTimeMillis(),
@@ -213,6 +216,7 @@ internal fun ModelPickerSheetContent(
             ModelUsagePanel(
                 usageState = usageState,
                 nowMs = nowMs,
+                onUpdateDaemon = onUpdateDaemon,
             )
         }
 
@@ -336,6 +340,7 @@ internal fun ModelPickerSheetContent(
 private fun ModelUsagePanel(
     usageState: AgentUsageUiState,
     nowMs: Long,
+    onUpdateDaemon: (() -> Unit)? = null,
 ) {
     val resp = usageState.response
     val items = resp?.items.orEmpty()
@@ -400,6 +405,18 @@ private fun ModelUsagePanel(
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.testTag("model_picker_usage_error"),
                 )
+                if (usageState.needsDaemonUpdate && onUpdateDaemon != null) {
+                    ThemedOutlinedButton(
+                        onClick = onUpdateDaemon,
+                        shape = themedCorner(10.dp),
+                        modifier = Modifier.testTag("model_picker_usage_update_daemon_button"),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.action_update_vm_daemon),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
             }
 
             if (items.isNotEmpty()) {

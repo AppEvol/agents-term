@@ -17,16 +17,21 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 const val HTTP_UNAUTHORIZED = 401
 const val HTTP_FORBIDDEN = 403
+const val HTTP_NOT_FOUND = 404
 
 fun isAuthStatusCode(statusCode: Int?): Boolean = statusCode == HTTP_UNAUTHORIZED || statusCode == HTTP_FORBIDDEN
 
 class HttpStatusException(
     val statusCode: Int,
     message: String,
+    val isUnknownEndpoint: Boolean = isUnknownEndpointResponse(statusCode, message),
 ) : IOException(message)
 
 val Throwable.isAuthError: Boolean
     get() = this is HttpStatusException && isAuthStatusCode(statusCode)
+
+val Throwable.isUnknownEndpointError: Boolean
+    get() = this is HttpStatusException && isUnknownEndpoint
 
 internal fun recordWebSocketFailure(
     debugRecorder: DebugRecorder?,
@@ -92,6 +97,13 @@ open class HerdrApiClient(
                         detail = "$endpoint -> ${resp.code} (${durationMs}ms): $errMsg",
                         payload = if (logPayload) bodyStr else null,
                     )
+                    if (isUnknownEndpointResponse(resp.code, errMsg)) {
+                        throw HttpStatusException(
+                            statusCode = resp.code,
+                            message = OUTDATED_DAEMON_ENDPOINT_ERROR,
+                            isUnknownEndpoint = true,
+                        )
+                    }
                     throw HttpStatusException(resp.code, errMsg)
                 }
                 debugRecorder?.record(

@@ -1,0 +1,4 @@
+- **Outdated VM daemon warning and friendly 404 guidance** ([#99](https://github.com/AppEvol/agents-term/issues/99)):
+  - Advertised `protocolVersion` in the Rust VM daemon's `/api/info` and WebSocket `snapshot` payloads so the Android app can detect older daemons without false-flagging newer ones.
+  - Added a dismissible outdated-daemon warning banner in the workspace and an App vs. Daemon version indicator with a one-tap **Update VM Daemon (SSH Auto-Setup)** action in Settings.
+  - Replaced raw `404 Unknown endpoint` responses (such as tapping **Usage** against an older daemon) with clear update guidance and a quick update button in the Model Picker usage panel.
