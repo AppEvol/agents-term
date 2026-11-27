@@ -102,13 +102,12 @@ impl TurnParser for ClaudeTurn {
         let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(trimmed) else {
             return;
         };
-        let state = &mut *self;
         if let Some(sid) = obj
             .get("session_id")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         {
-            sink.persist_session_ref(&mut state.session_ref, "claude", sid);
+            sink.persist_session_ref(&mut self.session_ref, "claude", sid);
         }
 
         let ev_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
@@ -121,20 +120,20 @@ impl TurnParser for ClaudeTurn {
                         .and_then(Value::as_object)
                         .and_then(|b| b.get("type"))
                         .and_then(Value::as_str);
-                    state.breaks.start(bt);
+                    self.breaks.start(bt);
                 } else if itype == "content_block_delta" {
                     if let Some(d) = inner.get("delta").and_then(Value::as_object) {
                         let dtype = d.get("type").and_then(Value::as_str).unwrap_or("");
                         if dtype == "text_delta" {
                             if let Some(t) = d.get("text").and_then(Value::as_str) {
-                                state.saw_partial = true;
+                                self.saw_partial = true;
                                 if !t.is_empty() {
                                     let existing = sink
                                         .message()
                                         .get("text")
                                         .and_then(Value::as_str)
                                         .map(str::to_string);
-                                    let sep = state.breaks.take_text(existing.as_deref());
+                                    let sep = self.breaks.take_text(existing.as_deref());
                                     sink.emit_delta(Some(format!("{sep}{t}")), None, false);
                                 }
                             }
@@ -149,7 +148,7 @@ impl TurnParser for ClaudeTurn {
                                     .get("thinking")
                                     .and_then(Value::as_str)
                                     .map(str::to_string);
-                                let sep = state.breaks.take_thinking(existing.as_deref());
+                                let sep = self.breaks.take_thinking(existing.as_deref());
                                 sink.emit_delta(None, Some(format!("{sep}{t}")), false);
                             }
                         }
@@ -168,13 +167,13 @@ impl TurnParser for ClaudeTurn {
                     match b.get("type").and_then(Value::as_str) {
                         Some("tool_use") => {
                             sink.tool_use_started(
-                                &mut state.tool_starts,
+                                &mut self.tool_starts,
                                 b.get("id"),
                                 b.get("name"),
                                 b.get("input"),
                             );
                         }
-                        Some("text") if !state.saw_partial => {
+                        Some("text") if !self.saw_partial => {
                             if let Some(t) = b
                                 .get("text")
                                 .and_then(Value::as_str)
@@ -207,7 +206,7 @@ impl TurnParser for ClaudeTurn {
                             let existing = sink.find_tool(tool_id);
                             let out_text = tool_output_text(b.get("content"))
                                 .map(|s| truncate_chars(&s, MAX_TOOL_OUTPUT));
-                            let dur = state.tool_starts.get(tool_id).map(|s| json!(now_ms() - s));
+                            let dur = self.tool_starts.get(tool_id).map(|s| json!(now_ms() - s));
                             let is_err = b.get("is_error").map(js_truthy).unwrap_or(false);
                             sink.upsert_tool_call(json!({
                                         "id": tool_id,
@@ -243,7 +242,7 @@ impl TurnParser for ClaudeTurn {
                 }
             }
             if let Some(u) = obj.get("usage").and_then(Value::as_object) {
-                state.usage = Some(json!({
+                self.usage = Some(json!({
                     "inputTokens": num_or_null(u.get("input_tokens")),
                     "outputTokens": num_or_null(u.get("output_tokens")),
                     "thinkingTokens": Value::Null,
@@ -254,8 +253,7 @@ impl TurnParser for ClaudeTurn {
             if let Some(denials) = obj.get("permission_denials").and_then(Value::as_array) {
                 for d in denials {
                     if let Some(dobj) = d.as_object() {
-                        state
-                            .denied
+                        self.denied
                             .push(denied_from(dobj, "tool", "Permission Required", false));
                     }
                 }

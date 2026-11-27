@@ -150,7 +150,6 @@ impl TurnParser for AgyTurn {
             return;
         };
 
-        let state = &mut *self;
         for key in [
             "conversation_id",
             "conversationId",
@@ -162,7 +161,7 @@ impl TurnParser for AgyTurn {
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
             {
-                sink.persist_session_ref(&mut state.session_ref, "agy", val);
+                sink.persist_session_ref(&mut self.session_ref, "agy", val);
                 break;
             }
         }
@@ -176,7 +175,7 @@ impl TurnParser for AgyTurn {
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
             {
-                sink.persist_session_ref(&mut state.session_ref, "agy", cid);
+                sink.persist_session_ref(&mut self.session_ref, "agy", cid);
             }
             return;
         }
@@ -187,7 +186,7 @@ impl TurnParser for AgyTurn {
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                 {
-                    sink.persist_session_ref(&mut state.session_ref, "agy", cid);
+                    sink.persist_session_ref(&mut self.session_ref, "agy", cid);
                 }
                 let step_type = step.get("step_type").and_then(Value::as_str).unwrap_or("");
                 let step_state = step
@@ -205,7 +204,7 @@ impl TurnParser for AgyTurn {
                         .filter(|s| !s.is_empty())
                     {
                         let sep = if let Some(ref idx) = step_idx {
-                            let prev = state.think_step.replace(idx.clone());
+                            let prev = self.think_step.replace(idx.clone());
                             if prev.as_ref().map(|p| p != idx).unwrap_or(false) {
                                 let existing = sink
                                     .message()
@@ -226,7 +225,7 @@ impl TurnParser for AgyTurn {
                         .and_then(Value::as_str)
                         .filter(|s| !s.is_empty())
                         .or_else(|| {
-                            if !state.saw_text {
+                            if !self.saw_text {
                                 step.get("text")
                                     .and_then(Value::as_str)
                                     .filter(|s| !s.is_empty())
@@ -235,9 +234,9 @@ impl TurnParser for AgyTurn {
                             }
                         });
                     if let Some(td) = maybe_text {
-                        state.saw_text = true;
+                        self.saw_text = true;
                         let sep = if let Some(ref idx) = step_idx {
-                            let prev = state.text_step.replace(idx.clone());
+                            let prev = self.text_step.replace(idx.clone());
                             if prev.as_ref().map(|p| p != idx).unwrap_or(false) {
                                 let existing = sink
                                     .message()
@@ -256,7 +255,7 @@ impl TurnParser for AgyTurn {
                     if let Some(u) =
                         parse_agy_usage(step.get("usage"), step.get("duration_seconds"))
                     {
-                        state.usage = Some(u);
+                        self.usage = Some(u);
                     }
                     return;
                 }
@@ -272,7 +271,7 @@ impl TurnParser for AgyTurn {
                             });
                     if let Some(th) = think_text {
                         let sep = if let Some(ref idx) = step_idx {
-                            let prev = state.think_step.replace(idx.clone());
+                            let prev = self.think_step.replace(idx.clone());
                             if prev.as_ref().map(|p| p != idx).unwrap_or(false) {
                                 let existing = sink
                                     .message()
@@ -321,8 +320,7 @@ impl TurnParser for AgyTurn {
                     let existing = sink.find_tool(&tool_id);
 
                     if matches!(step_state.as_str(), "ACTIVE" | "RUNNING" | "PENDING") {
-                        state
-                            .tool_starts
+                        self.tool_starts
                             .entry(tool_id.clone())
                             .or_insert_with(now_ms);
                         sink.running_status(&name, &summary);
@@ -379,12 +377,10 @@ impl TurnParser for AgyTurn {
                             .get("duration_seconds")
                             .and_then(is_finite_number)
                             .map(|d| json!(js_round(d * 1000.0)))
-                            .or_else(|| {
-                                state.tool_starts.get(&tool_id).map(|s| json!(now_ms() - s))
-                            })
+                            .or_else(|| self.tool_starts.get(&tool_id).map(|s| json!(now_ms() - s)))
                             .unwrap_or(Value::Null);
                         if is_denied {
-                            state.denied.push(json!({
+                            self.denied.push(json!({
                                     "action": name,
                                     "displayName": name,
                                     "detail": if summary.is_empty() { Value::Null } else { json!(summary) },
@@ -440,7 +436,7 @@ impl TurnParser for AgyTurn {
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                 {
-                    sink.persist_session_ref(&mut state.session_ref, "agy", cid);
+                    sink.persist_session_ref(&mut self.session_ref, "agy", cid);
                 }
                 let response_text = res.get("response").and_then(Value::as_str).unwrap_or("");
                 let cur_empty = sink
@@ -451,7 +447,7 @@ impl TurnParser for AgyTurn {
                     .trim()
                     .is_empty();
                 if !response_text.trim().is_empty() && cur_empty {
-                    state.saw_text = true;
+                    self.saw_text = true;
                     sink.emit_delta(Some(response_text.to_string()), None, false);
                 }
                 let res_status = res
@@ -486,12 +482,12 @@ impl TurnParser for AgyTurn {
                     }
                 }
                 if let Some(u) = parse_agy_usage(res.get("usage"), res.get("duration_seconds")) {
-                    state.usage = Some(u);
+                    self.usage = Some(u);
                 }
                 if let Some(denials) = res.get("permission_denials").and_then(Value::as_array) {
                     for d in denials {
                         if let Some(dobj) = d.as_object() {
-                            state.denied.push(denied_from(
+                            self.denied.push(denied_from(
                                 dobj,
                                 "permission",
                                 "Permission Required",
@@ -513,7 +509,7 @@ impl TurnParser for AgyTurn {
             if ev_type.contains("think") || ev_type.contains("reason") {
                 sink.emit_delta(None, Some(delta.to_string()), false);
             } else {
-                state.saw_text = true;
+                self.saw_text = true;
                 sink.emit_delta(Some(delta.to_string()), None, false);
             }
             return;
@@ -528,20 +524,20 @@ impl TurnParser for AgyTurn {
                         .and_then(Value::as_object)
                         .and_then(|b| b.get("type"))
                         .and_then(Value::as_str);
-                    state.breaks.start(bt);
+                    self.breaks.start(bt);
                 } else if itype == "content_block_delta" {
                     if let Some(d) = inner.get("delta").and_then(Value::as_object) {
                         let dtype = d.get("type").and_then(Value::as_str).unwrap_or("");
                         if dtype == "text_delta" {
                             if let Some(t) = d.get("text").and_then(Value::as_str) {
-                                state.saw_text = true;
+                                self.saw_text = true;
                                 if !t.is_empty() {
                                     let existing = sink
                                         .message()
                                         .get("text")
                                         .and_then(Value::as_str)
                                         .map(str::to_string);
-                                    let sep = state.breaks.take_text(existing.as_deref());
+                                    let sep = self.breaks.take_text(existing.as_deref());
                                     sink.emit_delta(Some(format!("{sep}{t}")), None, false);
                                 }
                             }
@@ -556,7 +552,7 @@ impl TurnParser for AgyTurn {
                                     .get("thinking")
                                     .and_then(Value::as_str)
                                     .map(str::to_string);
-                                let sep = state.breaks.take_thinking(existing.as_deref());
+                                let sep = self.breaks.take_thinking(existing.as_deref());
                                 sink.emit_delta(None, Some(format!("{sep}{t}")), false);
                             }
                         }
@@ -593,7 +589,7 @@ impl TurnParser for AgyTurn {
                                 }
                             }
                         }
-                        Some("text") if !state.saw_text => {
+                        Some("text") if !self.saw_text => {
                             if let Some(t) = b
                                 .get("text")
                                 .and_then(Value::as_str)
@@ -610,7 +606,7 @@ impl TurnParser for AgyTurn {
                         }
                         Some("tool_use") => {
                             sink.tool_use_started(
-                                &mut state.tool_starts,
+                                &mut self.tool_starts,
                                 b.get("id"),
                                 b.get("name"),
                                 b.get("input"),
@@ -629,7 +625,7 @@ impl TurnParser for AgyTurn {
                 .or_else(|| obj.get("args"))
                 .or_else(|| obj.get("arguments"));
             sink.tool_use_started(
-                &mut state.tool_starts,
+                &mut self.tool_starts,
                 obj.get("id").or_else(|| obj.get("tool_use_id")),
                 obj.get("name").or_else(|| obj.get("tool")),
                 input_obj,
@@ -670,7 +666,7 @@ impl TurnParser for AgyTurn {
                 .map(|s| truncate_chars(&s, MAX_TOOL_OUTPUT));
                 let is_err = b.get("is_error").map(js_truthy).unwrap_or(false)
                     || b.get("error").map(js_truthy).unwrap_or(false);
-                let dur = state.tool_starts.get(&tool_id).map(|s| json!(now_ms() - s));
+                let dur = self.tool_starts.get(&tool_id).map(|s| json!(now_ms() - s));
                 let name = existing
                     .as_ref()
                     .and_then(|e| e.get("name").and_then(Value::as_str))
@@ -722,7 +718,7 @@ impl TurnParser for AgyTurn {
                 }
             }
             if let Some(u) = obj.get("usage").and_then(Value::as_object) {
-                state.usage = Some(json!({
+                self.usage = Some(json!({
                     "inputTokens": num_or_null(u.get("input_tokens")),
                     "outputTokens": num_or_null(u.get("output_tokens")),
                     "thinkingTokens": num_or_null(u.get("thinking_tokens")),
@@ -733,7 +729,7 @@ impl TurnParser for AgyTurn {
             if let Some(denials) = obj.get("permission_denials").and_then(Value::as_array) {
                 for d in denials {
                     if let Some(dobj) = d.as_object() {
-                        state.denied.push(denied_from(
+                        self.denied.push(denied_from(
                             dobj,
                             "permission",
                             "Permission Required",
@@ -750,7 +746,7 @@ impl TurnParser for AgyTurn {
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         {
-            state.saw_text = true;
+            self.saw_text = true;
             sink.emit_delta(Some(t.to_string()), None, false);
         }
     }

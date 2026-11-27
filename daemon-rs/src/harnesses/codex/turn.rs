@@ -104,7 +104,6 @@ impl TurnParser for CodexTurn {
         let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(trimmed) else {
             return;
         };
-        let state = &mut *self;
         let ev_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
         if ev_type == "thread.started" {
             if let Some(thread_id) = obj
@@ -112,7 +111,7 @@ impl TurnParser for CodexTurn {
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
             {
-                sink.persist_session_ref(&mut state.session_ref, "codex", thread_id);
+                sink.persist_session_ref(&mut self.session_ref, "codex", thread_id);
             }
         } else if matches!(ev_type, "item.started" | "item.updated" | "item.completed") {
             if let Some(item) = obj.get("item").and_then(Value::as_object) {
@@ -153,7 +152,7 @@ impl TurnParser for CodexTurn {
                         .unwrap_or_else(|| "command".to_string());
                     let cmd_summary = summarize_tool_input(Some(&json!({ "command": cmd })));
                     if ev_type == "item.started" {
-                        state.tool_starts.insert(item_id.clone(), now_ms());
+                        self.tool_starts.insert(item_id.clone(), now_ms());
                         sink.set_status_detail(&format!("$ {}", truncate(&cmd_summary, 50)));
                     }
                     let exit_code = item.get("exit_code").and_then(Value::as_i64);
@@ -162,7 +161,7 @@ impl TurnParser for CodexTurn {
                         .and_then(Value::as_str)
                         .map(|s| truncate_chars(s, MAX_TOOL_OUTPUT));
                     let dur = if completed {
-                        state.tool_starts.get(&item_id).map(|s| json!(now_ms() - s))
+                        self.tool_starts.get(&item_id).map(|s| json!(now_ms() - s))
                     } else {
                         None
                     };
@@ -188,7 +187,7 @@ impl TurnParser for CodexTurn {
             }
         } else if ev_type == "turn.completed" {
             if let Some(u) = obj.get("usage").and_then(Value::as_object) {
-                state.usage = Some(json!({
+                self.usage = Some(json!({
                     "inputTokens": num_or_null(u.get("input_tokens")),
                     "outputTokens": num_or_null(u.get("output_tokens")),
                     "thinkingTokens": Value::Null,
