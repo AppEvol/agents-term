@@ -491,6 +491,7 @@ async fn get_app_status(State(st): State<Arc<AppState>>, headers: HeaderMap) -> 
     if !st.authorized(&headers, None, false) {
         return unauthorized();
     }
+    st.app_state.wait_for_hello().await;
     json_status(StatusCode::OK, st.app_state.status())
 }
 

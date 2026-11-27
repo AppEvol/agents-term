@@ -1,0 +1,3 @@
+- **No false `unsupported_app` while the app reconnects** ([#38](https://github.com/AppEvol/agents-term/issues/38)):
+  - The daemon waits up to 2 seconds for a newly connected app to send its first `app_hello` before answering `agents_term_app_cli` status and commands.
+  - Previously a command sent in that moment failed with `unsupported_app` and told the agent to install a newer build.

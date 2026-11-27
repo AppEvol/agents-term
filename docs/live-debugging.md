@@ -50,6 +50,8 @@ Output is JSON on stdout (unless `--raw` or `--brief`). Failures print `{"ok":fa
 | `3` | App not connected or remote inspection/control disabled | `no_app_connected`, `unsupported_app`, `inspection_disabled`, `control_disabled`, `app_disconnected` |
 | `4` | App returned an error, timed out, or `wait` gave up | `app_error`, `timeout`, `wait_timeout` |
 
+Right after the app connects or comes back from the background, the daemon waits up to 2 seconds for it to announce itself before answering, so a command sent in that moment is slower rather than failing with `unsupported_app`.
+
 ## Driving the App
 
 Look, act, look again. All coordinates are **screenshot pixels**: the `screenshot` PNG, the bounds/centers that `ui` reports, and the coordinates passed to `tap`, `long-press`, and `swipe` share one space.
