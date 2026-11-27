@@ -239,17 +239,30 @@ class ReleaseAndBuildScriptsTest(unittest.TestCase):
                         "args": sys.argv[1:],
                         "APP_VERSION_NAME": os.environ.get("APP_VERSION_NAME"),
                         "AGENTSTERM_DAEMON_RELEASE_BASE_URL": os.environ.get("AGENTSTERM_DAEMON_RELEASE_BASE_URL"),
+                        "AGENTSTERM_EXPECTED_DAEMON_RELEASE_TAG": os.environ.get(
+                            "AGENTSTERM_EXPECTED_DAEMON_RELEASE_TAG"
+                        ),
                     }}, fh)
                 """
             ),
         )
 
         cases = [
-            ("false", "false", None),
-            ("true", "false", "https://github.com/AppEvol/agents-term/releases/download/v0.3.55-1234567"),
-            ("false", "true", "https://github.com/AppEvol/agents-term/releases/download/v0.3.55-1234567-preview"),
+            ("false", "false", None, None),
+            (
+                "true",
+                "false",
+                "https://github.com/AppEvol/agents-term/releases/download/v0.3.55-1234567",
+                "v0.3.55-1234567",
+            ),
+            (
+                "false",
+                "true",
+                "https://github.com/AppEvol/agents-term/releases/download/v0.3.55-1234567-preview",
+                "v0.3.55-1234567-preview",
+            ),
         ]
-        for pub_rel, pub_pre, expected_url in cases:
+        for pub_rel, pub_pre, expected_url, expected_tag in cases:
             with self.subTest(pub_rel=pub_rel, pub_pre=pub_pre):
                 env = self._base_env(
                     APP_MAJOR_MINOR="0.3",
@@ -260,6 +273,7 @@ class ReleaseAndBuildScriptsTest(unittest.TestCase):
                     GITHUB_REPOSITORY="AppEvol/agents-term",
                 )
                 env.pop("AGENTSTERM_DAEMON_RELEASE_BASE_URL", None)
+                env.pop("AGENTSTERM_EXPECTED_DAEMON_RELEASE_TAG", None)
                 proc = subprocess.run(
                     [str(CI_SCRIPTS / "build_and_unit_test.sh")],
                     cwd=self.work,
@@ -271,6 +285,7 @@ class ReleaseAndBuildScriptsTest(unittest.TestCase):
                 captured = json.loads(capture_file.read_text(encoding="utf-8"))
                 self.assertEqual(captured["APP_VERSION_NAME"], "0.3.55-1234567")
                 self.assertEqual(captured["AGENTSTERM_DAEMON_RELEASE_BASE_URL"], expected_url)
+                self.assertEqual(captured["AGENTSTERM_EXPECTED_DAEMON_RELEASE_TAG"], expected_tag)
                 self.assertIn(":app:testDebugUnitTest", captured["args"])
 
     def test_set_build_version_env_stage_and_stop_helpers(self) -> None:

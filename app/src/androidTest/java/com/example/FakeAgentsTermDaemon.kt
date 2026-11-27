@@ -7,6 +7,10 @@ import com.example.data.ChatMessage
 import com.example.data.CreateTabRequest
 import com.example.data.DEFAULT_AGENT_SYSTEM_PROMPT
 import com.example.data.DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT
+import com.example.data.DaemonRollbackRequest
+import com.example.data.DaemonSelfUpdateInfo
+import com.example.data.DaemonUpdateRequest
+import com.example.data.DaemonUpdateStatus
 import com.example.data.DebugDumpUploadRequest
 import com.example.data.DebugDumpUploadResponse
 import com.example.data.DeniedAction
@@ -54,6 +58,8 @@ class FakeAgentsTermDaemon(
     initialTabs: List<TabRecord> = emptyList(),
     initialMessages: Map<String, List<ChatMessage>> = emptyMap(),
     protocolVersion: Int? = EXPECTED_DAEMON_PROTOCOL_VERSION,
+    initialBuildHash: String = "e2e0000000000000000000000000000000000001",
+    initialSelfUpdate: DaemonSelfUpdateInfo? = null,
 ) : AutoCloseable {
 
     private val lock = Any()
@@ -70,6 +76,9 @@ class FakeAgentsTermDaemon(
     val receivedOverrideModes = CopyOnWriteArrayList<String>()
     val uploadedDebugDumps = CopyOnWriteArrayList<DebugDumpUploadRequest>()
     val recordedRequests = CopyOnWriteArrayList<String>()
+    val recordedDaemonUpdateRequests = CopyOnWriteArrayList<DaemonUpdateRequest>()
+    val daemonUpdateCancelCount = AtomicInteger(0)
+    val recordedDaemonRollbackRequests = CopyOnWriteArrayList<DaemonRollbackRequest>()
     val webSocketUpgradeCount = AtomicInteger(0)
 
     /** Raw text frames the app sent over the WebSocket (app_hello, app_state_response). */
@@ -114,16 +123,19 @@ class FakeAgentsTermDaemon(
         }
     }
 
-    private val serverInfo = ServerInfo(
+    @Volatile
+    private var serverInfo = ServerInfo(
         version = "0.3.0-e2e",
         protocolVersion = protocolVersion,
-        commit = "e2e0000",
+        commit = initialBuildHash.take(7),
+        buildHash = initialBuildHash,
         runtime = "rust",
         hostname = hostname,
         tailscaleIp = "127.0.0.1",
         defaultCwd = "/home/ci",
         defaultSystemPrompt = DEFAULT_AGENT_SYSTEM_PROMPT,
         defaultSystemPromptFullAccess = DEFAULT_FULL_ACCESS_AGENT_SYSTEM_PROMPT,
+        selfUpdate = initialSelfUpdate,
         agents = listOf(
             AvailableAgentInfo(
                 type = "agy",
@@ -262,6 +274,19 @@ class FakeAgentsTermDaemon(
 
         if (method == "GET" && path == "/api/info") {
             return jsonResponse(200, encodeHerdrJson(serverInfo))
+        }
+
+        if (path == "/api/daemon/update") {
+            return when (method) {
+                "GET" -> jsonResponse(200, encodeHerdrJson(currentUpdateStatus))
+                "POST" -> handleStartDaemonUpdate(request.body.readUtf8())
+                "DELETE" -> handleCancelDaemonUpdate()
+                else -> jsonResponse(405, """{"error":"Method not allowed"}""")
+            }
+        }
+
+        if (method == "POST" && path == "/api/daemon/rollback") {
+            return handleDaemonRollback(request.body.readUtf8())
         }
 
         val agentModelsMatch = Regex("^/api/agents/([^/]+)/models$").matchEntire(path)
@@ -992,6 +1017,142 @@ class FakeAgentsTermDaemon(
         for (ws in activeSockets) {
             ws.send(json)
         }
+    }
+
+    @Volatile
+    private var currentUpdateStatus: DaemonUpdateStatus = DaemonUpdateStatus(
+        state = "idle",
+        currentBuildHash = initialBuildHash,
+        rollbackAvailable = initialSelfUpdate?.rollbackAvailable == true,
+        previousBuildHash = initialSelfUpdate?.previousBuildHash,
+    )
+
+    private fun handleStartDaemonUpdate(body: String): MockResponse {
+        val req = decodeHerdrJson<DaemonUpdateRequest>(body)
+        recordedDaemonUpdateRequests.add(req)
+        val workingIds = synchronized(lock) {
+            tabs.filter { it.status == "working" }.map { it.id }
+        }
+        val oldHash = serverInfo.buildHash ?: "e2e0000000000000000000000000000000000001"
+        val upgradedHash = req.expectedHash?.takeIf { it.isNotBlank() }
+            ?: "e2e9999000000000000000000000000000000002"
+        if (workingIds.isNotEmpty() && req.whenBusy == "defer") {
+            val pending = DaemonUpdateStatus(
+                state = "pending_restart",
+                targetVersion = req.version,
+                targetBuildHash = upgradedHash,
+                currentBuildHash = oldHash,
+                activeTabIds = workingIds,
+                activeTurnsCount = workingIds.size,
+                whenBusy = "defer",
+                detail = "Staged update; waiting for ${workingIds.size} active tab(s)",
+                rollbackAvailable = serverInfo.selfUpdate?.rollbackAvailable == true,
+                previousBuildHash = serverInfo.selfUpdate?.previousBuildHash,
+                updatedAt = System.currentTimeMillis(),
+            )
+            currentUpdateStatus = pending
+            broadcast(WsServerEnvelope(type = "daemon_update_status", update = pending, ts = System.currentTimeMillis()))
+            return jsonResponse(202, encodeHerdrJson(pending))
+        }
+
+        val restarting = DaemonUpdateStatus(
+            state = "restarting",
+            targetVersion = req.version,
+            targetBuildHash = upgradedHash,
+            currentBuildHash = oldHash,
+            whenBusy = req.whenBusy,
+            detail = "Restarting daemon...",
+            rollbackAvailable = true,
+            previousBuildHash = oldHash,
+            updatedAt = System.currentTimeMillis(),
+        )
+        currentUpdateStatus = restarting
+        broadcast(WsServerEnvelope(type = "daemon_update_status", update = restarting, ts = System.currentTimeMillis()))
+        scheduleSimulatedUpgradeRestart(oldHash = oldHash, upgradedHash = upgradedHash)
+        return jsonResponse(202, encodeHerdrJson(restarting))
+    }
+
+    private fun scheduleSimulatedUpgradeRestart(oldHash: String, upgradedHash: String) {
+        executor.submit {
+            Thread.sleep(150)
+            serverInfo = serverInfo.copy(
+                protocolVersion = EXPECTED_DAEMON_PROTOCOL_VERSION,
+                commit = upgradedHash.take(7),
+                buildHash = upgradedHash,
+                selfUpdate = DaemonSelfUpdateInfo(
+                    supported = true,
+                    rollbackAvailable = true,
+                    previousBuildHash = oldHash,
+                    lastError = null,
+                ),
+            )
+            currentUpdateStatus = DaemonUpdateStatus(
+                state = "idle",
+                currentBuildHash = upgradedHash,
+                rollbackAvailable = true,
+                previousBuildHash = oldHash,
+                updatedAt = System.currentTimeMillis(),
+            )
+            dropAllWebSockets()
+        }
+    }
+
+    private fun handleCancelDaemonUpdate(): MockResponse {
+        daemonUpdateCancelCount.incrementAndGet()
+        val idle = DaemonUpdateStatus(
+            state = "idle",
+            currentBuildHash = serverInfo.buildHash,
+            rollbackAvailable = serverInfo.selfUpdate?.rollbackAvailable == true,
+            previousBuildHash = serverInfo.selfUpdate?.previousBuildHash,
+            updatedAt = System.currentTimeMillis(),
+        )
+        currentUpdateStatus = idle
+        broadcast(WsServerEnvelope(type = "daemon_update_status", update = idle, ts = System.currentTimeMillis()))
+        return jsonResponse(200, encodeHerdrJson(idle))
+    }
+
+    private fun handleDaemonRollback(body: String): MockResponse {
+        val req = if (body.isNotBlank()) {
+            runCatching { decodeHerdrJson<DaemonRollbackRequest>(body) }.getOrDefault(DaemonRollbackRequest())
+        } else {
+            DaemonRollbackRequest()
+        }
+        recordedDaemonRollbackRequests.add(req)
+        val prevHash = serverInfo.selfUpdate?.previousBuildHash
+            ?: return jsonResponse(404, """{"error":"No previous daemon backup available"}""")
+        val restarting = DaemonUpdateStatus(
+            state = "restarting",
+            targetBuildHash = prevHash,
+            currentBuildHash = serverInfo.buildHash,
+            detail = "Reverting to previous daemon...",
+            rollbackAvailable = true,
+            previousBuildHash = prevHash,
+            updatedAt = System.currentTimeMillis(),
+        )
+        currentUpdateStatus = restarting
+        broadcast(WsServerEnvelope(type = "daemon_update_status", update = restarting, ts = System.currentTimeMillis()))
+        executor.submit {
+            Thread.sleep(150)
+            serverInfo = serverInfo.copy(
+                commit = prevHash.take(7),
+                buildHash = prevHash,
+                selfUpdate = DaemonSelfUpdateInfo(
+                    supported = true,
+                    rollbackAvailable = false,
+                    previousBuildHash = null,
+                    lastError = null,
+                ),
+            )
+            currentUpdateStatus = DaemonUpdateStatus(
+                state = "idle",
+                currentBuildHash = prevHash,
+                rollbackAvailable = false,
+                previousBuildHash = null,
+                updatedAt = System.currentTimeMillis(),
+            )
+            dropAllWebSockets()
+        }
+        return jsonResponse(202, encodeHerdrJson(restarting))
     }
 
     private fun jsonResponse(code: Int, body: String): MockResponse = MockResponse()

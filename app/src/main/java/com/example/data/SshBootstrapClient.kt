@@ -22,7 +22,7 @@ import java.util.Properties
  * Connects to a Tailscale VM over SSH to download, verify, and install the static Rust AgentsTerm
  * daemon binary, streaming live progress back to the mobile UI.
  */
-class SshBootstrapClient(
+open class SshBootstrapClient(
     private val settings: SettingsStore,
     private val debugRecorder: DebugRecorder? = null,
 ) {
@@ -31,26 +31,70 @@ class SshBootstrapClient(
         var mismatch: HostKeyMismatchException? = null
     }
 
-    suspend fun bootstrapVm(
+    private data class RemoteCommandSpec(
+        val command: String,
+        val actionLabel: String,
+    )
+
+    private data class RemoteExecTarget(
+        val host: String,
+        val daemonPort: Int,
+        val fingerprint: String,
+    )
+
+    private data class SshCallbacks(
+        val onPhase: (BootstrapPhase) -> Unit,
+        val onHostFingerprint: (String) -> Unit,
+        val onLog: (String) -> Unit,
+    )
+
+    open suspend fun bootstrapVm(
         config: SshBootstrapConfig,
         onPhase: (BootstrapPhase) -> Unit,
         onHostFingerprint: (String) -> Unit,
         onLog: (String) -> Unit,
+    ): SshBootstrapResult = executeRemoteDaemonCommand(
+        config = config,
+        spec = RemoteCommandSpec(
+            command = buildDaemonBootstrapCommand(daemonPort = config.daemonPort),
+            actionLabel = "Bootstrap",
+        ),
+        callbacks = SshCallbacks(onPhase, onHostFingerprint, onLog),
+    )
+
+    open suspend fun rollbackVmDaemon(
+        config: SshBootstrapConfig,
+        onPhase: (BootstrapPhase) -> Unit,
+        onHostFingerprint: (String) -> Unit,
+        onLog: (String) -> Unit,
+    ): SshBootstrapResult = executeRemoteDaemonCommand(
+        config = config,
+        spec = RemoteCommandSpec(
+            command = buildDaemonRollbackCommand(daemonPort = config.daemonPort),
+            actionLabel = "Rollback",
+        ),
+        callbacks = SshCallbacks(onPhase, onHostFingerprint, onLog),
+    )
+
+    private suspend fun executeRemoteDaemonCommand(
+        config: SshBootstrapConfig,
+        spec: RemoteCommandSpec,
+        callbacks: SshCallbacks,
     ): SshBootstrapResult = withContext(Dispatchers.IO) {
         val host = cleanHost(config.host)
         val username = config.username.trim()
         validateConfig(host, username, config)
 
-        onPhase(BootstrapPhase.CONNECTING_SSH)
+        callbacks.onPhase(BootstrapPhase.CONNECTING_SSH)
         debugRecorder?.record(
             "ssh",
             "ssh_connect_start",
-            "Connecting to $username@$host:${config.sshPort} (auth=${config.authMethod.storageKey})",
+            "Connecting to $username@$host:${config.sshPort} (auth=${config.authMethod.storageKey}, action=${spec.actionLabel})",
         )
-        onLog("Connecting to $username@$host:${config.sshPort} via SSH…")
+        callbacks.onLog("Connecting to $username@$host:${config.sshPort} via SSH…")
 
         val tracker = HostKeyTracker()
-        val jsch = createConfiguredJsch(host, config, tracker, onHostFingerprint, onLog)
+        val jsch = createConfiguredJsch(host, config, tracker, callbacks.onHostFingerprint, callbacks.onLog)
         var session: Session? = null
         var channel: ChannelExec? = null
 
@@ -60,10 +104,10 @@ class SshBootstrapClient(
                 ?: session.hostKey?.getFingerPrint(jsch)
                 ?: "unknown"
 
-            onPhase(BootstrapPhase.INSTALLING_DAEMON)
-            val remoteCommand = buildDaemonBootstrapCommand(daemonPort = config.daemonPort)
-            val execResult = runRemoteCommand(session, remoteCommand, onLog) { channel = it }
-            interpretResult(host, config.daemonPort, fingerprint, execResult, onLog)
+            callbacks.onPhase(BootstrapPhase.INSTALLING_DAEMON)
+            val execResult = runRemoteCommand(session, spec.command, callbacks.onLog) { channel = it }
+            val target = RemoteExecTarget(host = host, daemonPort = config.daemonPort, fingerprint = fingerprint)
+            interpretResult(target, execResult, spec, callbacks.onLog)
         } finally {
             runCatching { channel?.disconnect() }
             runCatching { session?.disconnect() }
@@ -215,16 +259,15 @@ class SshBootstrapClient(
     }
 
     private fun interpretResult(
-        host: String,
-        daemonPort: Int,
-        fingerprint: String,
+        target: RemoteExecTarget,
         execResult: Pair<Int, String>,
+        spec: RemoteCommandSpec,
         onLog: (String) -> Unit,
     ): SshBootstrapResult {
         val (exitCode, combinedOutput) = execResult
         if (bootstrapExitIsFailure(exitCode)) {
             throw IOException(
-                "Bootstrap exited with code $exitCode: the latest daemon could not be verified. " +
+                "${spec.actionLabel} exited with code $exitCode: the daemon could not be verified. " +
                     "Check the live output above for details.",
             )
         }
@@ -234,24 +277,24 @@ class SshBootstrapClient(
             return SshBootstrapResult(
                 connectionConfig = parsedConfig,
                 rawPairingUri = rawUri,
-                hostFingerprint = fingerprint,
+                hostFingerprint = target.fingerprint,
             )
         }
 
         if (exitCode == -1) {
             throw IOException(
-                "SSH connection dropped before bootstrap finished (remote setup may still be running on $host). " +
+                "SSH connection dropped before bootstrap finished (remote setup may still be running on ${target.host}). " +
                     "Keep the screen awake and tap Retry to connect once the daemon is up.",
             )
         }
 
-        val fallbackConfig = ConnectionConfig(host = host, port = daemonPort, token = "")
-        val fallbackUri = "herdr://connect?host=$host&port=$daemonPort"
-        onLog("No pairing URI printed; trying $host:$daemonPort directly…")
+        val fallbackConfig = ConnectionConfig(host = target.host, port = target.daemonPort, token = "")
+        val fallbackUri = "herdr://connect?host=${target.host}&port=${target.daemonPort}"
+        onLog("No pairing URI printed; trying ${target.host}:${target.daemonPort} directly…")
         return SshBootstrapResult(
             connectionConfig = fallbackConfig,
             rawPairingUri = fallbackUri,
-            hostFingerprint = fingerprint,
+            hostFingerprint = target.fingerprint,
         )
     }
 

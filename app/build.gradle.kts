@@ -1,5 +1,9 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
 import java.io.File
+import java.security.MessageDigest
 
 plugins {
     alias(libs.plugins.android.application)
@@ -7,6 +11,102 @@ plugins {
     alias(libs.plugins.google.devtools.ksp)
     alias(libs.plugins.secrets)
     alias(libs.plugins.google.services)
+}
+
+/**
+ * Computes the exact 40-char AGENTSTERM_BUILD_HASH produced by `daemon-rs/build.rs` and
+ * `scripts/daemon-build-hash.py` in a configuration-cache-safe ValueSource so Gradle tracks
+ * changes to daemon sources without spawning external processes.
+ */
+abstract class DaemonBuildHashValueSource : ValueSource<String, DaemonBuildHashValueSource.Params> {
+    interface Params : ValueSourceParameters {
+        val daemonDir: DirectoryProperty
+    }
+
+    override fun obtain(): String {
+        val manifestDir = parameters.daemonDir.get().asFile.canonicalFile
+        if (!manifestDir.isDirectory) return ""
+
+        val entries = mutableListOf<Pair<List<String>, File>>()
+        for (relParts in STATIC_FILES) {
+            val file = File(manifestDir, relParts.joinToString(File.separator))
+            if (file.isFile) {
+                entries += relParts to file
+            }
+        }
+        val srcDir = File(manifestDir, "src")
+        if (srcDir.isDirectory) {
+            collectFiles(srcDir, listOf("src"), entries)
+        }
+        entries.sortWith { a, b -> compareRustPathComponents(a.first, b.first) }
+
+        val digest = MessageDigest.getInstance("SHA-256")
+        for ((relParts, file) in entries) {
+            digest.update(relParts.joinToString("/").toByteArray(Charsets.UTF_8))
+            digest.update(0.toByte())
+            digest.update(file.readBytes())
+            digest.update(0.toByte())
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }.take(40)
+    }
+
+    companion object {
+        private val STATIC_FILES = listOf(
+            listOf("Cargo.toml"),
+            listOf("Cargo.lock"),
+            listOf("build.rs"),
+            listOf("..", "docs", "live-debugging.md"),
+            listOf("..", "docs", "agents_debugging_tips.md"),
+        )
+
+        private fun collectFiles(
+            dir: File,
+            prefix: List<String>,
+            out: MutableList<Pair<List<String>, File>>,
+        ) {
+            val children = dir.listFiles()?.sortedBy { it.name }.orEmpty()
+            for (child in children) {
+                val parts = prefix + child.name
+                if (child.isDirectory) {
+                    collectFiles(child, parts, out)
+                } else if (child.isFile) {
+                    out += parts to child
+                }
+            }
+        }
+
+        private fun componentRank(part: String): Int = when (part) {
+            "." -> 0
+            ".." -> 1
+            else -> 2
+        }
+
+        private fun compareUnsignedBytes(a: ByteArray, b: ByteArray): Int {
+            val len = minOf(a.size, b.size)
+            for (i in 0 until len) {
+                val cmp = (a[i].toInt() and 0xFF) - (b[i].toInt() and 0xFF)
+                if (cmp != 0) return cmp
+            }
+            return a.size - b.size
+        }
+
+        private fun compareRustPathComponents(a: List<String>, b: List<String>): Int {
+            val len = minOf(a.size, b.size)
+            for (i in 0 until len) {
+                val rankA = componentRank(a[i])
+                val rankB = componentRank(b[i])
+                if (rankA != rankB) return rankA - rankB
+                if (rankA == 2) {
+                    val byteCmp = compareUnsignedBytes(
+                        a[i].toByteArray(Charsets.UTF_8),
+                        b[i].toByteArray(Charsets.UTF_8),
+                    )
+                    if (byteCmp != 0) return byteCmp
+                }
+            }
+            return a.size - b.size
+        }
+    }
 }
 
 val ciVersionCode = providers.gradleProperty("appVersionCode").orNull?.toIntOrNull()
@@ -18,6 +118,16 @@ val ciVersionName = providers.gradleProperty("appVersionName").orNull?.takeIf { 
 val daemonReleaseBaseUrl = providers.gradleProperty("daemonReleaseBaseUrl").orNull?.takeIf { it.isNotBlank() }
     ?: providers.environmentVariable("AGENTSTERM_DAEMON_RELEASE_BASE_URL").orNull?.takeIf { it.isNotBlank() }
     ?: "https://github.com/AppEvol/agents-term/releases/latest/download"
+val pinnedDaemonReleaseTagRegex = Regex(".*/releases/download/(v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9a-f]{7,40}(?:-preview)?)/?$")
+val expectedDaemonReleaseTag = providers.gradleProperty("expectedDaemonReleaseTag").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: providers.environmentVariable("AGENTSTERM_EXPECTED_DAEMON_RELEASE_TAG").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: pinnedDaemonReleaseTagRegex.matchEntire(daemonReleaseBaseUrl)?.groupValues?.get(1)
+    ?: ""
+val expectedDaemonBuildHash = providers.gradleProperty("expectedDaemonBuildHash").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: providers.environmentVariable("AGENTSTERM_EXPECTED_DAEMON_BUILD_HASH").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: providers.of(DaemonBuildHashValueSource::class) {
+        parameters.daemonDir.set(rootProject.layout.projectDirectory.dir("daemon-rs"))
+    }.get()
 
 // "record" rewrites the golden images of the screenshot tests; anything else verifies them.
 val goldensMode = providers.gradleProperty("goldens").orNull
@@ -71,6 +181,8 @@ android {
         versionCode = ciVersionCode
         versionName = ciVersionName
         buildConfigField("String", "DAEMON_RELEASE_BASE_URL", "\"$daemonReleaseBaseUrl\"")
+        buildConfigField("String", "EXPECTED_DAEMON_BUILD_HASH", "\"$expectedDaemonBuildHash\"")
+        buildConfigField("String", "EXPECTED_DAEMON_RELEASE_TAG", "\"$expectedDaemonReleaseTag\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

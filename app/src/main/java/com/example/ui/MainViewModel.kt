@@ -163,6 +163,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val usageController = AgentUsageController(repo = repo, scope = viewModelScope)
     val newTabController = NewTabController(repo = repo, scope = viewModelScope)
+    val daemonUpdateController = DaemonUpdateController(api, repo, sshClient, debugRecorder, viewModelScope)
     val ptySessions = PtySessionManager(debugRecorder = debugRecorder)
     val createTabError: StateFlow<String?> = newTabController.error
     val isCreatingTab: StateFlow<Boolean> = newTabController.isCreating
@@ -277,7 +278,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _showConnectScreen.value = true
     }
 
-    fun openDaemonUpdate() = openConnectionSettings(preferSsh = true)
+    fun openDaemonUpdate() = daemonUpdateController.openOrStartUpdate { openConnectionSettings(preferSsh = true) }
 
     fun closeConnectionSettingsIfConfigured() {
         if (state.value.config.isValid) {
