@@ -71,6 +71,12 @@ if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; t
   if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^(daemon-rs/install\.sh$|daemon-rs/tests/.*\.py$)'; then
     INSTALLER_TESTS_CHANGED="true"
   fi
+  # Exercise all native suites when their common CI runner changes.
+  if grep -qE '^scripts/(allure_results|native_test_retries|retry_report|test_retries)\.py$' <<< "${CHANGED_FILES}"; then
+    DAEMON_RS_TESTS_CHANGED="true"
+    DAEMON_E2E_HARNESS_CHANGED="true"
+    INSTALLER_TESTS_CHANGED="true"
+  fi
   # A pull request that only touches documentation cannot change the APK,
   # so it skips the Android build and emulator jobs, on its own run and
   # on its merge queue run. Documentation means docs/ and top-level Markdown

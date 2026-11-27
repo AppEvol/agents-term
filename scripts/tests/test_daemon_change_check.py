@@ -245,6 +245,7 @@ class DaemonChangeCheckTest(unittest.TestCase):
         cases = [
             ("daemon-rs/tests/integration.rs", "true", "false", "false"),
             ("e2e/docker-vm/test_e2e.py", "false", "true", "false"),
+            ("scripts/test_retries.py", "true", "true", "true"),
             ("daemon-rs/install.sh", "false", "false", "true"),
             ("daemon-rs/tests/test_install.py", "false", "false", "true"),
         ]

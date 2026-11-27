@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from retry_report import fold_retries, history_metrics, label_value, write_flakiness_page
+
 ROBORAZZI_GOLDEN_RE = re.compile(r"\[([A-Za-z0-9_]+)\s+on\s+([A-Za-z0-9_]+)\]")
 CARGO_RUNNING_RE = re.compile(r"^\s*Running\s+(.+?)\s+\(([^)]+)\)\s*$")
 CARGO_DOCTEST_RE = re.compile(r"^\s*Doc-tests\s+(.+?)\s*$")
@@ -712,7 +714,6 @@ def merge_results(
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    result_count = 0
     for input_dir in input_dirs:
         if not input_dir.exists():
             continue
@@ -732,8 +733,6 @@ def merge_results(
             if dest.exists():
                 dest = output_dir / f"{uuid.uuid4().hex[:8]}-{name}"
             shutil.copy2(src, dest)
-            if is_result:
-                result_count += 1
 
     if env_pairs:
         lines = [f"{k}={v}" for k, v in env_pairs if v]
@@ -748,7 +747,7 @@ def merge_results(
                 encoding="utf-8",
             )
 
-    return result_count
+    return fold_retries(output_dir)
 
 
 def _format_duration_ms(duration_ms: int) -> str:
@@ -762,13 +761,6 @@ def _format_duration_ms(duration_ms: int) -> str:
     return f"{minutes}m {rem_seconds:.1f}s"
 
 
-def _label_value(result: Dict[str, Any], name: str, default: str = "") -> str:
-    for label in result.get("labels", []):
-        if label.get("name") == name and label.get("value"):
-            return str(label["value"])
-    return default
-
-
 def _escape_md_cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\r\n", " ").replace("\n", " ").strip()
 
@@ -778,18 +770,30 @@ def collect_metrics(results_dir: Path) -> Dict[str, Any]:
     result_files = sorted(results_dir.glob("*-result.json")) if results_dir.is_dir() else []
     suites: Dict[str, Dict[str, int]] = {}
     totals = {"passed": 0, "failed": 0, "broken": 0, "skipped": 0, "duration_ms": 0}
+    recovered_tests = []
+    first_passed = 0
+    retry_count = 0
     failures: List[Tuple[str, str, str, str]] = []
 
     for path in result_files:
         data = json.loads(path.read_text(encoding="utf-8"))
-        parent = _label_value(data, "parentSuite", "Other")
-        suite = _label_value(data, "suite", "")
+        parent = label_value(data, "parentSuite", "Other")
+        suite = label_value(data, "suite", "")
         status = str(data.get("status", "broken"))
         if status not in ("passed", "failed", "broken", "skipped"):
             status = "broken"
         start = int(data.get("start") or 0)
         stop = int(data.get("stop") or start)
         duration_ms = max(0, stop - start)
+        initial = label_value(data, "initialStatus", status)
+        retries = int(label_value(data, "retryCount", "0"))
+        if retries:
+            # Exclude time spent waiting for other cases between isolated executions.
+            duration_ms = sum(max(0, step["stop"] - step["start"]) for step in data["steps"])
+        retry_count += retries
+        first_passed += int(initial == "passed")
+        if status == "passed" and initial in ("failed", "broken"):
+            recovered_tests.append(data.get("fullName") or data["name"])
 
         bucket = suites.setdefault(
             parent,
@@ -825,6 +829,12 @@ def collect_metrics(results_dir: Path) -> Dict[str, Any]:
         "pass_rate_pct": pass_rate_pct,
         "duration_ms": totals["duration_ms"],
         "duration_human": _format_duration_ms(totals["duration_ms"]),
+        "first_passed": first_passed,
+        "recovered": len(recovered_tests),
+        "recovered_tests": sorted(recovered_tests),
+        "unresolved": totals["failed"] + totals["broken"],
+        "retry_count": retry_count,
+        "attempts": executed_count + retry_count,
         "suites_total": suites_total,
         "suites_passing": suites_passing,
         "suites": suites,
@@ -947,7 +957,20 @@ def generate_badges(
         encoding="utf-8",
     )
 
+    recovered_count = metrics["recovered"]
+    (badges_dir / "recovered.svg").write_text(
+        render_svg_badge("recovered on retry", str(recovered_count), "#dbab09" if recovered_count else "#2ea44f"),
+        encoding="utf-8",
+    )
+    trends = history_metrics(output_dir / "history.jsonl")
+    write_flakiness_page(output_dir / "flakiness.html", trends)
     public_metrics: Dict[str, Any] = {
+        "first_passed": metrics["first_passed"],
+        "recovered": recovered_count,
+        "unresolved": metrics["unresolved"],
+        "retry_count": metrics["retry_count"],
+        "attempts": metrics["attempts"],
+        "test_history": trends,
         "total": total,
         "executed": metrics["executed"],
         "passed": passed,
@@ -1015,6 +1038,15 @@ def build_markdown_summary(
     )
     lines.append("")
 
+    lines.append(
+        f"{metrics['first_passed']} passed first try · {metrics['recovered']} recovered on retry · "
+        f"{metrics['unresolved']} unresolved · {metrics['attempts']} executed attempts."
+    )
+    if metrics["recovered_tests"]:
+        lines.extend(["", "### Recovered on Retry", ""])
+        lines.extend(f"- `{_escape_md_cell(name)}`" for name in metrics["recovered_tests"])
+    lines.append("")
+
     if report_url:
         lines.append(
             f"- Full interactive Allure 3 Awesome report artifact: **`{artifact_name}`** ([workflow run]({report_url}))"
@@ -1024,6 +1056,7 @@ def build_markdown_summary(
 
     if dashboard_url:
         lines.append(f"- Hosted `main` Allure 3 Dashboard (GitHub Pages): {dashboard_url}")
+        lines.append(f"- [Per-test flakiness history on main]({dashboard_url.rstrip('/')}/flakiness.html)")
 
     if failures:
         lines.extend(["", "### Failures & Broken Tests", ""])
@@ -1045,11 +1078,16 @@ def _cmd_unittest(args: argparse.Namespace) -> int:
     params = [{"name": k, "value": v} for k, v in _parse_key_values(args.param, "--param")]
 
     loader = unittest.TestLoader()
-    suite = loader.discover(
-        start_dir=args.start_dir,
-        pattern=args.pattern,
-        top_level_dir=args.top_level_dir,
-    )
+    if args.test_id:
+        sys.path.insert(0, str(Path(args.top_level_dir or args.start_dir).resolve()))
+        suite = loader.loadTestsFromName(args.test_id)
+    else:
+        suite = loader.discover(
+            start_dir=args.start_dir,
+            pattern=args.pattern,
+            top_level_dir=args.top_level_dir,
+        )
+    planned = suite.countTestCases()
 
     def result_factory(stream: Any, descriptions: bool, verbosity: int) -> AllureTextTestResult:
         return AllureTextTestResult(
@@ -1066,6 +1104,13 @@ def _cmd_unittest(args: argparse.Namespace) -> int:
 
     runner = unittest.TextTestRunner(verbosity=args.verbosity, resultclass=result_factory)
     result = runner.run(suite)
+    if args.completion_file:
+        # Class/module teardown failures can arrive after every test has run.
+        fixture_error = any(not isinstance(test, unittest.TestCase) for test, _ in result.errors)
+        if loader.errors or fixture_error or not planned or result.testsRun != planned or result.shouldStop:
+            print("Incomplete unittest suite or fixture failure", file=sys.stderr)
+            return 2
+        Path(args.completion_file).touch()
     return 0 if result.wasSuccessful() else 1
 
 
@@ -1109,6 +1154,11 @@ def _cmd_cargo(args: argparse.Namespace) -> int:
         print("error: cargo subcommand requires -- <command...> or --log-file", file=sys.stderr)
         return 2
 
+    code, _ = run_cargo_tests(args, cmd, output_dir)
+    return code
+
+
+def run_cargo_tests(args: argparse.Namespace, cmd: Sequence[str], output_dir: Path) -> Tuple[int, str]:
     captured_lines: List[str] = []
     with subprocess.Popen(
         cmd,
@@ -1127,15 +1177,16 @@ def _cmd_cargo(args: argparse.Namespace) -> int:
             captured_lines.append(line)
         exit_code = proc.wait()
 
+    log = "".join(captured_lines)
     count = parse_cargo_test_output(
-        output_text="".join(captured_lines),
+        output_text=log,
         output_dir=output_dir,
         parent_suite=args.parent_suite,
         exit_code=exit_code,
         tags=args.tag,
     )
     print(f"Recorded {count} Rust test result(s) into {output_dir}")
-    return exit_code
+    return exit_code, log
 
 
 def _cmd_merge(args: argparse.Namespace) -> int:
@@ -1208,6 +1259,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_unit.add_argument("--param", action="append", default=[], help="Test parameter KEY=VALUE (repeatable)")
     p_unit.add_argument("--tag", action="append", default=[], help="Extra Allure tag label (repeatable)")
     p_unit.add_argument("--verbosity", type=int, default=2, help="unittest verbosity (default: 2)")
+    p_unit.add_argument("--test-id", help="Run a single fully qualified unittest method")
+    p_unit.add_argument("--completion-file", help="Create this marker only after a complete unittest run")
     p_unit.set_defaults(func=_cmd_unittest)
 
     p_junit = subparsers.add_parser("junit", help="Convert JUnit XML files to Allure JSON")

@@ -162,15 +162,20 @@ if [ ${#results_dirs[@]} -eq 0 ]; then
     exit 1
   fi
 
-  merged_local="$tmp_dir/merged"
+  [ -d "$staged/android-unit" ] && results_dirs+=("$staged/android-unit")
+  [ -d "$staged/android-e2e" ] && results_dirs+=("$staged/android-e2e")
+elif grep -rq --include='*-result.json' '"retryAttempt"' "${results_dirs[@]}"; then
+  # Downloaded raw shards need the same logical verdict and attempt steps as CI.
+  tmp_dir="$(mktemp -d)"
+fi
+
+if [ -n "$tmp_dir" ]; then
   merge_args=()
-  [ -d "$staged/android-unit" ] && merge_args+=(--input "$staged/android-unit")
-  [ -d "$staged/android-e2e" ] && merge_args+=(--input "$staged/android-e2e")
   for d in "${results_dirs[@]}"; do
     merge_args+=(--input "$d")
   done
-  python3 scripts/allure_results.py merge "${merge_args[@]}" --output "$merged_local"
-  results_dirs=("$merged_local")
+  python3 scripts/allure_results.py merge "${merge_args[@]}" --output "$tmp_dir/merged"
+  results_dirs=("$tmp_dir/merged")
 fi
 
 check_node
