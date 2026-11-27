@@ -35,7 +35,7 @@ Keep REST and WebSocket payloads backward compatible with released Android app b
 | `GET /api/tabs/:id/attachments/:attachmentId` | Downloads an uploaded image for rendering in the chat transcript. |
 | `POST /api/tabs/:id/interrupt` | Sends interrupt (`SIGINT`/`SIGTERM`) to a running agent turn; optionally accepts `processQueue`, `text`, `overridePermissionMode`, and `attachments` to immediately run the next message. |
 | `POST /api/tabs/:id/read` | Marks a tab as read. |
-| `WS /api/tabs/:id/pty?afterSeq=...&sessionId=...&cols=...&rows=...&restart=1` | Per-tab authenticated interactive PTY stream for `shellMode: "pty"` tabs. Optional `restart=1` (or `restart=true`) spawns a fresh PTY session on connect instead of attaching to an existing (possibly exited) one. Binary server frames carry an 8-byte big-endian `u64` byte offset followed by raw PTY output; binary client frames write raw input bytes; text JSON frames handle `ready`, `replay_end`, `exit`, `error`, `resize`, and `restart`. |
+| `WS /api/tabs/:id/pty?afterSeq=...&sessionId=...&cols=...&rows=...&restart=1` | Per-tab authenticated interactive PTY stream for `shellMode: "pty"` tabs. Optional `restart=1` (or `restart=true`) spawns a fresh PTY session on connect instead of attaching to an existing (possibly exited) one. Binary server frames carry an 8-byte big-endian `u64` byte offset followed by raw PTY output; binary client frames write raw input bytes; text JSON frames handle `ready`, `replay_end`, `exit`, `error`, `resize`, and `restart` (see [Interactive PTY Architecture](pty-architecture.md)). |
 | `GET /api/fs?path=...` | Lists directories on the VM for the New Tab directory browser. |
 | `POST /api/debug/dumps` | Uploads an Android debug dump (`events.ndjson`, `state.json`, `logcat.txt`, `crash.txt`, optional `screenshot.png`) into `~/.agents-term/debug-dumps/` and updates the `latest` symlink. |
 | `GET /api/debug/dumps` | Lists recent Android debug dump folders stored on the VM. |
@@ -46,5 +46,6 @@ Keep REST and WebSocket payloads backward compatible with released Android app b
 ## Related Docs
 
 - [Architecture](architecture.md) — `$HOME/.agents-term/` storage layout and single-writer ownership rules
+- [Interactive PTY Architecture](pty-architecture.md) — PTY daemon subsystem, WebSocket replay protocol, `libghostty-vt` JNI bridge, and mobile terminal UI
 - [VM Daemon Setup & Operations](vm-daemon.md) — installation, service lifecycle, and CLI commands
 - [Live Debugging](live-debugging.md) — `app_hello` / `app_state_*` protocol and `agents_term_app_cli` usage
