@@ -3,6 +3,13 @@ package com.example
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
+import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -12,20 +19,20 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
-import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
-import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
-import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.data.ChatMessage
@@ -33,6 +40,7 @@ import com.example.data.ConnectionConfig
 import com.example.data.CreateTabRequest
 import com.example.data.HerdrApiClient
 import com.example.data.TabRecord
+import com.example.data.appWindowRoots
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -50,8 +58,8 @@ class AgentsTermE2ETest {
 
     /**
      * On failure, appends which window holds input focus. A system dialog on a CI emulator (for
-     * example "System UI isn't responding") makes every later Espresso call fail with
-     * RootViewWithoutFocusException, and the stack trace alone does not show what is on top.
+     * example "System UI isn't responding") can steal window focus from the app, and the stack
+     * trace alone does not show what is on top.
      */
     @get:Rule(order = 0)
     val windowFocusDiagnostics = TestRule { base, _ ->
@@ -60,11 +68,7 @@ class AgentsTermE2ETest {
                 try {
                     base.evaluate()
                 } catch (t: Throwable) {
-                    val focus = runCatching {
-                        shell("dumpsys window windows").lineSequence()
-                            .filter { "mCurrentFocus" in it || "mFocusedApp" in it || "mObscuringWindow" in it }
-                            .joinToString(" | ") { it.trim() }
-                    }.getOrElse { "unavailable: $it" }
+                    val focus = queryWindowFocusDiagnostics()
                     throw AssertionError("${t.message}\n[window focus at failure] $focus", t)
                 }
             }
@@ -77,6 +81,49 @@ class AgentsTermE2ETest {
     private fun shell(command: String): String {
         val fd = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
         return android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).bufferedReader().use { it.readText() }
+    }
+
+    private fun queryWindowFocusDiagnostics(): String = runCatching {
+        val lines = sequenceOf("dumpsys window displays", "dumpsys window")
+            .map { shell(it) }
+            .map { output ->
+                output.lineSequence()
+                    .filter { "mCurrentFocus" in it || "mFocusedApp" in it || "mObscuringWindow" in it }
+                    .map { it.trim() }
+                    .distinct()
+                    .toList()
+            }
+            .firstOrNull { it.isNotEmpty() }
+            .orEmpty()
+        if (lines.isEmpty()) "(none found)" else lines.joinToString(" | ")
+    }.getOrElse { "unavailable: $it" }
+
+    private fun closeSoftKeyboard() {
+        scenario?.onActivity { activity ->
+            val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            for (root in appWindowRoots(activity).asReversed()) {
+                WindowCompat.getInsetsController(activity.window, root)
+                    .hide(WindowInsetsCompat.Type.ime())
+                val token = root.findFocus()?.windowToken ?: root.windowToken
+                imm?.hideSoftInputFromWindow(token, 0)
+            }
+        }
+        composeRule.waitForIdle()
+    }
+
+    private fun pressBack() {
+        scenario?.onActivity { activity ->
+            val decorView = activity.window.decorView
+            val top = appWindowRoots(activity).last { root ->
+                root === decorView ||
+                    ((root.layoutParams as? WindowManager.LayoutParams)?.flags ?: 0) and
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE == 0
+            }
+            val dispatcher = top.findViewTreeOnBackPressedDispatcherOwner()?.onBackPressedDispatcher
+                ?: activity.onBackPressedDispatcher
+            dispatcher.onBackPressed()
+        }
+        composeRule.waitForIdle()
     }
 
     private var scenario: ActivityScenario<MainActivity>? = null
@@ -146,63 +193,79 @@ class AgentsTermE2ETest {
             "Compose roots:\n$roots"
     }
 
-    private fun waitForText(text: String, substring: Boolean = false, timeoutMs: Long = 10_000L) {
+    private fun waitForCondition(
+        description: String,
+        timeoutMs: Long = 10_000L,
+        condition: () -> Boolean,
+    ) {
         try {
-            composeRule.waitUntil(timeoutMillis = timeoutMs) {
-                composeRule.onAllNodesWithText(text, substring = substring)
-                    .fetchSemanticsNodes()
-                    .isNotEmpty()
-            }
-        } catch (e: Throwable) {
+            composeRule.waitUntil(timeoutMillis = timeoutMs, condition = condition)
+        } catch (e: ComposeTimeoutException) {
             throw AssertionError(
-                formatTimeoutDiagnostics("Timed out waiting for text='$text' (substring=$substring)."),
+                formatTimeoutDiagnostics("Timed out waiting for $description."),
                 e,
             )
+        } catch (e: Throwable) {
+            throw AssertionError(
+                formatTimeoutDiagnostics(
+                    "Error while waiting for $description (${e::class.simpleName}: ${e.message}).",
+                ),
+                e,
+            )
+        }
+    }
+
+    private fun waitForText(text: String, substring: Boolean = false, timeoutMs: Long = 10_000L) {
+        waitForCondition("text='$text' (substring=$substring)", timeoutMs) {
+            composeRule.onAllNodesWithText(text, substring = substring)
+                .fetchSemanticsNodes()
+                .isNotEmpty()
         }
     }
 
     private fun waitForTextGone(text: String, substring: Boolean = false, timeoutMs: Long = 10_000L) {
-        try {
-            composeRule.waitUntil(timeoutMillis = timeoutMs) {
-                composeRule.onAllNodesWithText(text, substring = substring)
-                    .fetchSemanticsNodes()
-                    .isEmpty()
-            }
-        } catch (e: Throwable) {
-            throw AssertionError(
-                formatTimeoutDiagnostics("Timed out waiting for text='$text' (substring=$substring) to disappear."),
-                e,
-            )
+        waitForCondition("text='$text' (substring=$substring) to disappear", timeoutMs) {
+            composeRule.onAllNodesWithText(text, substring = substring)
+                .fetchSemanticsNodes()
+                .isEmpty()
         }
     }
 
     private fun waitForTag(tag: String, timeoutMs: Long = 10_000L, useUnmergedTree: Boolean = false) {
-        try {
-            composeRule.waitUntil(timeoutMillis = timeoutMs) {
-                composeRule.onAllNodesWithTag(tag, useUnmergedTree = useUnmergedTree)
-                    .fetchSemanticsNodes()
-                    .isNotEmpty()
-            }
-        } catch (e: Throwable) {
-            throw AssertionError(formatTimeoutDiagnostics("Timed out waiting for tag='$tag'."), e)
+        waitForCondition("tag='$tag'", timeoutMs) {
+            composeRule.onAllNodesWithTag(tag, useUnmergedTree = useUnmergedTree)
+                .fetchSemanticsNodes()
+                .isNotEmpty()
         }
     }
 
     private fun waitForTagGone(tag: String, timeoutMs: Long = 10_000L, useUnmergedTree: Boolean = false) {
-        try {
-            composeRule.waitUntil(timeoutMillis = timeoutMs) {
-                composeRule.onAllNodesWithTag(tag, useUnmergedTree = useUnmergedTree)
-                    .fetchSemanticsNodes()
-                    .isEmpty()
+        waitForCondition("tag='$tag' to disappear", timeoutMs) {
+            composeRule.onAllNodesWithTag(tag, useUnmergedTree = useUnmergedTree)
+                .fetchSemanticsNodes()
+                .isEmpty()
+        }
+    }
+
+    /**
+     * Types [text] into the composer and triggers send via its semantics click action rather than a
+     * fixed-coordinate touch, which can miss or cancel when the out-of-process IME opens and shifts
+     * the composer upward via `imePadding()`.
+     */
+    private fun sendComposerMessage(text: String) {
+        composeRule.onNodeWithTag("composer_input").performTextInput(text)
+        composeRule.onNodeWithTag("send_button").performSemanticsAction(SemanticsActions.OnClick)
+        waitForCondition("composer_input to clear after sending '$text'", timeoutMs = 5_000L) {
+            val nodes = composeRule.onAllNodesWithTag("composer_input").fetchSemanticsNodes()
+            nodes.isEmpty() || nodes.all { node ->
+                node.config.getOrNull(SemanticsProperties.EditableText)?.text.orEmpty().isEmpty()
             }
-        } catch (e: Throwable) {
-            throw AssertionError(formatTimeoutDiagnostics("Timed out waiting for tag='$tag' to disappear."), e)
         }
     }
 
     /** Submits the open NewTabSheet and waits for the sheet to close before matching [expectedTitle]. */
     private fun submitNewTab(expectedTitle: String) {
-        Espresso.closeSoftKeyboard()
+        closeSoftKeyboard()
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
         waitForTagGone("create_tab_button")
         waitForText(expectedTitle)
@@ -213,7 +276,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("host_input").performScrollTo().performTextReplacement(targetDaemon.host)
         composeRule.onNodeWithTag("port_input").performScrollTo().performTextReplacement(targetDaemon.port.toString())
         composeRule.onNodeWithTag("token_input").performScrollTo().performTextReplacement(token)
-        Espresso.closeSoftKeyboard()
+        closeSoftKeyboard()
         composeRule.onNodeWithTag("connect_button").performScrollTo().performClick()
     }
 
@@ -251,7 +314,7 @@ class AgentsTermE2ETest {
 
         // Correcting the token succeeds and opens the connected empty workspace
         composeRule.onNodeWithTag("token_input").performScrollTo().performTextReplacement(activeDaemon.token)
-        Espresso.closeSoftKeyboard()
+        closeSoftKeyboard()
         composeRule.onNodeWithTag("connect_button").performScrollTo().performClick()
 
         waitForText("Connected to ci-test-vm")
@@ -288,8 +351,7 @@ class AgentsTermE2ETest {
         assertTrue(composeRule.onAllNodesWithTag("attach_button").fetchSemanticsNodes().isEmpty())
 
         // Send a prompt and verify streamed reasoning, tool call, markdown text, and usage stats
-        composeRule.onNodeWithTag("composer_input").performTextInput("Summarize the repo")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("Summarize the repo")
 
         waitForText("Summarize the repo")
         waitForText("Repository is clean on main branch.")
@@ -330,25 +392,22 @@ class AgentsTermE2ETest {
         waitForTag("composer_input")
 
         // 1) Trigger a long-running working turn; tapping send while empty shows hint and does NOT interrupt
-        composeRule.onNodeWithTag("composer_input").performTextInput("hold_working long job")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("hold_working long job")
 
         waitForText("Processing prompt...")
         waitForTag("streaming_working_badge")
-        composeRule.onNodeWithTag("send_button").performClick()
+        composeRule.onNodeWithTag("send_button").performSemanticsAction(SemanticsActions.OnClick)
         waitForTag("hold_to_interrupt_hint")
         assertTrue("Accidental tap must not interrupt active turn", activeDaemon.interruptedTabIds.isEmpty())
 
         // 2) Typing while working queues messages by default; queued items can be inspected and removed
-        composeRule.onNodeWithTag("composer_input").performTextInput("First queued follow-up")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("First queued follow-up")
         waitForTag("queued_messages_tray")
         waitForText("Queued (1)")
         waitForText("First queued follow-up")
         assertTrue("Queueing must not interrupt active turn", activeDaemon.interruptedTabIds.isEmpty())
 
-        composeRule.onNodeWithTag("composer_input").performTextInput("Drop this queued item")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("Drop this queued item")
         waitForText("Queued (2)")
         waitForText("Drop this queued item")
 
@@ -367,8 +426,7 @@ class AgentsTermE2ETest {
 
         // 3) Press & hold send button with a draft to force interrupt AND process all queued messages + draft
         composeRule.onNodeWithTag("composer_input").performTextInput("Final urgent follow-up")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("send_button").performTouchInput { longClick() }
+        composeRule.onNodeWithTag("send_button").performSemanticsAction(SemanticsActions.OnLongClick)
 
         waitForText("Interrupted by user")
         waitForText("First queued follow-up\n\nFinal urgent follow-up")
@@ -377,18 +435,15 @@ class AgentsTermE2ETest {
         assertTrue(composeRule.onAllNodesWithTag("queued_messages_tray").fetchSemanticsNodes().isEmpty())
 
         // 4) Trigger another working turn and press & hold empty send button to stop cleanly
-        composeRule.onNodeWithTag("composer_input").performTextInput("hold_working stop only")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("hold_working stop only")
         waitForText("Processing prompt...")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("send_button").performTouchInput { longClick() }
+        composeRule.onNodeWithTag("send_button").performSemanticsAction(SemanticsActions.OnLongClick)
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             composeRule.onAllNodesWithText("Processing prompt...").fetchSemanticsNodes().isEmpty()
         }
 
         // 5) Trigger a permission-blocked turn and retry with Full Access
-        composeRule.onNodeWithTag("composer_input").performTextInput("needs_permission run tests")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("needs_permission run tests")
 
         waitForTag("allow_full_access_button")
         composeRule.onNodeWithText("Permission Required").assertIsDisplayed()
@@ -417,7 +472,7 @@ class AgentsTermE2ETest {
             composeRule.onAllNodes(hasTestTag("create_tab_button") and hasText(limitLabel)).fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().assertIsNotEnabled()
-        Espresso.pressBack()
+        pressBack()
         composeRule.onNodeWithTag("top_new_tab_button").assertIsNotEnabled()
         composeRule.onNodeWithTag("open_drawer_button").performClick()
         waitForText("PERSISTENT TABS (10)")
@@ -533,7 +588,7 @@ class AgentsTermE2ETest {
         // Enable Debug Sharing to VM and upload a dump with a note
         composeRule.onNodeWithTag("debug_sharing_switch").performScrollTo().performClick()
         composeRule.onNodeWithTag("debug_note_input").performScrollTo().performTextInput("agy glitched on comment")
-        Espresso.closeSoftKeyboard()
+        closeSoftKeyboard()
         composeRule.onNodeWithTag("upload_debug_dump_button").performScrollTo().performClick()
 
         // Wait for VM upload confirmation card showing remote dump directory
@@ -796,7 +851,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("ssh_username_input").performScrollTo().performTextReplacement("ned")
         composeRule.onNodeWithTag("ssh_port_input").performScrollTo().performTextReplacement(fakeSsh.port.toString())
         composeRule.onNodeWithTag("ssh_daemon_port_input").performScrollTo().performTextReplacement(activeDaemon.port.toString())
-        Espresso.closeSoftKeyboard()
+        closeSoftKeyboard()
 
         // Start SSH bootstrap against the in-process fake VM SSH server
         composeRule.onNodeWithTag("ssh_bootstrap_button").performScrollTo().performClick()
@@ -814,8 +869,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextInput("SSH Agy Tab")
         submitNewTab("SSH Agy Tab")
         waitForTag("composer_input")
-        composeRule.onNodeWithTag("composer_input").performTextInput("Diagnose phone glitch")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("Diagnose phone glitch")
 
         waitForText("Diagnose phone glitch")
         waitForText("Repository is clean on main branch.")
@@ -841,14 +895,12 @@ class AgentsTermE2ETest {
         waitForTag("composer_input")
 
         // 1) Reproduce empty completion from debug dump 3445b6c8: should show clear fallback text
-        composeRule.onNodeWithTag("composer_input").performTextInput("simulate_empty_response")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("simulate_empty_response")
 
         waitForText("No response text was returned by the agent.")
 
         // 2) Subsequent normal prompt on the same agy tab still streams and completes cleanly
-        composeRule.onNodeWithTag("composer_input").performTextInput("Can you say something?")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("Can you say something?")
 
         waitForText("Can you say something?")
         waitForText("Repository is clean on main branch.")
@@ -924,8 +976,7 @@ class AgentsTermE2ETest {
         }
 
         // Send a prompt to confirm the recovered socket is healthy
-        composeRule.onNodeWithTag("composer_input").performTextInput("Verify reconnect stability")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("Verify reconnect stability")
         waitForText("Repository is clean on main branch.")
 
         // Wait longer than 2x the 1.5s reconnect interval and assert no further reconnects occur
@@ -973,8 +1024,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("model_picker_chip").assertTextContains("Opus 5.5")
 
         // 3) Use /model default slash command in composer to reset to CLI default
-        composeRule.onNodeWithTag("composer_input").performTextInput("/model default")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("/model default")
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             activeDaemon.tabModel("tab_1") == null &&
                 composeRule.onAllNodes(hasTestTag("model_picker_chip") and hasText("Default model", substring = true))
@@ -984,11 +1034,10 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("model_picker_chip").assertTextContains("Default model")
 
         // 4) Use /model (bare command) to open the ModelPickerSheet and apply a custom model ID
-        composeRule.onNodeWithTag("composer_input").performTextInput("/model")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("/model")
         waitForTag("custom_model_input")
         composeRule.onNodeWithTag("custom_model_input").performScrollTo().performTextInput("claude-custom-exp")
-        Espresso.closeSoftKeyboard()
+        closeSoftKeyboard()
         composeRule.onNodeWithTag("custom_model_apply_button").performScrollTo().performClick()
 
         composeRule.waitUntil(timeoutMillis = 10_000L) {
@@ -1052,7 +1101,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("new_tab_cwd_input").assertTextContains("/home/ci/projects/agents-term")
 
         // Dismiss sheet before simulating folder deletion
-        Espresso.pressBack()
+        pressBack()
         waitForTag("empty_new_tab_button")
 
         // 3) Delete /home/ci/projects/agents-term on VM and open New Tab: must fall back to /home/ci
@@ -1087,8 +1136,7 @@ class AgentsTermE2ETest {
         launchMainActivity(deepLink)
         waitForTag("composer_input")
 
-        composeRule.onNodeWithTag("composer_input").performTextInput("multi_tool_turn check repo")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("multi_tool_turn check repo")
 
         waitForText("Checking repository state first.")
         waitForText("3 tool calls · 3 done")
@@ -1139,7 +1187,7 @@ class AgentsTermE2ETest {
         waitForTag("edit_tab_system_prompt_input")
         composeRule.onNodeWithTag("edit_tab_system_prompt_input")
             .performTextReplacement("Respond in short bullet points only.")
-        Espresso.closeSoftKeyboard()
+        closeSoftKeyboard()
         composeRule.onNodeWithTag("edit_tab_system_prompt_save").performClick()
 
         composeRule.waitUntil(timeoutMillis = 10_000L) {
@@ -1235,9 +1283,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("drawer_tab_tab_active").performClick()
         composeRule.waitForIdle()
         waitForTag("composer_input")
-        composeRule.onNodeWithTag("composer_input").performTextInput("finish_task ship update")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("finish_task ship update")
 
         waitForTag("topbar_done_badge")
         composeRule.onNodeWithTag("overflow_menu_button").performClick()

@@ -6,17 +6,19 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.ParcelFileDescriptor
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
@@ -25,10 +27,12 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToString
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
-import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.example.data.appWindowRoots
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -60,11 +64,7 @@ class RealVmDockerE2ETest {
                 try {
                     base.evaluate()
                 } catch (t: Throwable) {
-                    val focus = runCatching {
-                        shell("dumpsys window windows").lineSequence()
-                            .filter { "mCurrentFocus" in it || "mFocusedApp" in it || "mObscuringWindow" in it }
-                            .joinToString(" | ") { it.trim() }
-                    }.getOrElse { "unavailable: $it" }
+                    val focus = queryWindowFocusDiagnostics()
                     throw AssertionError("${t.message}\n[window focus at failure] $focus", t)
                 }
             }
@@ -91,6 +91,34 @@ class RealVmDockerE2ETest {
         return ParcelFileDescriptor.AutoCloseInputStream(fd).bufferedReader().use { it.readText() }
     }
 
+    private fun queryWindowFocusDiagnostics(): String = runCatching {
+        val lines = sequenceOf("dumpsys window displays", "dumpsys window")
+            .map { shell(it) }
+            .map { output ->
+                output.lineSequence()
+                    .filter { "mCurrentFocus" in it || "mFocusedApp" in it || "mObscuringWindow" in it }
+                    .map { it.trim() }
+                    .distinct()
+                    .toList()
+            }
+            .firstOrNull { it.isNotEmpty() }
+            .orEmpty()
+        if (lines.isEmpty()) "(none found)" else lines.joinToString(" | ")
+    }.getOrElse { "unavailable: $it" }
+
+    private fun closeSoftKeyboard() {
+        scenario?.onActivity { activity ->
+            val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            for (root in appWindowRoots(activity).asReversed()) {
+                WindowCompat.getInsetsController(activity.window, root)
+                    .hide(WindowInsetsCompat.Type.ime())
+                val token = root.findFocus()?.windowToken ?: root.windowToken
+                imm?.hideSoftInputFromWindow(token, 0)
+            }
+        }
+        composeRule.waitForIdle()
+    }
+
     @Before
     fun setUp() {
         requireDockerVmArgs()
@@ -112,45 +140,66 @@ class RealVmDockerE2ETest {
         scenario = null
     }
 
-    private fun waitForText(text: String, substring: Boolean = false, timeoutMs: Long = 30_000L) {
-        val matcher = hasText(text, substring = substring)
-        var lastError: Throwable? = null
+    private fun formatFailureDiagnostics(header: String): String {
+        val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString(maxDepth = Int.MAX_VALUE) }
+            .getOrElse { it.toString() }
+        return "$header\nCompose roots:\n$roots"
+    }
+
+    private fun waitForCondition(
+        description: String,
+        timeoutMs: Long,
+        condition: () -> Boolean,
+    ) {
         try {
-            composeRule.waitUntil(timeoutMillis = timeoutMs) {
-                runCatching {
-                    composeRule.onAllNodesWithText(text, substring = substring)
-                        .fetchSemanticsNodes().isNotEmpty()
-                }.onFailure { lastError = it }.getOrDefault(false)
-            }
+            composeRule.waitUntil(timeoutMillis = timeoutMs, condition = condition)
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError(
+                formatFailureDiagnostics("Timed out waiting for $description."),
+                e,
+            )
         } catch (e: Throwable) {
-            val tree = runCatching {
-                composeRule.onNode(matcher).printToString()
-            }.getOrElse { lastError?.message ?: e.message }
-            throw AssertionError("Timed out waiting for text '$text' (substring=$substring): $tree", e)
+            throw AssertionError(
+                formatFailureDiagnostics(
+                    "Error while waiting for $description (${e::class.simpleName}: ${e.message}).",
+                ),
+                e,
+            )
+        }
+    }
+
+    private fun waitForText(text: String, substring: Boolean = false, timeoutMs: Long = 30_000L) {
+        waitForCondition("text '$text' (substring=$substring)", timeoutMs) {
+            composeRule.onAllNodesWithText(text, substring = substring)
+                .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                .isNotEmpty()
         }
     }
 
     private fun waitForTag(tag: String, timeoutMs: Long = 20_000L) {
-        try {
-            composeRule.waitUntil(timeoutMillis = timeoutMs) {
-                runCatching {
-                    composeRule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
-                }.getOrDefault(false)
-            }
-        } catch (e: Throwable) {
-            throw AssertionError("Timed out waiting for tag '$tag'", e)
+        waitForCondition("tag '$tag'", timeoutMs) {
+            composeRule.onAllNodesWithTag(tag)
+                .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                .isNotEmpty()
         }
     }
 
     private fun waitForTagGone(tag: String, timeoutMs: Long = 20_000L) {
-        try {
-            composeRule.waitUntil(timeoutMillis = timeoutMs) {
-                runCatching {
-                    composeRule.onAllNodesWithTag(tag).fetchSemanticsNodes().isEmpty()
-                }.getOrDefault(false)
+        waitForCondition("tag '$tag' to disappear", timeoutMs) {
+            composeRule.onAllNodesWithTag(tag)
+                .fetchSemanticsNodes()
+                .isEmpty()
+        }
+    }
+
+    private fun sendComposerMessage(text: String) {
+        composeRule.onNodeWithTag("composer_input").performTextInput(text)
+        composeRule.onNodeWithTag("send_button").performSemanticsAction(SemanticsActions.OnClick)
+        waitForCondition("composer_input to clear after sending '$text'", timeoutMs = 5_000L) {
+            val nodes = composeRule.onAllNodesWithTag("composer_input").fetchSemanticsNodes()
+            nodes.isEmpty() || nodes.all { node ->
+                node.config.getOrNull(SemanticsProperties.EditableText)?.text.orEmpty().isEmpty()
             }
-        } catch (e: Throwable) {
-            throw AssertionError("Timed out waiting for tag '$tag' to disappear", e)
         }
     }
 
@@ -171,7 +220,7 @@ class RealVmDockerE2ETest {
         composeRule.onNodeWithTag("auth_password").performScrollTo().performClick()
         waitForTag("ssh_password_input")
         composeRule.onNodeWithTag("ssh_password_input").performScrollTo().performTextReplacement(pass)
-        Espresso.closeSoftKeyboard()
+        closeSoftKeyboard()
 
         composeRule.onNodeWithTag("ssh_bootstrap_button").performScrollTo().performClick()
         // Wait until ConnectScreen closes and the workspace top bar appears (works with 0 or >0 tabs).
@@ -179,9 +228,9 @@ class RealVmDockerE2ETest {
     }
 
     private fun createTab(agentType: String, name: String) {
-        val hasEmptyButton = runCatching {
-            composeRule.onAllNodes(hasTestTag("empty_new_tab_button")).fetchSemanticsNodes().isNotEmpty()
-        }.getOrDefault(false)
+        val hasEmptyButton = composeRule.onAllNodes(hasTestTag("empty_new_tab_button"))
+            .fetchSemanticsNodes()
+            .isNotEmpty()
         if (hasEmptyButton) {
             composeRule.onNodeWithTag("empty_new_tab_button").performClick()
         } else {
@@ -190,7 +239,7 @@ class RealVmDockerE2ETest {
         waitForText("New Persistent Agent Tab")
         composeRule.onNodeWithTag("agent_option_$agentType").performScrollTo().performClick()
         composeRule.onNodeWithTag("new_tab_name_input").performScrollTo().performTextReplacement(name)
-        Espresso.closeSoftKeyboard()
+        closeSoftKeyboard()
         composeRule.onNodeWithTag("create_tab_button").performScrollTo().performClick()
         // Wait for NewTabSheet to dismiss first: otherwise waitForText(name) can match
         // new_tab_name_input while POST /api/tabs is still in flight.
@@ -205,14 +254,12 @@ class RealVmDockerE2ETest {
 
         // 1. Real Linux shell tab executing inside the Docker container.
         createTab("shell", "Real Shell")
-        composeRule.onNodeWithTag("composer_input").performTextInput("echo REAL_DOCKER_SHELL_\$(uname -s)")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("echo REAL_DOCKER_SHELL_\$(uname -s)")
         waitForText("REAL_DOCKER_SHELL_Linux", substring = true, timeoutMs = 20_000L)
 
         // 2. Real Claude runner executing the deterministic fake CLI inside Docker.
         createTab("claude", "Real Claude")
-        composeRule.onNodeWithTag("composer_input").performTextInput("Verify container status")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("Verify container status")
         waitForText("Claude reply [sess=claude-sess-e2e-1", substring = true, timeoutMs = 20_000L)
         waitForText("Docker E2E Claude Task", substring = true, timeoutMs = 15_000L)
     }
@@ -235,9 +282,7 @@ class RealVmDockerE2ETest {
         val daemonPort = arg("realVmDaemonPort", "7591")
         val cliCmd = arg("realVmAppStateCliCmd", "agents_term_app_cli")
         createTab("shell", "Live Debug Shell")
-        composeRule.onNodeWithTag("composer_input")
-            .performTextInput("$cliCmd --port $daemonPort state --pretty")
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("$cliCmd --port $daemonPort state --pretty")
         waitForText("\"connectionState\": \"CONNECTED\"", substring = true, timeoutMs = 25_000L)
     }
 
@@ -256,15 +301,10 @@ class RealVmDockerE2ETest {
     }
 
     private fun waitForReadyAttachments(count: Int) {
-        try {
-            composeRule.waitUntil(timeoutMillis = 30_000L) {
-                runCatching {
-                    composeRule.onAllNodesWithContentDescription("Attached image").fetchSemanticsNodes().size == count
-                }.getOrDefault(false)
-            }
-        } catch (e: Throwable) {
-            val tree = runCatching { composeRule.onRoot().printToString() }.getOrDefault("")
-            throw AssertionError("Timed out waiting for $count uploaded image(s): $tree", e)
+        waitForCondition("$count uploaded image(s)", timeoutMs = 30_000L) {
+            composeRule.onAllNodesWithContentDescription("Attached image")
+                .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                .size == count
         }
     }
 
@@ -290,9 +330,7 @@ class RealVmDockerE2ETest {
         composeRule.onNodeWithTag("composer_input").performSemanticsAction(SemanticsActions.PasteText)
         waitForReadyAttachments(2)
 
-        composeRule.onNodeWithTag("composer_input").performTextInput("What is wrong in these?")
-        Espresso.closeSoftKeyboard()
-        composeRule.onNodeWithTag("send_button").performClick()
+        sendComposerMessage("What is wrong in these?")
 
         // The agent CLI on the VM opened both files at the paths it was handed. Small
         // screenshots are uploaded untouched, so the sizes it saw are the sizes that were pasted.
@@ -321,15 +359,13 @@ class RealVmDockerE2ETest {
         waitForTag("attachment_viewer")
         waitForTag("attachment_viewer_image")
         composeRule.onNodeWithTag("attachment_viewer_close").performClick()
-        composeRule.waitUntil(timeoutMillis = 10_000L) {
-            composeRule.onAllNodesWithTag("attachment_viewer").fetchSemanticsNodes().isEmpty()
-        }
+        waitForTagGone("attachment_viewer", timeoutMs = 10_000L)
 
         // An image with no text at all is a complete message.
         copyScreenshotToClipboard("e2e_shot_3.png", Color.rgb(30, 160, 60))
         composeRule.onNodeWithTag("composer_input").performSemanticsAction(SemanticsActions.PasteText)
         waitForReadyAttachments(1)
-        composeRule.onNodeWithTag("send_button").performClick()
+        composeRule.onNodeWithTag("send_button").performSemanticsAction(SemanticsActions.OnClick)
         waitForText("resumed=yes", substring = true, timeoutMs = 20_000L)
         composeRule.onNodeWithContentDescription("Sent image 1 of 1").assertExists()
     }
