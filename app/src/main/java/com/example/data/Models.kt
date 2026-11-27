@@ -319,6 +319,67 @@ data class PtyCapabilities(
 )
 
 @JsonClass(generateAdapter = true)
+data class DaemonSelfUpdateInfo(
+    val supported: Boolean = false,
+    val rollbackAvailable: Boolean = false,
+    val previousBuildHash: String? = null,
+    val lastError: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class DaemonUpdateStatus(
+    val state: String = "idle",
+    val targetVersion: String? = null,
+    val targetBuildHash: String? = null,
+    val currentBuildHash: String? = null,
+    val activeTabIds: List<String> = emptyList(),
+    val activeTurnsCount: Int = activeTabIds.size,
+    val whenBusy: String? = null,
+    val detail: String? = null,
+    val error: String? = null,
+    val rollbackAvailable: Boolean = false,
+    val previousBuildHash: String? = null,
+    val lastError: String? = null,
+    val updatedAt: Long = 0L,
+) {
+    val effectiveActiveTurnCount: Int
+        get() = if (activeTabIds.isNotEmpty()) activeTabIds.size else activeTurnsCount
+
+    val isCheckingOrApplying: Boolean
+        get() = state == "checking" || state == "downloading" || state == "verifying"
+
+    val isPendingRestart: Boolean
+        get() = state == "pending_restart"
+
+    val isRestarting: Boolean
+        get() = state == "restarting"
+
+    val isError: Boolean
+        get() = state == "error"
+
+    val isUpToDate: Boolean
+        get() = state == "up_to_date"
+
+    val isActiveOverlay: Boolean
+        get() = isCheckingOrApplying || isPendingRestart || isRestarting || isError
+
+    val isDismissibleTerminal: Boolean
+        get() = isError || isUpToDate || state == "idle"
+}
+
+@JsonClass(generateAdapter = true)
+data class DaemonUpdateRequest(
+    val version: String,
+    val expectedHash: String? = null,
+    val whenBusy: String = "defer",
+)
+
+@JsonClass(generateAdapter = true)
+data class DaemonRollbackRequest(
+    val whenBusy: String = "force",
+)
+
+@JsonClass(generateAdapter = true)
 data class ServerInfo(
     val version: String = "",
     val protocolVersion: Int? = null,
@@ -335,8 +396,11 @@ data class ServerInfo(
     val attachments: AttachmentLimits? = null,
     /** Interactive PTY terminal capability; null on daemons that predate PTY tabs. */
     val pty: PtyCapabilities? = null,
+    /** In-place daemon self-update & rollback capabilities; null on older daemons. */
+    val selfUpdate: DaemonSelfUpdateInfo? = null,
 ) {
     val supportsPtyShell: Boolean get() = pty != null
+    val supportsSelfUpdate: Boolean get() = selfUpdate?.supported == true
 }
 
 @JsonClass(generateAdapter = true)
@@ -893,6 +957,7 @@ data class WsServerEnvelope(
     val textDelta: String? = null,
     val thinkingDelta: String? = null,
     val toolCall: ToolCallItem? = null,
+    val update: DaemonUpdateStatus? = null,
     val ts: Long? = null,
     // App state reporter requests (type = "app_state_request"); see AppStateReporter.kt.
     val requestId: String? = null,

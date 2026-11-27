@@ -37,6 +37,7 @@ data class WorkspaceState(
     val loadingTabIds: Set<String> = emptySet(),
     val reopenedTabIds: Set<String> = emptySet(),
     val bannerMessage: String? = null,
+    val daemonUpdateStatus: DaemonUpdateStatus? = null,
     val precomputedFinishedTabIds: Set<String>? = null,
     val throughput: List<ModelThroughput> = emptyList(),
 ) {
@@ -92,14 +93,21 @@ fun reduceWorkspaceEvent(
             val validPreferred = preferredTabId?.takeIf { id -> incomingTabs.any { it.id == id } }
             val validServerActive = event.activeTabId?.takeIf { id -> incomingTabs.any { it.id == id } }
             val nextSelected = validCurrent ?: validPreferred ?: validServerActive ?: incomingTabs.firstOrNull()?.id
+            val nextServer = event.server ?: state.serverInfo
+            val nextUpdateStatus = when {
+                nextServer?.supportsSelfUpdate != true -> null
+                state.daemonUpdateStatus?.isRestarting == true -> null
+                else -> state.daemonUpdateStatus
+            }
             state.copy(
                 connectionState = ConnectionState.CONNECTED,
                 connectionError = null,
-                serverInfo = event.server ?: state.serverInfo,
+                serverInfo = nextServer,
                 throughput = event.throughput.orEmpty(),
                 tabs = incomingTabs,
                 closedTabs = event.closedTabs.orEmpty(),
                 selectedTabId = nextSelected,
+                daemonUpdateStatus = nextUpdateStatus,
             )
         }
 
@@ -224,6 +232,13 @@ fun reduceWorkspaceEvent(
                 existing + msg
             }
             state.copy(messagesByTab = state.messagesByTab + (tabId to updated))
+        }
+
+        "daemon_update_status" -> {
+            val update = event.update ?: return state
+            state.copy(
+                daemonUpdateStatus = if (update.state == "idle") null else update,
+            )
         }
 
         else -> state
@@ -916,11 +931,7 @@ class HerdrRepository(
 
     suspend fun updateTabModel(tabId: String, model: String?): Result<TabRecord> {
         val normalized = model?.trim().orEmpty()
-        debugRecorder?.record(
-            "ui",
-            "update_tab_model",
-            "Updating tab=$tabId model=${normalized.ifEmpty { "(default)" }}",
-        )
+        debugRecorder?.record("ui", "update_tab_model", "Updating tab=$tabId model=${normalized.ifEmpty { "(default)" }}")
         return updateTab(tabId, UpdateTabRequest(model = normalized))
     }
 
@@ -943,25 +954,20 @@ class HerdrRepository(
         return updateTab(tabId, UpdateTabRequest(status = status))
     }
 
-    suspend fun refreshAgentModels(
-        agent: String,
-        forceRefresh: Boolean = false,
-    ): Result<AgentModelsResponse> {
+    suspend fun refreshAgentModels(agent: String, forceRefresh: Boolean = false): Result<AgentModelsResponse> {
         val cfg = _state.value.config
         if (!cfg.isValid) return Result.failure(IllegalStateException("Not connected to a VM daemon"))
         return runCatching {
-            val resp = api.getAgentModels(cfg, agent, refresh = forceRefresh)
-            _state.update { applyRefreshedAgentModels(it, agent, resp) }
-            resp
+            api.getAgentModels(cfg, agent, refresh = forceRefresh).also { resp ->
+                _state.update { applyRefreshedAgentModels(it, agent, resp) }
+            }
         }
     }
 
     suspend fun fetchAgentUsage(agent: String): Result<AgentUsageResponse> {
         val cfg = _state.value.config
         if (!cfg.isValid) return Result.failure(IllegalStateException("Not connected to a VM daemon"))
-        return runCatching {
-            api.getAgentUsage(cfg, agent)
-        }
+        return runCatching { api.getAgentUsage(cfg, agent) }
     }
 
     suspend fun deleteTab(tabId: String): Result<TabRecord?> {
@@ -1133,9 +1139,11 @@ class HerdrRepository(
         return runCatching { api.uploadDebugDump(cfg, request) }
     }
 
-    fun clearBanner() {
-        _state.update { it.copy(bannerMessage = null) }
+    fun updateDaemonUpdateStatus(status: DaemonUpdateStatus?) {
+        _state.update { it.copy(daemonUpdateStatus = status?.takeUnless { s -> s.state == "idle" }) }
     }
+
+    fun clearBanner() = _state.update { it.copy(bannerMessage = null) }
 
     fun showBanner(msg: String) {
         debugRecorder?.record("error", "banner_message", msg)

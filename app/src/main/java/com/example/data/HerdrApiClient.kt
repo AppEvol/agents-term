@@ -143,6 +143,50 @@ open class HerdrApiClient(
         return executeJson(req)
     }
 
+    open suspend fun getDaemonUpdateStatus(config: ConnectionConfig): DaemonUpdateStatus {
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/daemon/update")
+            .withAuth(config)
+            .get()
+            .build()
+        return executeJson(req)
+    }
+
+    open suspend fun startDaemonUpdate(
+        config: ConnectionConfig,
+        body: DaemonUpdateRequest,
+    ): DaemonUpdateStatus {
+        val json = encodeHerdrJson(body)
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/daemon/update")
+            .withAuth(config)
+            .post(json.toRequestBody(jsonMediaType))
+            .build()
+        return executeJson(req)
+    }
+
+    open suspend fun cancelDaemonUpdate(config: ConnectionConfig): DaemonUpdateStatus {
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/daemon/update")
+            .withAuth(config)
+            .delete()
+            .build()
+        return executeJson(req)
+    }
+
+    open suspend fun rollbackDaemon(
+        config: ConnectionConfig,
+        body: DaemonRollbackRequest = DaemonRollbackRequest(),
+    ): DaemonUpdateStatus {
+        val json = encodeHerdrJson(body)
+        val req = Request.Builder()
+            .url("${config.httpBaseUrl()}/api/daemon/rollback")
+            .withAuth(config)
+            .post(json.toRequestBody(jsonMediaType))
+            .build()
+        return executeJson(req)
+    }
+
     open suspend fun getAgentModels(
         config: ConnectionConfig,
         agent: String,

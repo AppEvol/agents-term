@@ -74,9 +74,11 @@ class FakeSshVmServer(
             commandFactory = CommandFactory { channel: ChannelSession, command: String ->
                 channel.session?.username?.let { authenticatedUsers.add(it) }
                 receivedCommands.add(command)
+                val isRollback = command.contains("agentsterm-daemon.prev") && command.contains("rollback")
                 SimulatedDaemonBootstrapCommand(
                     pairingUri = pairingUri,
                     daemonPort = daemonPort,
+                    isRollback = isRollback,
                     executor = executor,
                 )
             }
@@ -96,6 +98,7 @@ class FakeSshVmServer(
 private class SimulatedDaemonBootstrapCommand(
     private val pairingUri: String,
     private val daemonPort: Int,
+    private val isRollback: Boolean = false,
     private val executor: java.util.concurrent.ExecutorService,
 ) : Command {
 
@@ -117,14 +120,22 @@ private class SimulatedDaemonBootstrapCommand(
     override fun start(channel: ChannelSession?, env: Environment?) {
         executor.submit {
             try {
-                val lines = listOf(
-                    ">>> Checking latest AgentsTerm daemon (agentsterm-daemon-linux-x86_64)...",
-                    ">>> Installed verified binary at /home/ci/.agents-term/bin/agentsterm-daemon",
-                    ">>> Waiting for the daemon on http://127.0.0.1:$daemonPort ...",
-                    ">>> Daemon v0.3.0 (commit abcdef123456) healthy on 127.0.0.1:$daemonPort (hostname ci-test-vm)",
-                    ">>> Running as systemd --user (agentsterm-daemon.service)",
-                    pairingUri,
-                )
+                val lines = if (isRollback) {
+                    listOf(
+                        ">>> Restoring previous AgentsTerm daemon from agentsterm-daemon.prev...",
+                        ">>> Daemon rolled back and healthy on 127.0.0.1:$daemonPort (hostname ci-test-vm)",
+                        pairingUri,
+                    )
+                } else {
+                    listOf(
+                        ">>> Checking latest AgentsTerm daemon (agentsterm-daemon-linux-x86_64)...",
+                        ">>> Installed verified binary at /home/ci/.agents-term/bin/agentsterm-daemon",
+                        ">>> Waiting for the daemon on http://127.0.0.1:$daemonPort ...",
+                        ">>> Daemon v0.3.0 (commit abcdef123456) healthy on 127.0.0.1:$daemonPort (hostname ci-test-vm)",
+                        ">>> Running as systemd --user (agentsterm-daemon.service)",
+                        pairingUri,
+                    )
+                }
                 val stream = out
                 if (stream != null) {
                     for (line in lines) {

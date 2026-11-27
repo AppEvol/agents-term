@@ -294,4 +294,46 @@
     <string name="settings_daemon_outdated_body">This app expects VM daemon protocol v%1$d (connected: %2$s). Update via SSH Auto-Setup below, or run `sh daemon-rs/install.sh` on your VM.</string>
     <string name="settings_update_daemon_button">Update VM Daemon (SSH Auto-Setup)</string>
     <string name="action_update_vm_daemon">Update VM Daemon</string>
+    <string name="status_daemon_build_mismatch">VM daemon (%1$s) differs from this app release (%2$s).</string>
+    <string name="status_daemon_update_checking">Checking for VM daemon update…</string>
+    <string name="status_daemon_update_downloading">Downloading VM daemon update…</string>
+    <string name="status_daemon_update_verifying">Verifying VM daemon binary…</string>
+    <string name="status_daemon_update_restarting">Restarting VM daemon &amp; reconnecting…</string>
+    <plurals name="status_daemon_update_pending_restart">
+        <item quantity="one">Daemon update ready — waiting for %1$d active tab to finish</item>
+        <item quantity="other">Daemon update ready — waiting for %1$d active tabs to finish</item>
+    </plurals>
+    <string name="status_daemon_update_error_prefix">Daemon update failed: %1$s</string>
+    <string name="status_daemon_auto_rollback">Previous daemon update failed and rolled back automatically: %1$s</string>
+    <string name="status_daemon_reconnect_failed">VM daemon did not reconnect after restarting. Revert to the previous daemon via SSH.</string>
+    <string name="action_restart_now">Restart now</string>
+    <string name="action_wait">Wait</string>
+    <string name="action_revert_daemon">Revert to Previous Daemon</string>
+    <string name="action_revert_via_ssh">Revert via SSH</string>
+    <string name="action_copy_rollback_command">Copy command</string>
+    <string name="action_ssh_setup">SSH Setup</string>
+    <string name="action_dismiss">Dismiss</string>
+    <string name="dialog_force_restart_title">Restart VM daemon now?</string>
+    <plurals name="dialog_force_restart_body">
+        <item quantity="one">%1$d tab currently has an active agent turn. Restarting now will interrupt it before applying the staged update.</item>
+        <item quantity="other">%1$d tabs currently have active agent turns. Restarting now will interrupt them before applying the staged update.</item>
+    </plurals>
+    <string name="dialog_rollback_title">Revert to previous VM daemon?</string>
+    <string name="dialog_rollback_body">Restore the previously saved daemon binary (%1$s) and restart in place. Config, bearer token, and tab histories are preserved.</string>
+    <plurals name="dialog_rollback_active_warning">
+        <item quantity="one">Warning: %1$d active tab is currently running and will be interrupted.</item>
+        <item quantity="other">Warning: %1$d active tabs are currently running and will be interrupted.</item>
+    </plurals>
+    <string name="action_confirm_revert">Revert</string>
+    <string name="settings_daemon_self_update_title">VM daemon update available</string>
+    <string name="settings_daemon_self_update_body">Connected daemon %1$s differs from expected release %2$s. Tap below to download, verify, and restart in place.</string>
+    <string name="settings_daemon_self_update_button">Update VM Daemon</string>
+    <string name="settings_daemon_manual_update_button">Check / Update VM Daemon</string>
+    <string name="settings_daemon_auto_rollback_title">Previous update rolled back</string>
+    <string name="settings_daemon_rollback_hint">Previous known-good build: %1$s</string>
+    <string name="dialog_breakglass_ssh_title">Revert VM Daemon via SSH</string>
+    <string name="dialog_breakglass_ssh_body">Run the known-good backup binary on your VM to restore the previous daemon, or copy the command to run manually over SSH:</string>
+    <string name="snackbar_rollback_command_copied">Copied rollback command</string>
+    <string name="action_run_ssh_rollback">Run SSH Rollback</string>
+    <string name="action_open_ssh_setup">Open SSH Setup</string>
 </resources>

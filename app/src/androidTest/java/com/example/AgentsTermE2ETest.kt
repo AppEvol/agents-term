@@ -40,6 +40,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.example.data.ChatMessage
 import com.example.data.ConnectionConfig
 import com.example.data.CreateTabRequest
+import com.example.data.DaemonSelfUpdateInfo
 import com.example.data.HerdrApiClient
 import com.example.data.TabRecord
 import com.example.data.appWindowRoots
@@ -1323,6 +1324,119 @@ class AgentsTermE2ETest {
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             composeRule.onAllNodesWithTag("topbar_done_badge").fetchSemanticsNodes().isEmpty()
         }
+    }
+
+    @Test
+    fun daemonSelfUpdateDeferCancelForceRestartAndSettingsRollbackEndToEnd() {
+        val workingTab = TabRecord(
+            id = "tab_busy",
+            title = "Busy Agent",
+            agent = "claude",
+            cwd = "/home/ci/projects",
+            status = "working",
+            statusDetail = "Running task...",
+        )
+        val activeDaemon = FakeAgentsTermDaemon(
+            initialTabs = listOf(workingTab),
+            protocolVersion = 0,
+            initialBuildHash = "1111111000000000000000000000000000000001",
+            initialSelfUpdate = DaemonSelfUpdateInfo(
+                supported = true,
+                rollbackAvailable = false,
+                lastError = "Prior test update rolled back",
+            ),
+        ).also {
+            it.start()
+            daemon = it
+        }
+
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val deepLink = Intent(Intent.ACTION_VIEW, Uri.parse(activeDaemon.pairingUri("agentsterm"))).apply {
+            setClass(context, MainActivity::class.java)
+        }
+        launchMainActivity(deepLink)
+        waitForText("Busy Agent")
+
+        // 1) Auto-rollback error notice appears and can be dismissed
+        waitForTag("daemon_auto_rollback_banner")
+        composeRule.onNodeWithText("Prior test update rolled back", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("banner_dismiss_auto_rollback_button").performClick()
+        waitForTagGone("daemon_auto_rollback_banner")
+
+        // 2) Wait-for-tap mismatch banner triggers POST /api/daemon/update (whenBusy="defer")
+        waitForTag("outdated_daemon_banner")
+        composeRule.onNodeWithTag("banner_update_daemon_button").performClick()
+
+        // 3) Exercise pending_restart cancel + force restart upgrade + Settings rollback
+        verifyPendingRestartAndSettingsRollback(activeDaemon)
+    }
+
+    private fun verifyPendingRestartAndSettingsRollback(activeDaemon: FakeAgentsTermDaemon) {
+        waitForTag("daemon_update_status_banner")
+        waitForTag("banner_cancel_update_button")
+        assertEquals("defer", activeDaemon.recordedDaemonUpdateRequests.last().whenBusy)
+        composeRule.onNodeWithTag("banner_cancel_update_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) { activeDaemon.daemonUpdateCancelCount.get() >= 1 }
+        waitForTagGone("daemon_update_status_banner")
+
+        waitForTag("outdated_daemon_banner")
+        composeRule.onNodeWithTag("banner_update_daemon_button").performClick()
+        waitForTag("banner_restart_now_button")
+        composeRule.onNodeWithTag("banner_restart_now_button").performClick()
+        waitForTag("confirm_force_restart_dialog")
+        composeRule.onNodeWithTag("confirm_force_restart_button").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            activeDaemon.recordedDaemonUpdateRequests.any { it.whenBusy == "force" }
+        }
+        waitForTagGone("outdated_daemon_banner", timeoutMs = 15_000L)
+        waitForTagGone("daemon_update_status_banner", timeoutMs = 15_000L)
+
+        composeRule.onNodeWithTag("overflow_menu_button").performClick()
+        composeRule.onNodeWithTag("menu_app_settings").performClick()
+        waitForTag("settings_revert_daemon_button")
+        composeRule.onNodeWithTag("settings_revert_daemon_button").performScrollTo().performClick()
+        waitForTag("confirm_rollback_dialog")
+        composeRule.onNodeWithTag("confirm_rollback_button").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            activeDaemon.recordedDaemonRollbackRequests.isNotEmpty()
+        }
+        waitForTagGone("settings_revert_daemon_button", timeoutMs = 15_000L)
+    }
+
+    @Test
+    fun sshBreakglassRollbackExecutesPrevBinaryCommandOverSsh() {
+        val activeDaemon = startDaemon()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val fakeSsh = FakeSshVmServer(
+            context = context,
+            pairingUri = activeDaemon.pairingUri("agentsterm"),
+            daemonPort = activeDaemon.port,
+        ).also {
+            it.start()
+            sshServer = it
+        }
+        val settings = com.example.data.SettingsStore(context)
+        val client = com.example.data.SshBootstrapClient(settings)
+        val logs = mutableListOf<String>()
+        val result = runBlocking {
+            client.rollbackVmDaemon(
+                config = com.example.data.SshBootstrapConfig(
+                    host = fakeSsh.host,
+                    sshPort = fakeSsh.port,
+                    username = "ned",
+                    authMethod = com.example.data.SshAuthMethod.TAILSCALE_SSH,
+                    daemonPort = activeDaemon.port,
+                ),
+                onPhase = {},
+                onHostFingerprint = {},
+                onLog = { logs += it },
+            )
+        }
+        assertTrue(fakeSsh.receivedCommands.any { it.contains("agentsterm-daemon.prev") && it.contains("rollback") })
+        assertEquals(activeDaemon.token, result.connectionConfig.token)
+        assertTrue(logs.any { it.contains("Restoring previous AgentsTerm daemon") })
     }
 
     private fun verifyAndCloseFinishedTabInDrawer(finishedTabId: String, activeTabId: String) {
