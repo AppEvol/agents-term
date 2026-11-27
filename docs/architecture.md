@@ -118,3 +118,44 @@ Previously, all open tabs, recently closed tabs (up to 50 retained for 24 hours)
   - `messages.json` — Normalized AgentsTerm chat history for that tab; streaming updates rewrite only this tab's file.
   - Optional diagnostic/trajectory artifacts (e.g., raw CLI stdout/stderr stream logs and references to the underlying CLI's native session/trajectory via `sessionRef`).
   - **Lifecycle pruning:** When a closed tab ages past retention (24 hours or >50 archived tabs), deleting `agents_tabs/<tab_id>/` reclaims all of its storage in one operation.
+
+---
+
+## CI
+
+GitHub Actions orchestration lives in [`.github/workflows/ci.yml`](https://github.com/AppEvol/agents-term/blob/main/.github/workflows/ci.yml) and stays intentionally lean: YAML defines job wiring, caches, artifact handoffs, permissions, and environment variables, while non-trivial shell logic lives in standalone executable scripts (`chmod +x`, `#!/usr/bin/env bash`, `set -euo pipefail`).
+
+### Script Layout Convention (`scripts/` vs `scripts/ci/`)
+
+- **`scripts/` — Shared & local-development scripts (kebab-case):** Reusable helpers that developers and CI both invoke directly from the repository root:
+  - `scripts/static-checks.sh` — Runs `ruff`, `vulture`, `ktlint`, `detekt`, `shellcheck`, and `actionlint` using pinned cached binaries.
+  - `scripts/daemon-build-hash.py` — Computes the 40-character `AGENTSTERM_BUILD_HASH` matching `daemon-rs/build.rs`.
+  - `scripts/ensure-debug-keystore.sh` — Ensures `debug.keystore` exists (from `DEBUG_KEYSTORE_BASE64`, `debug.keystore.base64`, or `keytool`).
+  - `scripts/install-android-sdk.sh` — Accepts Android SDK licenses and installs the required platform and build-tools via `sdkmanager`.
+- **`scripts/ci/` — CI-only workflow scripts (snake_case):** Scripts tied to GitHub Actions runners, `GITHUB_OUTPUT` / `GITHUB_ENV` / `GITHUB_STEP_SUMMARY`, or GitHub Release publishing:
+  - `scripts/ci/daemon_change_check.sh` — Verifies whether prebuilt `latest` daemon binaries match the current source hash and classifies changed files (daemon tests, installer tests, Linux VM E2E harness, docs-only PRs).
+  - `scripts/ci/setup_rust_toolchain.sh` & `scripts/ci/build_rust_daemon.sh` — Installs Rust musl targets, cross-compiles static `x86_64`/`aarch64` daemon binaries, writes `.sha256` checksums, and verifies the embedded build hash.
+  - `scripts/ci/build_and_unit_test.sh` — Computes APK version metadata and pinned `AGENTSTERM_DAEMON_RELEASE_BASE_URL` for release/preview builds, then runs Android Lint, unit tests, and debug/test APK assembly.
+  - `scripts/ci/stage_daemon_binary.sh` — Stages the downloaded `x86_64` daemon binary for the multi-distro Linux VM E2E matrix.
+  - `scripts/ci/enable_kvm.sh`, `scripts/ci/set_build_version_env.sh`, `scripts/ci/start_docker_vm.sh`, `scripts/ci/run_android_e2e.sh`, `scripts/ci/stop_docker_vm.sh` — Manages runner KVM permissions, Docker E2E VM lifecycle, and Android emulator instrumented tests.
+  - `scripts/ci/ci_gate.sh` — Evaluates all required and conditionally-skipped job outcomes for the `All Required CI Checks` branch-protection gate.
+  - `scripts/ci/publish_branch_prerelease.sh` & `scripts/ci/publish_versioned_releases.sh` — Creates branch preview pre-releases (`v<version>-preview`) or versioned `main` releases (`v<version>`) and updates the rolling `latest` tag/release alias.
+- **`scripts/tests/` — Script unit tests:** Fast `unittest` coverage for the extracted scripts, executed unconditionally in CI via the `script-tests` job and hard-required by `ci-gate`.
+
+### Job Topology & Gating
+
+1. **Always-run checks:** `static-checks`, `script-tests`, and `daemon-change-check` run on every pull request, merge queue group (`merge_group`), push to `main`, and manual dispatch.
+2. **Change-aware daemon checks:** When `daemon-change-check` verifies that the `latest` GitHub Release binaries already match `scripts/daemon-build-hash.py`, it reuses them as the `daemon-binaries` artifact and skips `rust-daemon-build-and-test`, `installer-tests`, and `docker-vm-e2e` unless their respective test paths changed or `force_daemon_tests` is enabled.
+3. **Documentation-only fast path:** Pull requests (and their merge queue runs) that modify only `docs/` or top-level Markdown files (excluding the daemon-embedded docs `docs/live-debugging.md` and `docs/agents_debugging_tips.md`) skip `build-and-unit-test` and `e2e-tests`; pushes to `main` and manual runs always build so releases stay verifiable.
+4. **Branch-protection gate & publishing:** `ci-gate` ("All Required CI Checks") checks out the repository and runs `scripts/ci/ci_gate.sh` to enforce that all required jobs succeeded and optional jobs were only skipped when permitted. On green `main` pushes/dispatches, `publish-apk` runs `scripts/ci/publish_versioned_releases.sh`; on manual non-`main` dispatches, `publish-branch-prerelease` runs `scripts/ci/publish_branch_prerelease.sh`.
+
+### Verification
+
+Run locally before pushing CI or script changes:
+
+```sh
+python3 -W error::ResourceWarning -m unittest discover -s scripts/tests -v
+scripts/static-checks.sh
+```
+
+Note that `scripts/static-checks.sh` runs `shellcheck` over `git ls-files '*.sh'` (so stage new shell scripts with `git add` before running it) and `actionlint` over `.github/workflows/*.yml`.
