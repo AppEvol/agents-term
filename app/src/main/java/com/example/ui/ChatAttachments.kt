@@ -80,6 +80,8 @@ import com.example.data.AttachmentLimits
 import com.example.data.MessageAttachment
 import com.example.ui.theme.AppTheme
 import com.example.ui.theme.themedCorner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /** Loads the images of sent messages; absent in previews and tests that do not show images. */
@@ -349,7 +351,9 @@ private fun MessageAttachmentThumbnail(
 ) {
     val images = LocalAttachmentImages.current
     val thumbnail by produceState(images?.cachedThumbnail(attachment.id), images, tabId, attachment.id) {
-        if (value == null && images != null) value = images.thumbnail(tabId, attachment.id)
+        withContext(Dispatchers.Main.immediate) {
+            if (value == null && images != null) value = images.thumbnail(tabId, attachment.id)
+        }
     }
     Surface(
         shape = themedCorner(12.dp),
@@ -392,8 +396,10 @@ private fun AttachmentViewerDialog(
 ) {
     val images = LocalAttachmentImages.current
     val image by produceState<ViewerImage>(ViewerImage.Loading, images, tabId, attachment.id) {
-        val bitmap = images?.fullImage(tabId, attachment.id)
-        value = if (bitmap != null) ViewerImage.Loaded(bitmap) else ViewerImage.Unavailable
+        withContext(Dispatchers.Main.immediate) {
+            val bitmap = images?.fullImage(tabId, attachment.id)
+            value = if (bitmap != null) ViewerImage.Loaded(bitmap) else ViewerImage.Unavailable
+        }
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(

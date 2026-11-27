@@ -1,7 +1,10 @@
 package com.example.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -14,10 +17,14 @@ import okhttp3.WebSocketListener
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 const val HTTP_UNAUTHORIZED = 401
 const val HTTP_FORBIDDEN = 403
 const val HTTP_NOT_FOUND = 404
+private const val DEFAULT_ATTACHMENT_READ_TIMEOUT_MS = 10_000L
+private const val ATTACHMENT_DOWNLOAD_MAX_ATTEMPTS = 2
 
 fun isAuthStatusCode(statusCode: Int?): Boolean = statusCode == HTTP_UNAUTHORIZED || statusCode == HTTP_FORBIDDEN
 
@@ -57,6 +64,7 @@ internal fun recordWebSocketFailure(
 
 open class HerdrApiClient(
     private val debugRecorder: DebugRecorder? = null,
+    attachmentReadTimeoutMs: Long = DEFAULT_ATTACHMENT_READ_TIMEOUT_MS,
 ) {
     @Volatile
     internal var isAppInForeground: () -> Boolean = { true }
@@ -67,6 +75,10 @@ open class HerdrApiClient(
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS)
+        .build()
+
+    private val attachmentDownloadClient = client.newBuilder()
+        .readTimeout(attachmentReadTimeoutMs, TimeUnit.MILLISECONDS)
         .build()
 
     private fun Request.Builder.withAuth(config: ConnectionConfig): Request.Builder {
@@ -344,16 +356,81 @@ open class HerdrApiClient(
         config: ConnectionConfig,
         tabId: String,
         attachmentId: String,
-    ): ByteArray = withContext(Dispatchers.IO) {
-        val req = Request.Builder()
-            .url("${config.httpBaseUrl()}/api/tabs/$tabId/attachments/$attachmentId")
-            .withAuth(config)
-            .get()
-            .build()
-        client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) throw HttpStatusException(resp.code, "HTTP ${resp.code}: ${resp.message}")
-            resp.body?.bytes() ?: throw IOException("Empty attachment response")
+    ): ByteArray {
+        var lastError: IOException? = null
+        for (attempt in 1..ATTACHMENT_DOWNLOAD_MAX_ATTEMPTS) {
+            val req = Request.Builder()
+                .url("${config.httpBaseUrl()}/api/tabs/$tabId/attachments/$attachmentId")
+                .withAuth(config)
+                .apply {
+                    // Force a fresh socket on retry so a stalled/half-closed keep-alive connection is bypassed.
+                    if (attempt > 1) header("Connection", "close")
+                }
+                .get()
+                .build()
+            try {
+                return executeAttachmentDownload(req)
+            } catch (err: HttpStatusException) {
+                throw err
+            } catch (err: IOException) {
+                lastError = err
+            }
         }
+        throw lastError ?: IOException("Attachment download failed")
+    }
+
+    private suspend fun executeAttachmentDownload(request: Request): ByteArray = suspendCancellableCoroutine { cont ->
+        val startMs = System.currentTimeMillis()
+        val endpoint = "${request.method} ${request.url.encodedPath}"
+        val call = attachmentDownloadClient.newCall(request)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(
+            object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    val durationMs = System.currentTimeMillis() - startMs
+                    debugRecorder?.record(
+                        category = "http",
+                        event = "http_exception",
+                        detail = "$endpoint failed (${durationMs}ms): ${e.message ?: e::class.java.simpleName}",
+                    )
+                    if (cont.isActive) cont.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        response.use { resp ->
+                            val durationMs = System.currentTimeMillis() - startMs
+                            if (!resp.isSuccessful) {
+                                val errMsg = "HTTP ${resp.code}: ${resp.message}"
+                                debugRecorder?.record(
+                                    category = "http",
+                                    event = "http_error",
+                                    detail = "$endpoint -> ${resp.code} (${durationMs}ms): $errMsg",
+                                )
+                                throw HttpStatusException(resp.code, errMsg)
+                            }
+                            val bytes = resp.body?.bytes() ?: throw IOException("Empty attachment response")
+                            debugRecorder?.record(
+                                category = "http",
+                                event = "http_ok",
+                                detail = "$endpoint -> ${resp.code} (${durationMs}ms, ${bytes.size}B)",
+                            )
+                            if (cont.isActive) cont.resume(bytes)
+                        }
+                    } catch (err: HttpStatusException) {
+                        if (cont.isActive) cont.resumeWithException(err)
+                    } catch (err: IOException) {
+                        val durationMs = System.currentTimeMillis() - startMs
+                        debugRecorder?.record(
+                            category = "http",
+                            event = "http_exception",
+                            detail = "$endpoint failed (${durationMs}ms): ${err.message ?: err::class.java.simpleName}",
+                        )
+                        if (cont.isActive) cont.resumeWithException(err)
+                    }
+                }
+            },
+        )
     }
 
     open suspend fun interruptTab(

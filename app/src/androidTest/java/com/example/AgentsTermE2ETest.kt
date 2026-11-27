@@ -71,6 +71,7 @@ class AgentsTermE2ETest {
                 try {
                     base.evaluate()
                 } catch (t: Throwable) {
+                    if ("[window focus at failure]" in t.message.orEmpty()) throw t
                     val focus = queryWindowFocusDiagnostics()
                     throw AssertionError("${t.message}\n[window focus at failure] $focus", t)
                 }
@@ -194,6 +195,7 @@ class AgentsTermE2ETest {
     }
 
     private fun formatTimeoutDiagnostics(header: String): String {
+        val focus = queryWindowFocusDiagnostics()
         val reqs = daemon?.recordedRequests?.joinToString("\n  ") ?: "(no daemon)"
         val dbg = com.example.ui.MainViewModel.latestDebugRecorder
             ?.snapshot()
@@ -203,6 +205,7 @@ class AgentsTermE2ETest {
         val roots = runCatching { composeRule.onAllNodes(isRoot()).printToString(maxDepth = Int.MAX_VALUE) }
             .getOrElse { it.toString() }
         return "$header\n" +
+            "[window focus at failure] $focus\n" +
             "Daemon requests:\n  $reqs\n" +
             "App debug events:\n  $dbg\n" +
             "Compose roots:\n$roots"

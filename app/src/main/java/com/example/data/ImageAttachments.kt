@@ -234,8 +234,19 @@ class AttachmentImageStore(
         if (cached != null) {
             withContext(ioDispatcher) {
                 runCatching {
-                    cached.parentFile?.mkdirs()
-                    cached.writeBytes(downloaded)
+                    val parent = cached.parentFile ?: return@runCatching
+                    parent.mkdirs()
+                    val temp = File.createTempFile("${cached.name}.", ".tmp", parent)
+                    var renamed = false
+                    try {
+                        temp.writeBytes(downloaded)
+                        renamed = temp.renameTo(cached)
+                        if (!renamed) {
+                            cached.writeBytes(downloaded)
+                        }
+                    } finally {
+                        if (!renamed) temp.delete()
+                    }
                 }
             }
         }

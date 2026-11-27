@@ -1112,6 +1112,43 @@ fn split_per_tab_storage_rewrites_only_dirty_tab_and_cleans_orphans() {
     let tab_b_msgs = tabs_root.join(&tab_b).join("messages.json");
     let ws_file = tabs_root.join("workspace.json");
     let index_file = tabs_root.join("tabs.jsonl");
+
+    // Store writes are debounced asynchronously, so wait for the persisted files to settle on disk.
+    let wait_for_persisted_messages = |path: &Path, min_count: usize, expected_text: &str| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(raw) = fs::read_to_string(path) {
+                if let Ok(Value::Array(msgs)) = serde_json::from_str::<Value>(&raw) {
+                    let last_complete = msgs
+                        .last()
+                        .and_then(|m| m.get("status"))
+                        .and_then(Value::as_str)
+                        == Some("complete");
+                    if msgs.len() >= min_count && last_complete && raw.contains(expected_text) {
+                        return;
+                    }
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Timed out waiting for {} to flush at least {} messages containing {}",
+                path.display(),
+                min_count,
+                expected_text
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+    };
+    wait_for_persisted_messages(&tab_a_msgs, 2, "ALPHA");
+    wait_for_persisted_messages(&tab_b_msgs, 2, "BETA");
+    let index_deadline = Instant::now() + Duration::from_secs(5);
+    while !ws_file.is_file() || !index_file.is_file() {
+        assert!(
+            Instant::now() < index_deadline,
+            "workspace.json or tabs.jsonl did not flush"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
     assert!(ws_file.is_file());
     assert!(index_file.is_file());
     assert!(tab_a_msgs.is_file());
@@ -1149,8 +1186,11 @@ fn split_per_tab_storage_rewrites_only_dirty_tab_and_cleans_orphans() {
     assert_eq!(ws_json["activeTabId"].as_str(), Some(tab_b.as_str()));
 
     // Updating Tab B must NOT rewrite Tab A's messages.json (atomic rename would change inode).
-    let tab_a_ino_before = fs::metadata(&tab_a_msgs).unwrap().ino();
-    let tab_b_ino_before = fs::metadata(&tab_b_msgs).unwrap().ino();
+    // Keep both pre-update files open across the rename so the filesystem cannot reuse freed inodes.
+    let tab_a_file_before = fs::File::open(&tab_a_msgs).unwrap();
+    let tab_b_file_before = fs::File::open(&tab_b_msgs).unwrap();
+    let tab_a_ino_before = tab_a_file_before.metadata().unwrap().ino();
+    let tab_b_ino_before = tab_b_file_before.metadata().unwrap().ino();
 
     assert_eq!(
         daemon
@@ -1176,6 +1216,7 @@ fn split_per_tab_storage_rewrites_only_dirty_tab_and_cleans_orphans() {
         );
         thread::sleep(Duration::from_millis(50));
     }
+    wait_for_persisted_messages(&tab_b_msgs, 4, "BETA_2");
 
     assert_eq!(
         fs::metadata(&tab_a_msgs).unwrap().ino(),
@@ -1187,6 +1228,8 @@ fn split_per_tab_storage_rewrites_only_dirty_tab_and_cleans_orphans() {
         tab_b_ino_before,
         "Tab B's messages.json should have been atomically replaced"
     );
+    drop(tab_a_file_before);
+    drop(tab_b_file_before);
 
     // Closing Tab A marks it state=closed in tabs.jsonl while keeping its messages.json for revive.
     assert_eq!(
