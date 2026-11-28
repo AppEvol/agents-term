@@ -342,4 +342,8 @@
     <string name="snackbar_rollback_command_copied">Copied rollback command</string>
     <string name="action_run_ssh_rollback">Run SSH Rollback</string>
     <string name="action_open_ssh_setup">Open SSH Setup</string>
+    <string name="settings_pty_theme">PTY shell theme</string>
+    <string name="pty_theme_follow_app">Follow app theme</string>
+    <string name="pty_theme_light">Light</string>
+    <string name="pty_theme_dark">Dark</string>
 </resources>

@@ -1,0 +1,2 @@
+- **PTY shell theme** ([#153](https://github.com/AppEvol/agents-term/issues/153))
+  - Choose Light, Dark, or Follow app theme in Settings. The choice applies to open and new PTY shells and persists across app restarts.
