@@ -436,7 +436,7 @@ class BaseDockerVmTest(unittest.TestCase):
             self.assertEqual(status, 200)
             tabs = tab_data["tabs"] if isinstance(tab_data, dict) else tab_data
             tab = next((t for t in tabs if t["id"] == tab_id), None)
-            self.assertIsNotNone(tab)
+            assert tab is not None, f"tab {tab_id} not found"
             last_state = tab["status"]
             if tab["status"] in allowed_statuses and not tab.get("queuedMessages"):
                 m_status, msg_data = self.api("GET", f"/api/tabs/{tab_id}/messages")
@@ -471,7 +471,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         res = self.ssh_exec(build_rust_bootstrap_command(self.daemon_port))
         self.assertEqual(res.returncode, 0, f"SSH bootstrap failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
         match = PAIRING_URI_RE.search(res.stdout + "\n" + res.stderr)
-        self.assertIsNotNone(match, f"No pairing URI in bootstrap output:\n{res.stdout}")
+        assert match is not None, f"No pairing URI in bootstrap output:\n{res.stdout}"
         parsed = urllib.parse.urlparse(match.group(0))
         params = urllib.parse.parse_qs(parsed.query)
         self.assertEqual(params.get("host", [""])[0], "127.0.0.1")
@@ -497,7 +497,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         res1 = self.ssh_exec(build_rust_bootstrap_command(self.daemon_port))
         self.assertEqual(res1.returncode, 0, f"SSH bootstrap failed:\nSTDOUT:\n{res1.stdout}\nSTDERR:\n{res1.stderr}")
         match = PAIRING_URI_RE.search(res1.stdout + "\n" + res1.stderr)
-        self.assertIsNotNone(match, f"No pairing URI in bootstrap output:\n{res1.stdout}")
+        assert match is not None, f"No pairing URI in bootstrap output:\n{res1.stdout}"
         params = urllib.parse.parse_qs(urllib.parse.urlparse(match.group(0)).query)
         type(self).token = params["token"][0]
 
@@ -719,7 +719,7 @@ class RustDaemonLinuxVmE2ETest(BaseDockerVmTest):
         )
         self.assertEqual(rot.returncode, 0, rot.stdout + rot.stderr)
         rot_match = PAIRING_URI_RE.search(rot.stdout)
-        self.assertIsNotNone(rot_match)
+        assert rot_match is not None, rot.stdout
         new_token = urllib.parse.parse_qs(urllib.parse.urlparse(rot_match.group(0)).query)["token"][0]
         self.assertNotEqual(old_token, new_token)
 

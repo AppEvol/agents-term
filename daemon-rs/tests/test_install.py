@@ -13,6 +13,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from typing import Any
 
 INSTALL_SCRIPT = Path(__file__).resolve().parents[1] / "install.sh"
 
@@ -35,7 +36,7 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
             type(self).downloads += 1
         super().do_GET()
 
-    def log_message(self, *_args: object) -> None:
+    def log_message(self, format: str, *args: Any) -> None:
         pass
 
 

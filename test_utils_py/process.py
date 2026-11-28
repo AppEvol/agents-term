@@ -10,7 +10,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, Generator, List, Optional, Sequence, Tuple
 
 
 def stream_command(
@@ -67,7 +67,7 @@ def lock_path_for(name: str, *, vm_wide: bool = False, cwd: Optional[Path] = Non
 
 
 @contextmanager
-def acquire_file_lock(name: str, *, vm_wide: bool = False, cwd: Optional[Path] = None) -> Iterator[Path]:
+def acquire_file_lock(name: str, *, vm_wide: bool = False, cwd: Optional[Path] = None) -> Generator[Path, None, None]:
     """Acquire an exclusive flock, printing a status notice when waiting on another process."""
     path = lock_path_for(name, vm_wide=vm_wide, cwd=cwd)
     scope = "on this machine" if vm_wide else "in this checkout"

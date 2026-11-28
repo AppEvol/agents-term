@@ -52,10 +52,11 @@ def cargo_failed_targets(log: str, records: List[Dict[str, Any]]) -> Optional[Di
     for line in log.splitlines():
         running = CARGO_RUNNING_RE.fullmatch(line)
         docs = CARGO_DOCTEST_RE.fullmatch(line)
-        if running or docs:
+        header = running or docs
+        if header:
             if target or failed:
                 return None
-            target = normalize_cargo_target(running[1]) if running else f"Doc-tests ({docs[1].strip()})"
+            target = normalize_cargo_target(header[1]) if running else f"Doc-tests ({header[1].strip()})"
         elif summary := CARGO_SUMMARY_RE.fullmatch(line):
             summary_counts = CARGO_COUNTS.search(line)
             if target is None or summary_counts is None:

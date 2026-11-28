@@ -135,7 +135,7 @@ GitHub Actions orchestration lives in [`.github/workflows/ci.yml`](https://githu
   - `test_utils_py/analytics/` — Suite/retry metric aggregation (`metrics.py`), JSONL trend history filtering/capping & per-test flakiness stats (`history.py`), and self-hosted SVG metric badges + `metrics.json` (`badges.py`).
   - `test_utils_py/tests/` — Unit tests for `test_utils_py` and its thin `scripts/` entrypoints, executed in CI via `script-tests` and required by `ci-gate`.
 - **`scripts/` — Shared & local-development runnable entrypoints:** Reusable helpers that developers and CI both invoke directly from the repository root:
-  - `scripts/static-checks.sh` — Runs `ruff`, `vulture`, `ktlint`, `detekt`, `shellcheck`, and `actionlint` using pinned cached binaries.
+  - `scripts/static-checks.sh` — Runs `ruff`, `ty`, `vulture`, `ktlint`, `detekt`, `shellcheck`, and `actionlint` using pinned cached binaries.
   - `scripts/daemon-build-hash.py` — Computes the 40-character `AGENTSTERM_BUILD_HASH` matching `daemon-rs/build.rs`.
   - `scripts/ensure-debug-keystore.sh` — Ensures `debug.keystore` exists (from `DEBUG_KEYSTORE_BASE64`, `debug.keystore.base64`, or `keytool`).
   - `scripts/install-android-sdk.sh` — Accepts Android SDK licenses and installs the required platform and build-tools via `sdkmanager`.
