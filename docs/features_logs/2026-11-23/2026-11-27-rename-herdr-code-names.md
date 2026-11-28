@@ -1,0 +1,3 @@
+- **Herdr code names renamed to AgentsTerm** ([PR #176](https://github.com/AppEvol/agents-term/pull/176)):
+  - Renamed the app's remaining `Herdr*` classes, files, theme, JSON helpers, colors and drawables to `AgentsTerm*`.
+  - Kept the `applicationId`, the `herdr_mobile_*` settings files and the `herdr://` link scheme so existing installs and pairing links keep working.
