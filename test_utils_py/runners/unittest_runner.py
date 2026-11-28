@@ -91,7 +91,8 @@ class AllureTextTestResult(unittest.TextTestResult):
         super().addSubTest(test, subtest, err)
         key = self._test_key(test)
         now = now_ms()
-        sub_name = subtest._subDescription() if hasattr(subtest, "_subDescription") else str(subtest)
+        describe = getattr(subtest, "_subDescription", None)
+        sub_name = describe() if callable(describe) else str(subtest)
         step: Dict[str, Any] = {
             "name": f"subTest {sub_name}",
             "stage": "finished",

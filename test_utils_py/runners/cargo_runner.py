@@ -69,15 +69,16 @@ def parse_cargo_test_output(
         nonlocal current_target, section_mode
         flush_output_block()
         section_mode = None
-        current_target = {
+        target: Dict[str, Any] = {
             "name": name,
             "tests": [],
             "outputs": {},
             "failure_outputs": {},
             "duration_ms": 0,
         }
-        targets.append(current_target)
-        return current_target
+        current_target = target
+        targets.append(target)
+        return target
 
     for raw_line in output_text.splitlines():
         line = raw_line.rstrip("\r")
@@ -123,14 +124,12 @@ def parse_cargo_test_output(
 
         test_match = CARGO_TEST_LINE_RE.match(line)
         if test_match:
-            if current_target is None:
-                ensure_target("cargo test")
+            test_target = current_target if current_target is not None else ensure_target("cargo test")
             raw_test_name = test_match.group(1).strip()
             raw_status = test_match.group(2)
             extra = (test_match.group(3) or "").strip()
             clean_name = raw_test_name.replace(" - should panic", "").strip()
-            if current_target is not None:
-                current_target["tests"].append((clean_name, raw_status, extra))
+            test_target["tests"].append((clean_name, raw_status, extra))
 
     flush_output_block()
 

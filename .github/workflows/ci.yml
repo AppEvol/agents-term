@@ -52,7 +52,7 @@ jobs:
           path: ~/.cache/agentsterm-static-checks
           key: static-checks-${{ runner.os }}-${{ hashFiles('scripts/static-checks.sh') }}
 
-      - name: Run static checks (ruff, vulture, ktlint, detekt, shellcheck, actionlint)
+      - name: Run static checks (ruff, ty, vulture, ktlint, detekt, shellcheck, actionlint)
         run: scripts/static-checks.sh
 
   script-tests:

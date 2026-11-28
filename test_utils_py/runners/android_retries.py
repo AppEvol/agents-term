@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, Generator, List, Optional, Sequence, Tuple
 
 from test_utils_py.process import acquire_file_lock, stream_command
 from test_utils_py.process import lock_path_for as process_lock_path_for
@@ -167,7 +167,7 @@ def lock_path_for(tag: str, cwd: Optional[Path] = None) -> Path:
 
 
 @contextmanager
-def acquire_suite_lock(tag: str) -> Iterator[None]:
+def acquire_suite_lock(tag: str) -> Generator[None, None, None]:
     # Gradle's own lock ends before we archive results or launch an isolated retry.
     # Keeping the lock file outside app/build ensures `gradle clean` cannot unlink a held lock.
     with acquire_file_lock(tag, vm_wide=SUITES[tag].vm_wide_lock):

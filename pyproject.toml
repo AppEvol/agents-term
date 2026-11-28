@@ -38,6 +38,11 @@ ignore = [
 # calls whose return code is asserted on, shared mutable handler state.
 "**/test_*.py" = ["ARG002", "E501", "PLW1510", "RUF012"]
 
+# Type checking (ty). Same 3.8 floor as ruff's target-version; warnings fail
+# the check too (scripts/static-checks.sh passes --error-on-warning).
+[tool.ty.environment]
+python-version = "3.8"
+
 # Dead code detection.
 [tool.vulture]
 paths = ["daemon-rs/tests", "test_utils_py"]

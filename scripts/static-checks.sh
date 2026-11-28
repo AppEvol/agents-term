@@ -7,7 +7,8 @@
 #                                     import order, safe lint fixes) first
 #
 # Checks:
-#   Python   ruff (lint, import order, formatting), vulture (dead code)
+#   Python   ruff (lint, import order, formatting), ty (type checking),
+#            vulture (dead code)
 #   Kotlin   ktlint (formatting, import order, unused imports),
 #            detekt (code smells, unused private code)
 #   Shell    shellcheck
@@ -22,6 +23,7 @@
 set -euo pipefail
 
 RUFF_VERSION=0.17.6
+TY_VERSION=0.0.112
 VULTURE_VERSION=2.16
 KTLINT_VERSION=1.8.0
 DETEKT_VERSION=1.23.8
@@ -62,17 +64,17 @@ fetch() { # fetch <url> <destination>
 
 # Python tools live in a private virtualenv so they never touch the daemon's
 # standard-library-only runtime.
-venv="$cache/venv-ruff$RUFF_VERSION-vulture$VULTURE_VERSION"
-if [ ! -x "$venv/bin/ruff" ] || [ ! -x "$venv/bin/vulture" ]; then
+venv="$cache/venv-ruff$RUFF_VERSION-ty$TY_VERSION-vulture$VULTURE_VERSION"
+if [ ! -x "$venv/bin/ruff" ] || [ ! -x "$venv/bin/ty" ] || [ ! -x "$venv/bin/vulture" ]; then
   rm -rf "$venv"
   if command -v uv >/dev/null; then
     uv venv --quiet "$venv"
     uv pip install --quiet --python "$venv/bin/python" \
-      "ruff==$RUFF_VERSION" "vulture==$VULTURE_VERSION"
+      "ruff==$RUFF_VERSION" "ty==$TY_VERSION" "vulture==$VULTURE_VERSION"
   else
     python3 -m venv "$venv"
     "$venv/bin/pip" install --quiet --disable-pip-version-check \
-      "ruff==$RUFF_VERSION" "vulture==$VULTURE_VERSION"
+      "ruff==$RUFF_VERSION" "ty==$TY_VERSION" "vulture==$VULTURE_VERSION"
   fi
 fi
 
@@ -127,6 +129,7 @@ fi
 
 run "ruff check (Python lint, import order)" "$venv/bin/ruff" check .
 run "ruff format (Python formatting)" "$venv/bin/ruff" format --check .
+run "ty (Python type checking)" "$venv/bin/ty" check --error-on-warning
 run "vulture (Python dead code)" "$venv/bin/vulture"
 run "ktlint (Kotlin formatting, import order)" "$ktlint" "${kotlin_sources[@]}"
 run "detekt (Kotlin code smells, unused code)" java -jar "$detekt" \
