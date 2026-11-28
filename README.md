@@ -13,7 +13,7 @@ Android app for running persistent coding agents (**Antigravity (`agy`)**, **Cla
 Sessions run inside a lightweight daemon on your VM, so agents keep working even when you leave the app or lock your phone.
 
 <p align="center">
-  <img src="docs/images/app-screenshot.png" alt="AgentsTerm Android app showing persistent tabs across Antigravity, Claude Code, and Codex, a live task summary, expandable tool calls, model selector, and message queue composer" width="320" />
+  <img src="docs/images/app-demo.gif" alt="AgentsTerm Android app demo showing persistent Claude Code, Codex, and Antigravity tabs running in parallel, rich Markdown and expandable tool calls, cross-agent tab status, and live VM agent UI control" width="320" />
 </p>
 
 ## What You Need
