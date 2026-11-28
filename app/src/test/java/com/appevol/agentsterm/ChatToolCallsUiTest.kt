@@ -24,7 +24,7 @@ import com.appevol.agentsterm.data.MessageSegment
 import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.data.ToolCallItem
 import com.appevol.agentsterm.ui.ChatWorkspace
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -70,7 +70,7 @@ class ChatToolCallsUiTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab.copy(status = "working", statusDetail = "Running Bash: Run Android unit tests"),
                     messages = listOf(message),
@@ -129,7 +129,7 @@ class ChatToolCallsUiTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab,
                     messages = listOf(message),
@@ -195,7 +195,7 @@ class ChatToolCallsUiTest {
         var current by mutableStateOf(message(listOf(t1Done, t2Running), "streaming"))
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab.copy(status = "working"),
                     messages = listOf(current),
@@ -276,7 +276,7 @@ class ChatToolCallsUiTest {
         var current by mutableStateOf(msg(listOf(t1Done, t2Run)))
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab.copy(status = "working"),
                     messages = listOf(current),
@@ -355,7 +355,7 @@ class ChatToolCallsUiTest {
             var current by mutableStateOf(msg(listOf(t1)))
 
             composeRule.setContent {
-                HerdrTheme {
+                AgentsTermTheme {
                     ChatWorkspace(
                         tab = testTab.copy(status = "working"),
                         messages = listOf(current),
@@ -425,7 +425,7 @@ class ChatToolCallsUiTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab,
                     messages = listOf(message),
@@ -462,7 +462,7 @@ class ChatToolCallsUiTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab.copy(agent = "claude", permissionMode = "full-access", status = "idle"),
                     messages = listOf(message),
@@ -507,7 +507,7 @@ class ChatToolCallsUiTest {
         var currentMessages by mutableStateOf(listOf(firstUser, blockedAssistant))
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab.copy(permissionMode = "default", status = "blocked"),
                     messages = currentMessages,

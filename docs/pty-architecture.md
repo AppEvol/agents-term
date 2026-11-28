@@ -239,7 +239,7 @@ Client                                                    Daemon
 
 ### Session Lifecycle (`PtySessionManager` & `PtyTabSession`)
 
-[`app/src/main/java/com/appevol/agentsterm/terminal/PtySessionManager.kt`](../app/src/main/java/com/appevol/agentsterm/terminal/PtySessionManager.kt) is owned by `MainViewModel` (`ptySessions`) and integrated into [`HerdrApp.kt`](../app/src/main/java/com/appevol/agentsterm/ui/HerdrApp.kt) (routing `activeTab.isPtyShell` to `PtyTerminalWorkspace`, keyed by `activeTab.id`) and [`NewTabSheet.kt`](../app/src/main/java/com/appevol/agentsterm/ui/NewTabSheet.kt):
+[`app/src/main/java/com/appevol/agentsterm/terminal/PtySessionManager.kt`](../app/src/main/java/com/appevol/agentsterm/terminal/PtySessionManager.kt) is owned by `MainViewModel` (`ptySessions`) and integrated into [`AgentsTermApp.kt`](../app/src/main/java/com/appevol/agentsterm/ui/AgentsTermApp.kt) (routing `activeTab.isPtyShell` to `PtyTerminalWorkspace`, keyed by `activeTab.id`) and [`NewTabSheet.kt`](../app/src/main/java/com/appevol/agentsterm/ui/NewTabSheet.kt):
 
 - **Workspace synchronization:** `observeWorkspace` collects `(config, connected, openPtyIds)` from `WorkspaceState`, propagating config updates and pruning closed PTY tabs once connected. Deleting a tab calls `remove(tabId)`; `MainViewModel.onCleared()` calls `closeAll()`.
 - **Server-switch isolation:** Tracks `lastEndpoint = (host, port)`. When the active VM endpoint changes, `getOrCreate` and `updateConfig` immediately close and evict all sessions from the previous host so old WebSockets never attempt to reconnect to a different VM.

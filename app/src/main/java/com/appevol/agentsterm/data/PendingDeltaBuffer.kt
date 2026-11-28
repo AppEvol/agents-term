@@ -10,7 +10,7 @@ import kotlinx.coroutines.launch
  * [StringBuilder]s so streaming avoids O(N^2) immutable string allocations and background-tab
  * updates do not emit [WorkspaceState] copies until flushed.
  *
- * Callers must hold their synchronization lock (for example `HerdrRepository.socketLock`) when
+ * Callers must hold their synchronization lock (for example `AgentsTermRepository.socketLock`) when
  * invoking methods on this buffer.
  */
 internal class PendingDeltaBuffer(

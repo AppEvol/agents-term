@@ -1,16 +1,16 @@
 package com.appevol.agentsterm
 
+import com.appevol.agentsterm.data.AgentsTermApiClient
 import com.appevol.agentsterm.data.AttachmentLimits
 import com.appevol.agentsterm.data.ChatMessage
 import com.appevol.agentsterm.data.ConnectionConfig
-import com.appevol.agentsterm.data.HerdrApiClient
 import com.appevol.agentsterm.data.QueuedMessage
 import com.appevol.agentsterm.data.SendMessageRequest
 import com.appevol.agentsterm.data.ServerInfo
 import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.data.attachmentLimitsForTab
-import com.appevol.agentsterm.data.decodeHerdrJson
-import com.appevol.agentsterm.data.encodeHerdrJson
+import com.appevol.agentsterm.data.decodeAgentsTermJson
+import com.appevol.agentsterm.data.encodeAgentsTermJson
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -31,7 +31,7 @@ import java.io.IOException
 class AttachmentApiTest {
 
     private val server = MockWebServer()
-    private val api = HerdrApiClient()
+    private val api = AgentsTermApiClient()
     private lateinit var config: ConnectionConfig
 
     @Before
@@ -88,7 +88,7 @@ class AttachmentApiTest {
         assertEquals("/api/tabs/tab_9/messages", withImages.path)
         assertEquals(
             SendMessageRequest(text = "what is this?", attachments = listOf("att_1", "att_2")),
-            decodeHerdrJson<SendMessageRequest>(withImages.body.readUtf8()),
+            decodeAgentsTermJson<SendMessageRequest>(withImages.body.readUtf8()),
         )
         val textOnly = server.takeRequest().body.readUtf8()
         assertFalse("A plain message looks exactly as it did before attachments: $textOnly", "attachments" in textOnly)
@@ -126,7 +126,7 @@ class AttachmentApiTest {
     @Test
     fun downloadRetriesOnceOnStalledOrDroppedConnectionWithFreshSocket() = runBlocking {
         val bytes = ByteArray(1024) { (it % 199).toByte() }
-        val fastTimeoutApi = HerdrApiClient(attachmentReadTimeoutMs = 200L)
+        val fastTimeoutApi = AgentsTermApiClient(attachmentReadTimeoutMs = 200L)
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
         server.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(bytes)))
 
@@ -143,29 +143,29 @@ class AttachmentApiTest {
 
     @Test
     fun messagesAndQueuedMessagesCarryTheirImages() {
-        val message = decodeHerdrJson<ChatMessage>(
+        val message = decodeAgentsTermJson<ChatMessage>(
             """{"id":"m1","tabId":"t1","role":"user","text":"","attachments":[{"id":"att_1","mimeType":"image/jpeg","bytes":12}]}""",
         )
         assertEquals(listOf("att_1"), message.attachments.map { it.id })
         assertEquals("image/jpeg", message.attachments.single().mimeType)
 
-        val queued = decodeHerdrJson<QueuedMessage>("""{"id":"q1","text":"","attachments":[{"id":"att_2"}]}""")
+        val queued = decodeAgentsTermJson<QueuedMessage>("""{"id":"q1","text":"","attachments":[{"id":"att_2"}]}""")
         assertEquals("att_2", queued.attachments.single().id)
 
         // History written before attachments existed still loads.
-        val old = decodeHerdrJson<ChatMessage>("""{"id":"m0","tabId":"t1","role":"user","text":"hi"}""")
+        val old = decodeAgentsTermJson<ChatMessage>("""{"id":"m0","tabId":"t1","role":"user","text":"hi"}""")
         assertTrue(old.attachments.isEmpty())
-        assertEquals(old, decodeHerdrJson<ChatMessage>(encodeHerdrJson(old)))
+        assertEquals(old, decodeAgentsTermJson<ChatMessage>(encodeAgentsTermJson(old)))
     }
 
     @Test
     fun attachingIsOfferedOnlyWhenTheDaemonSupportsItAndTheTabRunsAnAgent() {
         val agentTab = TabRecord(id = "t1", title = "Claude", agent = "claude", cwd = "/home")
         val shellTab = agentTab.copy(id = "t2", agent = "shell")
-        val newDaemon = decodeHerdrJson<ServerInfo>(
+        val newDaemon = decodeAgentsTermJson<ServerInfo>(
             """{"version":"0.3.0","attachments":{"maxBytes":8388608,"maxPerMessage":8,"mimeTypes":["image/png"]}}""",
         )
-        val oldDaemon = decodeHerdrJson<ServerInfo>("""{"version":"0.3.0"}""")
+        val oldDaemon = decodeAgentsTermJson<ServerInfo>("""{"version":"0.3.0"}""")
 
         assertEquals(
             AttachmentLimits(maxBytes = 8_388_608, maxPerMessage = 8, mimeTypes = listOf("image/png")),

@@ -5,8 +5,8 @@ import com.appevol.agentsterm.data.ConnectionConfig
 import com.appevol.agentsterm.data.ConnectionState
 import com.appevol.agentsterm.data.DebugRecorder
 import com.appevol.agentsterm.data.WorkspaceState
-import com.appevol.agentsterm.data.decodeHerdrJson
-import com.appevol.agentsterm.data.encodeHerdrJson
+import com.appevol.agentsterm.data.decodeAgentsTermJson
+import com.appevol.agentsterm.data.encodeAgentsTermJson
 import com.appevol.agentsterm.data.isAuthStatusCode
 import com.squareup.moshi.JsonClass
 import kotlinx.coroutines.CoroutineDispatcher
@@ -321,7 +321,7 @@ class PtyTabSession(
                 }
             }
             if (restartPayload != null) {
-                webSocket.send(encodeHerdrJson(restartPayload))
+                webSocket.send(encodeAgentsTermJson(restartPayload))
             }
         }
 
@@ -357,7 +357,7 @@ class PtyTabSession(
     }
 
     private fun handleTextFrame(generation: Long, socket: WebSocket, raw: String) {
-        val msg = runCatching { decodeHerdrJson<PtyServerControlMessage>(raw) }.getOrNull() ?: return
+        val msg = runCatching { decodeAgentsTermJson<PtyServerControlMessage>(raw) }.getOrNull() ?: return
         val resizeAfterReplay = synchronized(stateLock) {
             if (closed || generation != socketGeneration) return
             if (webSocket == null) webSocket = socket
@@ -384,7 +384,7 @@ class PtyTabSession(
             }
         }
         resizeAfterReplay?.let { (c, r) ->
-            socket.send(encodeHerdrJson(PtyResizePayload(cols = c, rows = r)))
+            socket.send(encodeAgentsTermJson(PtyResizePayload(cols = c, rows = r)))
         }
     }
 
@@ -672,7 +672,7 @@ class PtyTabSession(
 
     private fun sendResizeControl(cols: Int, rows: Int) {
         val ws = synchronized(stateLock) { webSocket } ?: return
-        ws.send(encodeHerdrJson(PtyResizePayload(cols = cols, rows = rows)))
+        ws.send(encodeAgentsTermJson(PtyResizePayload(cols = cols, rows = rows)))
     }
 
     fun restart() {
@@ -690,7 +690,7 @@ class PtyTabSession(
             }
         }
         if (ws != null) {
-            ws.send(encodeHerdrJson(PtyRestartPayload(cols = cols, rows = rows)))
+            ws.send(encodeAgentsTermJson(PtyRestartPayload(cols = cols, rows = rows)))
         } else {
             connect()
         }

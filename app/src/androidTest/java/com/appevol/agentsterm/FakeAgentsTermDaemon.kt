@@ -2,6 +2,7 @@ package com.appevol.agentsterm
 
 import com.appevol.agentsterm.data.AgentModelOption
 import com.appevol.agentsterm.data.AgentModelsResponse
+import com.appevol.agentsterm.data.AgentsTermMoshi
 import com.appevol.agentsterm.data.AvailableAgentInfo
 import com.appevol.agentsterm.data.ChatMessage
 import com.appevol.agentsterm.data.CreateTabRequest
@@ -17,7 +18,6 @@ import com.appevol.agentsterm.data.DeniedAction
 import com.appevol.agentsterm.data.EXPECTED_DAEMON_PROTOCOL_VERSION
 import com.appevol.agentsterm.data.FsDirectoryEntry
 import com.appevol.agentsterm.data.FsListResponse
-import com.appevol.agentsterm.data.HerdrMoshi
 import com.appevol.agentsterm.data.InterruptTabRequest
 import com.appevol.agentsterm.data.MessageSegment
 import com.appevol.agentsterm.data.QueueActionResponse
@@ -33,8 +33,8 @@ import com.appevol.agentsterm.data.ToolCallItem
 import com.appevol.agentsterm.data.UpdateTabRequest
 import com.appevol.agentsterm.data.UsageStats
 import com.appevol.agentsterm.data.WsServerEnvelope
-import com.appevol.agentsterm.data.decodeHerdrJson
-import com.appevol.agentsterm.data.encodeHerdrJson
+import com.appevol.agentsterm.data.decodeAgentsTermJson
+import com.appevol.agentsterm.data.encodeAgentsTermJson
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -86,7 +86,7 @@ class FakeAgentsTermDaemon(
     private val appStateRequestCounter = AtomicInteger(0)
 
     @Suppress("UNCHECKED_CAST")
-    private fun parseFrame(raw: String): Map<String, Any?> = (HerdrMoshi.adapter(Any::class.java).fromJson(raw) as? Map<String, Any?>).orEmpty()
+    private fun parseFrame(raw: String): Map<String, Any?> = (AgentsTermMoshi.adapter(Any::class.java).fromJson(raw) as? Map<String, Any?>).orEmpty()
 
     /** `reporter.enabled` from the most recent app_hello frame, or null if none arrived yet. */
     @Suppress("UNCHECKED_CAST")
@@ -273,12 +273,12 @@ class FakeAgentsTermDaemon(
         }
 
         if (method == "GET" && path == "/api/info") {
-            return jsonResponse(200, encodeHerdrJson(serverInfo))
+            return jsonResponse(200, encodeAgentsTermJson(serverInfo))
         }
 
         if (path == "/api/daemon/update") {
             return when (method) {
-                "GET" -> jsonResponse(200, encodeHerdrJson(currentUpdateStatus))
+                "GET" -> jsonResponse(200, encodeAgentsTermJson(currentUpdateStatus))
                 "POST" -> handleStartDaemonUpdate(request.body.readUtf8())
                 "DELETE" -> handleCancelDaemonUpdate()
                 else -> jsonResponse(405, """{"error":"Method not allowed"}""")
@@ -298,7 +298,7 @@ class FakeAgentsTermDaemon(
                 defaultModel = found?.defaultModel,
                 models = found?.models.orEmpty(),
             )
-            return jsonResponse(200, encodeHerdrJson(resp))
+            return jsonResponse(200, encodeAgentsTermJson(resp))
         }
 
         if (method == "GET" && path == "/api/fs") {
@@ -310,11 +310,11 @@ class FakeAgentsTermDaemon(
                 parent = requestedPath.trimEnd('/').substringBeforeLast('/').ifBlank { "/" },
                 directories = emptyList(),
             )
-            return jsonResponse(200, encodeHerdrJson(listing))
+            return jsonResponse(200, encodeAgentsTermJson(listing))
         }
 
         if (method == "POST" && path == "/api/debug/dumps") {
-            val req = decodeHerdrJson<DebugDumpUploadRequest>(request.body.readUtf8())
+            val req = decodeAgentsTermJson<DebugDumpUploadRequest>(request.body.readUtf8())
             uploadedDebugDumps.add(req)
             val remoteDir = "/home/ci/.agents-term/debug-dumps/20261124_${req.dumpId}"
             val resp = DebugDumpUploadResponse(
@@ -324,18 +324,18 @@ class FakeAgentsTermDaemon(
                 latestSymlink = "/home/ci/.agents-term/debug-dumps/latest",
                 files = listOf("summary.md", "meta.json", "state.json", "events.ndjson"),
             )
-            return jsonResponse(200, encodeHerdrJson(resp))
+            return jsonResponse(200, encodeAgentsTermJson(resp))
         }
 
         if (method == "GET" && path == "/api/tabs") {
             val response = synchronized(lock) {
                 TabsResponse(tabs = tabs.toList(), activeTabId = tabs.firstOrNull()?.id)
             }
-            return jsonResponse(200, encodeHerdrJson(response))
+            return jsonResponse(200, encodeAgentsTermJson(response))
         }
 
         if (method == "POST" && path == "/api/tabs") {
-            val req = decodeHerdrJson<CreateTabRequest>(request.body.readUtf8())
+            val req = decodeAgentsTermJson<CreateTabRequest>(request.body.readUtf8())
             val id = "tab_${tabCounter.incrementAndGet()}"
             val cwd = req.cwd?.ifBlank { null } ?: serverInfo.defaultCwd
             val folder = cwd.trimEnd('/').substringAfterLast('/').ifBlank { cwd }
@@ -364,7 +364,7 @@ class FakeAgentsTermDaemon(
                 messagesByTab[id] = mutableListOf()
             }
             broadcast(WsServerEnvelope(type = "tab_created", tab = tab))
-            return jsonResponse(200, encodeHerdrJson(SingleTabResponse(tab)))
+            return jsonResponse(200, encodeAgentsTermJson(SingleTabResponse(tab)))
         }
 
         val tabSubMatch = Regex("^/api/tabs/([^/]+)(?:/(messages|interrupt|read|queue)(?:/([^/]+))?)?$").matchEntire(path)
@@ -432,7 +432,7 @@ class FakeAgentsTermDaemon(
                             ts = System.currentTimeMillis(),
                         )
                     }
-                    webSocket.send(encodeHerdrJson(snapshot))
+                    webSocket.send(encodeAgentsTermJson(snapshot))
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -456,7 +456,7 @@ class FakeAgentsTermDaemon(
     }
 
     private fun handleUpdateTab(tabId: String, body: String): MockResponse {
-        val req = decodeHerdrJson<UpdateTabRequest>(body)
+        val req = decodeAgentsTermJson<UpdateTabRequest>(body)
         val updated = synchronized(lock) {
             val idx = tabs.indexOfFirst { it.id == tabId }
             if (idx < 0) return jsonResponse(404, """{"error":"Tab not found"}""")
@@ -495,7 +495,7 @@ class FakeAgentsTermDaemon(
             next
         }
         broadcast(WsServerEnvelope(type = "tab_updated", tab = updated))
-        return jsonResponse(200, encodeHerdrJson(SingleTabResponse(updated)))
+        return jsonResponse(200, encodeAgentsTermJson(SingleTabResponse(updated)))
     }
 
     private fun handleDeleteTab(tabId: String): MockResponse {
@@ -516,11 +516,11 @@ class FakeAgentsTermDaemon(
                 messages = messagesByTab[tabId].orEmpty().toList(),
             )
         }
-        return jsonResponse(200, encodeHerdrJson(resp))
+        return jsonResponse(200, encodeAgentsTermJson(resp))
     }
 
     private fun handleSendMessage(tabId: String, body: String): MockResponse {
-        val req = decodeHerdrJson<SendMessageRequest>(body)
+        val req = decodeAgentsTermJson<SendMessageRequest>(body)
         req.overridePermissionMode?.let { receivedOverrideModes.add(it) }
 
         val now = System.currentTimeMillis()
@@ -550,7 +550,7 @@ class FakeAgentsTermDaemon(
             broadcast(WsServerEnvelope(type = "tab_updated", tab = updatedTab))
             return jsonResponse(
                 200,
-                encodeHerdrJson(SendMessageResponse(queued = true, queuedMessage = item, tab = updatedTab)),
+                encodeAgentsTermJson(SendMessageResponse(queued = true, queuedMessage = item, tab = updatedTab)),
             )
         }
 
@@ -569,7 +569,7 @@ class FakeAgentsTermDaemon(
             )
         }
 
-        return jsonResponse(200, encodeHerdrJson(SendMessageResponse(userMessage = userMsg, assistantMessage = assistantMsg)))
+        return jsonResponse(200, encodeAgentsTermJson(SendMessageResponse(userMessage = userMsg, assistantMessage = assistantMsg)))
     }
 
     private data class StartedTurn(
@@ -639,7 +639,7 @@ class FakeAgentsTermDaemon(
             next
         }
         broadcast(WsServerEnvelope(type = "tab_updated", tab = updated))
-        return jsonResponse(200, encodeHerdrJson(QueueActionResponse(ok = true, tab = updated)))
+        return jsonResponse(200, encodeAgentsTermJson(QueueActionResponse(ok = true, tab = updated)))
     }
 
     private fun emitFinishTaskTurn(tab: TabRecord, assistantMsg: ChatMessage) {
@@ -900,7 +900,7 @@ class FakeAgentsTermDaemon(
 
     private fun handleInterrupt(tabId: String, body: String): MockResponse {
         val req = if (body.isNotBlank()) {
-            runCatching { decodeHerdrJson<InterruptTabRequest>(body) }.getOrDefault(InterruptTabRequest())
+            runCatching { decodeAgentsTermJson<InterruptTabRequest>(body) }.getOrDefault(InterruptTabRequest())
         } else {
             InterruptTabRequest()
         }
@@ -964,7 +964,7 @@ class FakeAgentsTermDaemon(
                         overridePermissionMode = overrideMode,
                     )
                 }
-                return jsonResponse(200, encodeHerdrJson(QueueActionResponse(ok = true, tab = started.tab)))
+                return jsonResponse(200, encodeAgentsTermJson(QueueActionResponse(ok = true, tab = started.tab)))
             }
         }
 
@@ -972,7 +972,7 @@ class FakeAgentsTermDaemon(
         if (idleTab != null) {
             broadcast(WsServerEnvelope(type = "tab_updated", tab = idleTab))
         }
-        return jsonResponse(200, encodeHerdrJson(QueueActionResponse(ok = true, tab = idleTab)))
+        return jsonResponse(200, encodeAgentsTermJson(QueueActionResponse(ok = true, tab = idleTab)))
     }
 
     private fun handleMarkRead(tabId: String): MockResponse {
@@ -1013,7 +1013,7 @@ class FakeAgentsTermDaemon(
     }
 
     private fun broadcast(envelope: WsServerEnvelope) {
-        val json = encodeHerdrJson(envelope)
+        val json = encodeAgentsTermJson(envelope)
         for (ws in activeSockets) {
             ws.send(json)
         }
@@ -1028,7 +1028,7 @@ class FakeAgentsTermDaemon(
     )
 
     private fun handleStartDaemonUpdate(body: String): MockResponse {
-        val req = decodeHerdrJson<DaemonUpdateRequest>(body)
+        val req = decodeAgentsTermJson<DaemonUpdateRequest>(body)
         recordedDaemonUpdateRequests.add(req)
         val workingIds = synchronized(lock) {
             tabs.filter { it.status == "working" }.map { it.id }
@@ -1052,7 +1052,7 @@ class FakeAgentsTermDaemon(
             )
             currentUpdateStatus = pending
             broadcast(WsServerEnvelope(type = "daemon_update_status", update = pending, ts = System.currentTimeMillis()))
-            return jsonResponse(202, encodeHerdrJson(pending))
+            return jsonResponse(202, encodeAgentsTermJson(pending))
         }
 
         val restarting = DaemonUpdateStatus(
@@ -1069,7 +1069,7 @@ class FakeAgentsTermDaemon(
         currentUpdateStatus = restarting
         broadcast(WsServerEnvelope(type = "daemon_update_status", update = restarting, ts = System.currentTimeMillis()))
         scheduleSimulatedUpgradeRestart(oldHash = oldHash, upgradedHash = upgradedHash)
-        return jsonResponse(202, encodeHerdrJson(restarting))
+        return jsonResponse(202, encodeAgentsTermJson(restarting))
     }
 
     private fun scheduleSimulatedUpgradeRestart(oldHash: String, upgradedHash: String) {
@@ -1108,12 +1108,12 @@ class FakeAgentsTermDaemon(
         )
         currentUpdateStatus = idle
         broadcast(WsServerEnvelope(type = "daemon_update_status", update = idle, ts = System.currentTimeMillis()))
-        return jsonResponse(200, encodeHerdrJson(idle))
+        return jsonResponse(200, encodeAgentsTermJson(idle))
     }
 
     private fun handleDaemonRollback(body: String): MockResponse {
         val req = if (body.isNotBlank()) {
-            runCatching { decodeHerdrJson<DaemonRollbackRequest>(body) }.getOrDefault(DaemonRollbackRequest())
+            runCatching { decodeAgentsTermJson<DaemonRollbackRequest>(body) }.getOrDefault(DaemonRollbackRequest())
         } else {
             DaemonRollbackRequest()
         }
@@ -1152,7 +1152,7 @@ class FakeAgentsTermDaemon(
             )
             dropAllWebSockets()
         }
-        return jsonResponse(202, encodeHerdrJson(restarting))
+        return jsonResponse(202, encodeAgentsTermJson(restarting))
     }
 
     private fun jsonResponse(code: Int, body: String): MockResponse = MockResponse()

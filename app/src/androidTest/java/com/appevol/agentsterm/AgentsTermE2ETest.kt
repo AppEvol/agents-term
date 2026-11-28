@@ -37,11 +37,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.appevol.agentsterm.data.AgentsTermApiClient
 import com.appevol.agentsterm.data.ChatMessage
 import com.appevol.agentsterm.data.ConnectionConfig
 import com.appevol.agentsterm.data.CreateTabRequest
 import com.appevol.agentsterm.data.DaemonSelfUpdateInfo
-import com.appevol.agentsterm.data.HerdrApiClient
 import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.data.appWindowRoots
 import kotlinx.coroutines.runBlocking
@@ -490,7 +490,7 @@ class AgentsTermE2ETest {
         composeRule.onNodeWithTag("top_new_tab_button").performClick()
         waitForTag("create_tab_button")
 
-        val otherClient = HerdrApiClient()
+        val otherClient = AgentsTermApiClient()
         val config = requireNotNull(ConnectionConfig.parsePairingUri(uri))
         val tenth = runBlocking { otherClient.createTab(config, CreateTabRequest(agent = "claude")) }
         val limitLabel = "10-tab limit reached"

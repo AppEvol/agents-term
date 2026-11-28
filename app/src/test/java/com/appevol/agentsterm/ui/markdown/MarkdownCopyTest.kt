@@ -15,7 +15,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Rule
@@ -97,7 +97,7 @@ class MarkdownCopyTest {
             val real = LocalClipboard.current
             clipboard = remember { FakeClipboard(real) }
             CompositionLocalProvider(LocalClipboard provides clipboard, LocalTextToolbar provides toolbar) {
-                HerdrTheme {
+                AgentsTermTheme {
                     MarkdownText(markdown = "Run `gradle :app:connectedDebugAndroidTest --stacktrace` now")
                 }
             }

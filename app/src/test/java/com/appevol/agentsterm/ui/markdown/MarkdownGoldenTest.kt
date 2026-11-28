@@ -14,7 +14,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ActivityScenario
 import com.appevol.agentsterm.data.AppThemeId
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Rule
 import org.junit.Test
@@ -86,7 +86,7 @@ class MarkdownGoldenTest(private val sample: String, private val viewport: Viewp
         ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 activity.setContent {
-                    HerdrTheme(theme = if (viewport.darkTheme) AppThemeId.MIDNIGHT else AppThemeId.DAYLIGHT) {
+                    AgentsTermTheme(theme = if (viewport.darkTheme) AppThemeId.MIDNIGHT else AppThemeId.DAYLIGHT) {
                         Box(
                             Modifier
                                 .testTag(ROOT_TAG)

@@ -29,7 +29,7 @@ import com.appevol.agentsterm.data.WorkspaceState
 import com.appevol.agentsterm.ui.QuickTabStrip
 import com.appevol.agentsterm.ui.WorkspaceScaffold
 import com.appevol.agentsterm.ui.computeQuickTabScrollTarget
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -156,7 +156,7 @@ class QuickTabStripUiTest {
         var activeId by mutableStateOf("tab_1")
 
         composeRule.setContent {
-            HerdrTheme(theme = AppThemeId.XP_LUNA) {
+            AgentsTermTheme(theme = AppThemeId.XP_LUNA) {
                 Box(modifier = Modifier.fillMaxWidth()) {
                     QuickTabStrip(
                         tabs = tabs,
@@ -191,7 +191,7 @@ class QuickTabStripUiTest {
     fun initialOffScreenSelectedTabIsScrolledIntoViewImmediately() {
         val tabs = makeTabs(6)
         composeRule.setContent {
-            HerdrTheme(theme = AppThemeId.MIDNIGHT) {
+            AgentsTermTheme(theme = AppThemeId.MIDNIGHT) {
                 QuickTabStrip(
                     tabs = tabs,
                     activeTabId = "tab_6",
@@ -217,7 +217,7 @@ class QuickTabStripUiTest {
         var activeId by mutableStateOf("tab_6")
 
         composeRule.setContent {
-            HerdrTheme(theme = AppThemeId.DAYLIGHT) {
+            AgentsTermTheme(theme = AppThemeId.DAYLIGHT) {
                 QuickTabStrip(
                     tabs = tabs,
                     activeTabId = activeId,
@@ -271,7 +271,7 @@ class QuickTabStripUiTest {
     fun manualHorizontalScrollIsNotOverriddenWhileActiveTabStaysUnchanged() {
         val tabs = makeTabs(6)
         composeRule.setContent {
-            HerdrTheme(theme = AppThemeId.XP_LUNA) {
+            AgentsTermTheme(theme = AppThemeId.XP_LUNA) {
                 QuickTabStrip(
                     tabs = tabs,
                     activeTabId = "tab_6",
@@ -302,7 +302,7 @@ class QuickTabStripUiTest {
         var selectedId by mutableStateOf("tab_5")
 
         composeRule.setContent {
-            HerdrTheme(theme = AppThemeId.XP_LUNA) {
+            AgentsTermTheme(theme = AppThemeId.XP_LUNA) {
                 Column {
                     WorkspaceScaffold(
                         state = WorkspaceState(

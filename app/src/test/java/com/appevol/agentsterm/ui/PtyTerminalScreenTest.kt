@@ -18,7 +18,7 @@ import com.appevol.agentsterm.terminal.TerminalFrame
 import com.appevol.agentsterm.terminal.TerminalRow
 import com.appevol.agentsterm.terminal.TerminalScrollbar
 import com.appevol.agentsterm.terminal.TerminalThemePalette
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -79,7 +79,7 @@ class PtyTerminalScreenTest {
         var restartCount = 0
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 PtyTerminalContent(
                     uiState = PtyTabUiState(
                         connectionState = PtyConnectionState.EXITED,

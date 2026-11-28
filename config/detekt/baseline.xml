@@ -11,9 +11,9 @@
     <ID>CyclomaticComplexMethod:AppUiControl.kt$UiNode$fun toMap(): Map&lt;String, Any?&gt;</ID>
     <ID>CyclomaticComplexMethod:DebugSystemCollector.kt$suspend fun captureWindowScreenshotBase64(activity: Activity?): String?</ID>
     <ID>CyclomaticComplexMethod:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleRequest(request: RecordedRequest): MockResponse</ID>
-    <ID>CyclomaticComplexMethod:HerdrRepository.kt$HerdrRepository$private fun openSocketNow( config: ConnectionConfig, expectedGeneration: Long? = null, )</ID>
-    <ID>CyclomaticComplexMethod:HerdrRepository.kt$fun reduceWorkspaceEvent( state: WorkspaceState, event: WsServerEnvelope, preferredTabId: String? = null, ): WorkspaceState</ID>
-    <ID>CyclomaticComplexMethod:HerdrRepository.kt$suspend fun resolveInitialDirectoryListing( preferredPath: String?, homeCwd: String?, listDirectories: suspend (String?) -&gt; Result&lt;FsListResponse&gt;, ): Result&lt;ResolvedDirectoryListing&gt;</ID>
+    <ID>CyclomaticComplexMethod:AgentsTermRepository.kt$AgentsTermRepository$private fun openSocketNow( config: ConnectionConfig, expectedGeneration: Long? = null, )</ID>
+    <ID>CyclomaticComplexMethod:AgentsTermRepository.kt$fun reduceWorkspaceEvent( state: WorkspaceState, event: WsServerEnvelope, preferredTabId: String? = null, ): WorkspaceState</ID>
+    <ID>CyclomaticComplexMethod:AgentsTermRepository.kt$suspend fun resolveInitialDirectoryListing( preferredPath: String?, homeCwd: String?, listDirectories: suspend (String?) -&gt; Result&lt;FsListResponse&gt;, ): Result&lt;ResolvedDirectoryListing&gt;</ID>
     <ID>CyclomaticComplexMethod:MessagePresentation.kt$fun buildAssistantDisplayBlocks(message: ChatMessage): List&lt;AssistantDisplayBlock&gt;</ID>
     <ID>CyclomaticComplexMethod:SshBootstrapClient.kt$SshBootstrapClient$suspend fun bootstrapWithAgy( config: SshBootstrapConfig, onPhase: (BootstrapPhase) -&gt; Unit, onHostFingerprint: (String) -&gt; Unit, onLog: (String) -&gt; Unit, ): SshBootstrapResult</ID>
     <ID>CyclomaticComplexMethod:SshBootstrapModels.kt$@Suppress("UNCHECKED_CAST") fun parseAgyStreamJsonLine(rawLine: String): ParsedAgyStreamLine?</ID>
@@ -22,7 +22,7 @@
     <ID>DestructuringDeclarationWithTooManyEntries:AppUiControl.kt$AppUiController$val (x1, y1, x2, y2) = coords</ID>
     <ID>DestructuringDeclarationWithTooManyEntries:AppUiControl.kt$AppUiController$val (x1, y1, x2, y2) = when (direction) { "down" -&gt; listOf(cx, cy + dy, cx, cy - dy) "up" -&gt; listOf(cx, cy - dy, cx, cy + dy) "right" -&gt; listOf(cx + dx, cy, cx - dx, cy) else -&gt; listOf(cx - dx, cy, cx + dx, cy) }</ID>
     <ID>DestructuringDeclarationWithTooManyEntries:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$val (workingTab, userMsg, assistantMsg, effectivePrompt) = startTurnInternal( tabId = tabId, promptText = req.text, ) ?: return jsonResponse(404, """{"error":"Tab not found"}""")</ID>
-    <ID>InstanceOfCheckForException:HerdrApiClient.kt$HerdrApiClient$err !is IOException</ID>
+    <ID>InstanceOfCheckForException:AgentsTermApiClient.kt$AgentsTermApiClient$err !is IOException</ID>
     <ID>LargeClass:AgentsTermE2ETest.kt$AgentsTermE2ETest</ID>
     <ID>LargeClass:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon : AutoCloseable</ID>
     <ID>LargeClass:ModelsAndStateTest.kt$ModelsAndStateTest</ID>
@@ -35,8 +35,8 @@
     <ID>LongMethod:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun emitTurnEvents( tab: TabRecord, userMsg: ChatMessage, assistantMsg: ChatMessage, prompt: String, overridePermissionMode: String?, )</ID>
     <ID>LongMethod:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleInterrupt(tabId: String, body: String): MockResponse</ID>
     <ID>LongMethod:FakeAgentsTermDaemon.kt$FakeAgentsTermDaemon$private fun handleRequest(request: RecordedRequest): MockResponse</ID>
-    <ID>LongMethod:HerdrRepository.kt$HerdrRepository$private fun openSocketNow( config: ConnectionConfig, expectedGeneration: Long? = null, )</ID>
-    <ID>LongMethod:HerdrRepository.kt$fun reduceWorkspaceEvent( state: WorkspaceState, event: WsServerEnvelope, preferredTabId: String? = null, ): WorkspaceState</ID>
+    <ID>LongMethod:AgentsTermRepository.kt$AgentsTermRepository$private fun openSocketNow( config: ConnectionConfig, expectedGeneration: Long? = null, )</ID>
+    <ID>LongMethod:AgentsTermRepository.kt$fun reduceWorkspaceEvent( state: WorkspaceState, event: WsServerEnvelope, preferredTabId: String? = null, ): WorkspaceState</ID>
     <ID>LongMethod:MainViewModel.kt$MainViewModel$fun startSshBootstrap(config: SshBootstrapConfig)</ID>
     <ID>LongMethod:ModelsAndStateTest.kt$ModelsAndStateTest$@Test fun modelSlashCommandsCatalogResolutionAndUpdateSerializationWork()</ID>
     <ID>LongMethod:ModelsAndStateTest.kt$ModelsAndStateTest$@Test fun reduceWorkspaceEventStreamsDeltasAndToolUpdates()</ID>
@@ -81,7 +81,7 @@
     <ID>ThrowsCount:AppUiControl.kt$AppUiController$private suspend fun type(args: Map&lt;String, Any?&gt;): Map&lt;String, Any?&gt;</ID>
     <ID>TooGenericExceptionCaught:AndroidUiDriver.kt$AndroidUiDriver$e: Throwable</ID>
     <ID>TooGenericExceptionCaught:AppStateReporter.kt$AppStateReporter$e: Throwable</ID>
-    <ID>TooGenericExceptionCaught:HerdrApiClient.kt$HerdrApiClient$err: Throwable</ID>
+    <ID>TooGenericExceptionCaught:AgentsTermApiClient.kt$AgentsTermApiClient$err: Throwable</ID>
     <ID>TooGenericExceptionCaught:MainViewModel.kt$MainViewModel$err: Throwable</ID>
   </CurrentIssues>
 </SmellBaseline>

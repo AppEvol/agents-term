@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.appevol.agentsterm.BuildConfig
 import com.appevol.agentsterm.R
+import com.appevol.agentsterm.data.AgentsTermApiClient
+import com.appevol.agentsterm.data.AgentsTermRepository
 import com.appevol.agentsterm.data.AndroidScreenRecorder
 import com.appevol.agentsterm.data.AndroidUiDriver
 import com.appevol.agentsterm.data.AppStateCommandException
@@ -30,8 +32,6 @@ import com.appevol.agentsterm.data.DebugRecorder
 import com.appevol.agentsterm.data.DebugSharingSettings
 import com.appevol.agentsterm.data.ForegroundActivityTracker
 import com.appevol.agentsterm.data.FsListResponse
-import com.appevol.agentsterm.data.HerdrApiClient
-import com.appevol.agentsterm.data.HerdrRepository
 import com.appevol.agentsterm.data.HostKeyMismatchException
 import com.appevol.agentsterm.data.ScreenRecordingCommands
 import com.appevol.agentsterm.data.ScreenRecordingService
@@ -79,8 +79,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val lastAutoUploadMs = AtomicLong(0L)
     private val lastControlNoticeMs = AtomicLong(0L)
 
-    private val api = HerdrApiClient(debugRecorder)
-    private val repo = HerdrRepository(
+    private val api = AgentsTermApiClient(debugRecorder)
+    private val repo = AgentsTermRepository(
         api = api,
         settings = settings,
         debugRecorder = debugRecorder,
@@ -742,7 +742,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
 /** Coordinates directory browsing and tab creation state (including inline errors) for NewTabSheet. */
 class NewTabController(
-    private val repo: HerdrRepository,
+    private val repo: AgentsTermRepository,
     private val scope: CoroutineScope,
 ) {
     private val _error = MutableStateFlow<String?>(null)
@@ -875,7 +875,7 @@ private fun formatAppStateUiMap(
 /** Android-backed data for [AppStateReporter]; respects the user's debug sharing toggles. */
 private class ViewModelAppStateSources(
     private val app: Application,
-    private val repo: HerdrRepository,
+    private val repo: AgentsTermRepository,
     private val readDebugSettings: () -> DebugSharingSettings,
     private val readUiState: () -> Map<String, Any?>,
     private val uploadDump: suspend (note: String?, screenshotBase64: String?) -> Result<DebugDumpUploadResponse>,

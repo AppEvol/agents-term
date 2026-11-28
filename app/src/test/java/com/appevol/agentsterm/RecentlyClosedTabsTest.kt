@@ -8,14 +8,14 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import com.appevol.agentsterm.data.AgentsTermApiClient
+import com.appevol.agentsterm.data.AgentsTermRepository
 import com.appevol.agentsterm.data.ChatMessage
 import com.appevol.agentsterm.data.ClosedTabsResponse
 import com.appevol.agentsterm.data.ConnectionConfig
 import com.appevol.agentsterm.data.ConnectionSettings
 import com.appevol.agentsterm.data.ConnectionState
 import com.appevol.agentsterm.data.DeleteTabResponse
-import com.appevol.agentsterm.data.HerdrApiClient
-import com.appevol.agentsterm.data.HerdrRepository
 import com.appevol.agentsterm.data.MAX_OPEN_TABS
 import com.appevol.agentsterm.data.ReviveTabResponse
 import com.appevol.agentsterm.data.TabRecord
@@ -25,7 +25,7 @@ import com.appevol.agentsterm.data.formatRelativeClosedTime
 import com.appevol.agentsterm.data.reduceWorkspaceEvent
 import com.appevol.agentsterm.ui.RecentlyClosedTabsContent
 import com.appevol.agentsterm.ui.TabSidebarBody
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -67,7 +67,7 @@ class RecentlyClosedTabsTest {
         override fun saveLastCwd(host: String, cwd: String?) = Unit
     }
 
-    private class FakeClosedTabsApi : HerdrApiClient() {
+    private class FakeClosedTabsApi : AgentsTermApiClient() {
         val openTabs = mutableListOf<TabRecord>()
         val closedTabs = mutableListOf<TabRecord>()
         val messagesByTab = mutableMapOf<String, List<ChatMessage>>()
@@ -220,7 +220,7 @@ class RecentlyClosedTabsTest {
         api.openTabs.add(tab)
         api.messagesByTab[tab.id] = history
 
-        val repo = HerdrRepository(api = api, settings = settings, ioDispatcher = dispatcher)
+        val repo = AgentsTermRepository(api = api, settings = settings, ioDispatcher = dispatcher)
         val delRes = repo.deleteTab(tab.id)
         assertTrue(delRes.isSuccess)
         assertEquals(tab.id, delRes.getOrNull()?.id)
@@ -239,7 +239,7 @@ class RecentlyClosedTabsTest {
         }
         limitApi.openTabs.addAll(tenOpen)
         limitApi.closedTabs.add(sampleClosedA)
-        val limitRepo = HerdrRepository(api = limitApi, settings = settings, ioDispatcher = dispatcher)
+        val limitRepo = AgentsTermRepository(api = limitApi, settings = settings, ioDispatcher = dispatcher)
         limitRepo.connect()
         limitApi.lastOnEvent?.invoke(
             WsServerEnvelope(
@@ -259,7 +259,7 @@ class RecentlyClosedTabsTest {
     @Test
     fun recentlyClosedTabsUiShowsEmptyState() {
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 RecentlyClosedTabsContent(
                     closedTabs = emptyList(),
                     canReviveTab = true,
@@ -288,7 +288,7 @@ class RecentlyClosedTabsTest {
             )
         }
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 RecentlyClosedTabsContent(
                     closedTabs = sixClosed,
                     canReviveTab = true,
@@ -313,7 +313,7 @@ class RecentlyClosedTabsTest {
     fun recentlyClosedTabsUiDisablesReviveWhenOpenTabLimitReached() {
         var revived = false
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 RecentlyClosedTabsContent(
                     closedTabs = listOf(sampleClosedA, sampleClosedB),
                     canReviveTab = false,
@@ -336,7 +336,7 @@ class RecentlyClosedTabsTest {
     fun drawerDisplaysRecentlyClosedCountAndTriggersCallback() {
         var opened = false
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 TabSidebarBody(
                     state = WorkspaceState(
                         config = ConnectionConfig(host = "100.71.219.26", port = 7501),

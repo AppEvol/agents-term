@@ -236,16 +236,16 @@
 
     <issue
         id="IconLocation"
-        message="Found bitmap drawable `res/drawable/img_herdr_hero_1795442350136.jpg` in densityless folder">
+        message="Found bitmap drawable `res/drawable/img_agentsterm_hero_1795442350136.jpg` in densityless folder">
         <location
-            file="src/main/res/drawable/img_herdr_hero_1795442350136.jpg"/>
+            file="src/main/res/drawable/img_agentsterm_hero_1795442350136.jpg"/>
     </issue>
 
     <issue
         id="IconLocation"
-        message="Found bitmap drawable `res/drawable/img_herdr_icon_fg_1795442349183.jpg` in densityless folder">
+        message="Found bitmap drawable `res/drawable/img_agentsterm_icon_fg_1795442349183.jpg` in densityless folder">
         <location
-            file="src/main/res/drawable/img_herdr_icon_fg_1795442349183.jpg"/>
+            file="src/main/res/drawable/img_agentsterm_icon_fg_1795442349183.jpg"/>
     </issue>
 
     <issue

@@ -24,7 +24,7 @@ import com.appevol.agentsterm.data.FsDirectoryEntry
 import com.appevol.agentsterm.data.FsListResponse
 import com.appevol.agentsterm.data.SHELL_MODE_COMMAND
 import com.appevol.agentsterm.data.SHELL_MODE_PTY
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -57,7 +57,7 @@ class NewTabSheetTest {
     @Test
     fun portraitPhoneShowsAllFourTabOptionsWithoutHorizontalScrolling() {
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 Box(modifier = Modifier.width(360.dp)) {
                     NewTabSheetContent(
                         agents = defaultAgents,
@@ -106,7 +106,7 @@ class NewTabSheetTest {
     @Test
     fun selectingShellUpdatesTitleAndShowsCapabilityDescription() {
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 NewTabSheetContent(
                     agents = emptyList(),
                     defaultCwd = "/home/ned",
@@ -139,7 +139,7 @@ class NewTabSheetTest {
         val longPath = "/home/nednguyen_google_com/projects/agents-term"
         val parentPath = "/home/nednguyen_google_com/projects"
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 NewTabSheetContent(
                     agents = defaultAgents,
                     defaultCwd = longPath,
@@ -204,7 +204,7 @@ class NewTabSheetTest {
     @Test
     fun lunaThemeAndOddAgentCountRenderCleanly() {
         composeRule.setContent {
-            HerdrTheme(theme = AppThemeId.XP_LUNA) {
+            AgentsTermTheme(theme = AppThemeId.XP_LUNA) {
                 Box(modifier = Modifier.width(360.dp)) {
                     NewTabSheetContent(
                         agents = defaultAgents.take(3),
@@ -232,7 +232,7 @@ class NewTabSheetTest {
     fun createErrorDisplaysBannerAndIsCreatingDisablesButton() {
         val errorMsg = "Working directory does not exist: /bad/path"
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 NewTabSheetContent(
                     agents = defaultAgents,
                     defaultCwd = "/bad/path",
@@ -261,7 +261,7 @@ class NewTabSheetTest {
     fun newTabButtonLabelReturnsNeutralNewTabString() {
         var resolvedLabel = ""
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 resolvedLabel = newTabButtonLabel(canCreateTab = true)
             }
         }
@@ -275,7 +275,7 @@ class NewTabSheetTest {
         var createdAgent: String? = null
         var createdShellMode: String? = null
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 NewTabSheetContent(
                     agents = defaultAgents,
                     defaultCwd = "/home/ned",
@@ -320,7 +320,7 @@ class NewTabSheetTest {
     fun olderDaemonWithoutPtyHidesShellModeSelectorAndOmitsShellMode() {
         var createdShellMode: String? = "unset"
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 NewTabSheetContent(
                     agents = defaultAgents,
                     defaultCwd = "/home/ned",

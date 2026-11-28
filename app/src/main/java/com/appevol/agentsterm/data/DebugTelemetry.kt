@@ -134,7 +134,7 @@ class DebugRecorder(
         if (list.isEmpty()) return ""
         return buildString {
             for (item in list) {
-                appendLine(encodeHerdrJson(item))
+                appendLine(encodeAgentsTermJson(item))
             }
         }
     }
@@ -168,7 +168,7 @@ fun buildSanitizedWorkspaceJson(state: WorkspaceState): String {
         activeTabMessages = activeMsgs,
         messageCountsByTab = state.messagesByTab.mapValues { it.value.size },
     )
-    return encodeHerdrJson(snapshot)
+    return encodeAgentsTermJson(snapshot)
 }
 
 fun buildDebugSummaryMarkdown(request: DebugDumpUploadRequest): String {

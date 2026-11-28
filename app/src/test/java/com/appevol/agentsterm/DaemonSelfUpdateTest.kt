@@ -14,6 +14,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
+import com.appevol.agentsterm.data.AgentsTermApiClient
+import com.appevol.agentsterm.data.AgentsTermRepository
 import com.appevol.agentsterm.data.BootstrapPhase
 import com.appevol.agentsterm.data.ConnectionConfig
 import com.appevol.agentsterm.data.ConnectionState
@@ -27,8 +29,6 @@ import com.appevol.agentsterm.data.DaemonUpdateStatus
 import com.appevol.agentsterm.data.DebugDumpUploadState
 import com.appevol.agentsterm.data.DebugSharingSettings
 import com.appevol.agentsterm.data.EXPECTED_DAEMON_PROTOCOL_VERSION
-import com.appevol.agentsterm.data.HerdrApiClient
-import com.appevol.agentsterm.data.HerdrRepository
 import com.appevol.agentsterm.data.HttpStatusException
 import com.appevol.agentsterm.data.ServerInfo
 import com.appevol.agentsterm.data.SettingsStore
@@ -42,7 +42,7 @@ import com.appevol.agentsterm.data.WorkspaceState
 import com.appevol.agentsterm.data.WsServerEnvelope
 import com.appevol.agentsterm.data.buildDaemonRollbackCommand
 import com.appevol.agentsterm.data.daemonIdentityKey
-import com.appevol.agentsterm.data.decodeHerdrJson
+import com.appevol.agentsterm.data.decodeAgentsTermJson
 import com.appevol.agentsterm.data.displayBreakglassRollbackCommand
 import com.appevol.agentsterm.data.evaluateDaemonCompatibility
 import com.appevol.agentsterm.data.isAuthError
@@ -53,7 +53,7 @@ import com.appevol.agentsterm.ui.DaemonUpdateController
 import com.appevol.agentsterm.ui.DaemonUpdateUiState
 import com.appevol.agentsterm.ui.SettingsScreen
 import com.appevol.agentsterm.ui.WorkspaceScaffold
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -199,7 +199,7 @@ class DaemonSelfUpdateTest {
               "ts": 1700000000000
             }
         """.trimIndent()
-        val env = decodeHerdrJson<WsServerEnvelope>(wsJson)
+        val env = decodeAgentsTermJson<WsServerEnvelope>(wsJson)
         val pending = reduceWorkspaceEvent(WorkspaceState(), env)
         assertTrue(pending.daemonUpdateStatus?.isPendingRestart == true)
         assertEquals(2, pending.daemonUpdateStatus?.effectiveActiveTurnCount)
@@ -235,7 +235,7 @@ class DaemonSelfUpdateTest {
         server.enqueue(MockResponse().setResponseCode(202).setBody("""{"state":"restarting"}"""))
         server.start()
         try {
-            val api = HerdrApiClient()
+            val api = AgentsTermApiClient()
             val cfg = ConnectionConfig(host = server.hostName, port = server.port, token = "tok-123")
 
             assertEquals("idle", api.getDaemonUpdateStatus(cfg).state)
@@ -266,7 +266,7 @@ class DaemonSelfUpdateTest {
         server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"Self-update is disabled"}"""))
         server.start()
         try {
-            val api = HerdrApiClient()
+            val api = AgentsTermApiClient()
             val cfg = ConnectionConfig(host = server.hostName, port = server.port, token = "tok")
             try {
                 api.startDaemonUpdate(cfg, DaemonUpdateRequest(version = "latest"))
@@ -297,7 +297,7 @@ class DaemonSelfUpdateTest {
         val fakeApi = FakeUpdateApiClient()
         val settings = SettingsStore(ApplicationProvider.getApplicationContext())
         settings.saveConnection(ConnectionConfig(host = "127.0.0.1", port = 7501, token = "saved-token"))
-        val repo = HerdrRepository(api = fakeApi, settings = settings, ioDispatcher = Dispatchers.Unconfined)
+        val repo = AgentsTermRepository(api = fakeApi, settings = settings, ioDispatcher = Dispatchers.Unconfined)
         val fakeSsh = FakeRollbackSshClient(settings)
         val controllerScope = CoroutineScope(coroutineContext + SupervisorJob())
         try {
@@ -364,7 +364,7 @@ class DaemonSelfUpdateTest {
         var updateUi by mutableStateOf(DaemonUpdateUiState())
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 TestUpdateWorkspaceScaffold(
                     state = wsState,
                     compat = compat,
@@ -425,7 +425,7 @@ class DaemonSelfUpdateTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 TestUpdateWorkspaceScaffold(
                     state = wsState,
                     compat = sampleMismatchCompat(),
@@ -471,7 +471,7 @@ class DaemonSelfUpdateTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 SettingsScreen(
                     workspaceState = workspaceState,
                     debugSettings = DebugSharingSettings(),
@@ -525,7 +525,7 @@ class DaemonSelfUpdateTest {
         expectedReleaseTag = "v0.3.360-abcdef1",
     )
 
-    private class FakeUpdateApiClient : HerdrApiClient() {
+    private class FakeUpdateApiClient : AgentsTermApiClient() {
         val startedRequests = mutableListOf<DaemonUpdateRequest>()
         var cancelCalls = 0
         var rollbackCalls = 0

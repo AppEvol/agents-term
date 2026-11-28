@@ -24,8 +24,8 @@ import com.appevol.agentsterm.ui.AgentKeyboard
 import com.appevol.agentsterm.ui.ChatWorkspace
 import com.appevol.agentsterm.ui.ComposerKeyboard
 import com.appevol.agentsterm.ui.ShellKeyboard
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import com.appevol.agentsterm.ui.theme.BodyFontFamily
-import com.appevol.agentsterm.ui.theme.HerdrTheme
 import com.appevol.agentsterm.ui.theme.MonoFontFamily
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -96,7 +96,7 @@ class ComposerKeyboardTest {
 
         composeRule.setContent {
             hostView = LocalView.current
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = shellTab,
                     messages = emptyList(),
@@ -129,7 +129,7 @@ class ComposerKeyboardTest {
 
         composeRule.setContent {
             hostView = LocalView.current
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = agentTab,
                     messages = emptyList(),
@@ -170,7 +170,7 @@ class ComposerKeyboardTest {
 
         composeRule.setContent {
             hostView = LocalView.current
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = currentTab,
                     messages = emptyList(),
@@ -216,7 +216,7 @@ class ComposerKeyboardTest {
 
         composeRule.setContent {
             hostView = LocalView.current
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = agentTab,
                     messages = emptyList(),

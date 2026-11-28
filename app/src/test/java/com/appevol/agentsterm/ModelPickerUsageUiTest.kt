@@ -15,7 +15,7 @@ import com.appevol.agentsterm.data.AgentUsageItem
 import com.appevol.agentsterm.data.AgentUsageResponse
 import com.appevol.agentsterm.data.AgentUsageUiState
 import com.appevol.agentsterm.ui.ModelPickerSheetContent
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -63,7 +63,7 @@ class ModelPickerUsageUiTest {
     fun throughputAppearsOnTheMatchingModelWithoutCheckingQuota() {
         var rates by mutableStateOf(emptyMap<String, String>())
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ModelPickerSheetContent(
                     agentLabel = "Antigravity",
                     currentModel = null,
@@ -89,7 +89,7 @@ class ModelPickerUsageUiTest {
         var usageState by mutableStateOf(AgentUsageUiState())
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ModelPickerSheetContent(
                     agentLabel = "Antigravity",
                     currentModel = "gemini-4-neon-high",
@@ -127,7 +127,7 @@ class ModelPickerUsageUiTest {
     @Test
     fun usageErrorIsDisplayedInPanel() {
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ModelPickerSheetContent(
                     agentLabel = "Claude",
                     currentModel = null,

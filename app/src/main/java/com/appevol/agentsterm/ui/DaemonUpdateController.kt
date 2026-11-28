@@ -1,5 +1,7 @@
 package com.appevol.agentsterm.ui
 
+import com.appevol.agentsterm.data.AgentsTermApiClient
+import com.appevol.agentsterm.data.AgentsTermRepository
 import com.appevol.agentsterm.data.ConnectionConfig
 import com.appevol.agentsterm.data.ConnectionState
 import com.appevol.agentsterm.data.DaemonCompatibilityInfo
@@ -7,8 +9,6 @@ import com.appevol.agentsterm.data.DaemonRollbackRequest
 import com.appevol.agentsterm.data.DaemonUpdateRequest
 import com.appevol.agentsterm.data.DaemonUpdateStatus
 import com.appevol.agentsterm.data.DebugRecorder
-import com.appevol.agentsterm.data.HerdrApiClient
-import com.appevol.agentsterm.data.HerdrRepository
 import com.appevol.agentsterm.data.SshBootstrapClient
 import com.appevol.agentsterm.data.SshBootstrapConfig
 import com.appevol.agentsterm.data.SshBootstrapResult
@@ -57,8 +57,8 @@ data class DaemonUpdateActions(
  * rollback, post-update reconnect-failure detection, and breakglass SSH rollback.
  */
 class DaemonUpdateController(
-    private val api: HerdrApiClient,
-    private val repo: HerdrRepository,
+    private val api: AgentsTermApiClient,
+    private val repo: AgentsTermRepository,
     private val sshClient: SshBootstrapClient?,
     private val debugRecorder: DebugRecorder? = null,
     private val scope: CoroutineScope,

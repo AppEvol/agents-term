@@ -22,7 +22,7 @@ import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.data.WorkspaceState
 import com.appevol.agentsterm.ui.ComposerAttachments
 import com.appevol.agentsterm.ui.WorkspaceScaffold
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -77,7 +77,7 @@ class ComposerInputSessionTest {
             tabs = tabs,
             selectedTabId = selectedId,
         )
-        HerdrTheme {
+        AgentsTermTheme {
             WorkspaceScaffold(
                 state = state,
                 composerAttachments = attachments,

@@ -30,9 +30,9 @@ import com.appevol.agentsterm.data.WsServerEnvelope
 import com.appevol.agentsterm.data.buildAssistantDisplayBlocks
 import com.appevol.agentsterm.data.buildDaemonBootstrapCommand
 import com.appevol.agentsterm.data.buildSanitizedWorkspaceJson
-import com.appevol.agentsterm.data.decodeHerdrJson
+import com.appevol.agentsterm.data.decodeAgentsTermJson
+import com.appevol.agentsterm.data.encodeAgentsTermJson
 import com.appevol.agentsterm.data.encodeBase64Utf8
-import com.appevol.agentsterm.data.encodeHerdrJson
 import com.appevol.agentsterm.data.extractPairingUriFromOutput
 import com.appevol.agentsterm.data.formatModelChipLabel
 import com.appevol.agentsterm.data.formatToolCallSummary
@@ -182,7 +182,7 @@ class ModelsAndStateTest {
               "activeTabId": null
             }
         """.trimIndent()
-        val env = decodeHerdrJson<WsServerEnvelope>(raw)
+        val env = decodeAgentsTermJson<WsServerEnvelope>(raw)
         assertEquals("snapshot", env.type)
         assertEquals("example-vm", env.server?.hostname)
         assertEquals(1, env.server?.agents?.size)
@@ -347,12 +347,12 @@ class ModelsAndStateTest {
             workspaceStateJson = stateJson,
             eventsNdjson = "",
         )
-        val encoded = com.appevol.agentsterm.data.encodeHerdrJson(req)
-        val decoded = decodeHerdrJson<DebugDumpUploadRequest>(encoded)
+        val encoded = com.appevol.agentsterm.data.encodeAgentsTermJson(req)
+        val decoded = decodeAgentsTermJson<DebugDumpUploadRequest>(encoded)
         assertEquals("abcd1234", decoded.dumpId)
         assertEquals("agy agent mode glitched", decoded.note)
 
-        val resp = decodeHerdrJson<DebugDumpUploadResponse>(
+        val resp = decodeAgentsTermJson<DebugDumpUploadResponse>(
             """{"ok":true,"dumpId":"abcd1234","remoteDir":"/home/ned/.agents-term/debug-dumps/latest",""" +
                 """"latestSymlink":"/home/ned/.agents-term/debug-dumps/latest","files":["summary.md","events.ndjson"]}""",
         )
@@ -479,7 +479,7 @@ class ModelsAndStateTest {
               "tabs": []
             }
         """.trimIndent()
-        val env = decodeHerdrJson<WsServerEnvelope>(raw)
+        val env = decodeAgentsTermJson<WsServerEnvelope>(raw)
         val agents = env.server!!.agents
 
         val (claudeModels, claudeDefault) = resolveAgentModelCatalog("claude", agents)
@@ -501,9 +501,9 @@ class ModelsAndStateTest {
         assertNull(shellDefault)
 
         // UpdateTabRequest clearing model sends explicit empty string while title-only omits model
-        val clearJson = encodeHerdrJson(UpdateTabRequest(model = ""))
+        val clearJson = encodeAgentsTermJson(UpdateTabRequest(model = ""))
         assertTrue(clearJson.contains("\"model\":\"\""))
-        val renameJson = encodeHerdrJson(UpdateTabRequest(title = "Renamed"))
+        val renameJson = encodeAgentsTermJson(UpdateTabRequest(title = "Renamed"))
         assertFalse(renameJson.contains("\"model\""))
     }
 
@@ -542,11 +542,11 @@ class ModelsAndStateTest {
         assertEquals("/", normalizeFsPath("///"))
         assertEquals("/home/ned/projects", normalizeFsPath(" /home/ned/projects/ "))
 
-        val legacyFs = decodeHerdrJson<FsListResponse>(
+        val legacyFs = decodeAgentsTermJson<FsListResponse>(
             """{"path":"/home/ned","parent":"/home","directories":[]}""",
         )
         assertNull(legacyFs.exists)
-        val explicitFs = decodeHerdrJson<FsListResponse>(
+        val explicitFs = decodeAgentsTermJson<FsListResponse>(
             """{"path":"/home/ned/gone","parent":"/home/ned","directories":[],"exists":false}""",
         )
         assertEquals(false, explicitFs.exists)
@@ -752,11 +752,11 @@ class ModelsAndStateTest {
         assertEquals(streamed.segments, afterLegacyUpdate.activeMessages.single().segments)
 
         // JSON backward compatibility: decodes with and without segments
-        val withoutSegments = decodeHerdrJson<ChatMessage>(
+        val withoutSegments = decodeAgentsTermJson<ChatMessage>(
             """{"id":"m1","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[]}""",
         )
         assertTrue(withoutSegments.segments.isEmpty())
-        val withSegments = decodeHerdrJson<ChatMessage>(
+        val withSegments = decodeAgentsTermJson<ChatMessage>(
             """{"id":"m2","tabId":"t1","role":"assistant","text":"Hi","toolCalls":[],"segments":[{"type":"text","text":"Hi"}]}""",
         )
         assertEquals(listOf(MessageSegment(type = "text", text = "Hi")), withSegments.segments)
@@ -795,7 +795,7 @@ class ModelsAndStateTest {
         assertTrue(fallbackFullAccess.startsWith("Daemon custom default"))
         assertTrue(fallbackFullAccess.contains("close this tab", ignoreCase = true))
 
-        val snapshotWithPrompt = decodeHerdrJson<WsServerEnvelope>(
+        val snapshotWithPrompt = decodeAgentsTermJson<WsServerEnvelope>(
             """
             {
               "type": "snapshot",
@@ -821,12 +821,12 @@ class ModelsAndStateTest {
         assertEquals("From daemon full access", snapshotWithPrompt.server?.defaultSystemPromptFullAccess)
         assertEquals("Per-tab prompt", snapshotWithPrompt.tabs?.single()?.systemPrompt)
 
-        val createEmptyJson = encodeHerdrJson(CreateTabRequest(agent = "claude", systemPrompt = ""))
+        val createEmptyJson = encodeAgentsTermJson(CreateTabRequest(agent = "claude", systemPrompt = ""))
         assertTrue(createEmptyJson.contains("\"systemPrompt\":\"\""))
 
-        val clearJson = encodeHerdrJson(UpdateTabRequest(systemPrompt = ""))
+        val clearJson = encodeAgentsTermJson(UpdateTabRequest(systemPrompt = ""))
         assertTrue(clearJson.contains("\"systemPrompt\":\"\""))
-        val titleOnlyJson = encodeHerdrJson(UpdateTabRequest(title = "Renamed"))
+        val titleOnlyJson = encodeAgentsTermJson(UpdateTabRequest(title = "Renamed"))
         assertFalse(titleOnlyJson.contains("\"systemPrompt\""))
     }
 
@@ -910,20 +910,20 @@ class ModelsAndStateTest {
         val ws = WorkspaceState(tabs = listOf(explicitDone, tokenDone, proseOnlyTab, workingTab, shellTab))
         assertEquals(setOf("t_done", "t_token"), ws.finishedTabIds)
 
-        val statusJson = encodeHerdrJson(UpdateTabRequest(status = "done"))
+        val statusJson = encodeAgentsTermJson(UpdateTabRequest(status = "done"))
         assertTrue(statusJson.contains("\"status\":\"done\""))
     }
 
     @Test
     fun queuedMessagesSerializationAndWorkspaceReductionRemainBackwardCompatible() {
         // Legacy tab JSON without queuedMessages decodes with an empty queue
-        val legacyTab = decodeHerdrJson<TabRecord>(
+        val legacyTab = decodeAgentsTermJson<TabRecord>(
             """{"id":"tab_legacy","title":"Agy","agent":"agy","cwd":"/home/ned","status":"working"}""",
         )
         assertTrue(legacyTab.queuedMessages.isEmpty())
 
         // Queued SendMessageResponse decodes cleanly without userMessage/assistantMessage
-        val queuedResp = decodeHerdrJson<SendMessageResponse>(
+        val queuedResp = decodeAgentsTermJson<SendMessageResponse>(
             """
             {
               "queued": true,
@@ -945,10 +945,10 @@ class ModelsAndStateTest {
         assertEquals(listOf("Follow up"), queuedResp.tab?.queuedMessages?.map { it.text })
 
         // InterruptTabRequest and QueueActionResponse round-trip cleanly (including legacy {"ok":true})
-        val intrJson = encodeHerdrJson(InterruptTabRequest(processQueue = true, text = "Run now"))
+        val intrJson = encodeAgentsTermJson(InterruptTabRequest(processQueue = true, text = "Run now"))
         assertTrue(intrJson.contains("\"processQueue\":true"))
         assertTrue(intrJson.contains("\"text\":\"Run now\""))
-        val legacyOk = decodeHerdrJson<QueueActionResponse>("""{"ok":true}""")
+        val legacyOk = decodeAgentsTermJson<QueueActionResponse>("""{"ok":true}""")
         assertTrue(legacyOk.ok)
         assertNull(legacyOk.tab)
 
@@ -970,13 +970,13 @@ class ModelsAndStateTest {
     @Test
     fun taskSummarySerializationAndFallbackResolutionWork() {
         // Legacy JSON without taskSummary decodes with null
-        val legacyTab = decodeHerdrJson<TabRecord>(
+        val legacyTab = decodeAgentsTermJson<TabRecord>(
             """{"id":"tab_old","title":"Agy","agent":"agy","cwd":"/home/ned","lastMessagePreview":"Done!"}""",
         )
         assertNull(legacyTab.taskSummary)
 
         // Newer daemon JSON with taskSummary decodes cleanly
-        val modernTab = decodeHerdrJson<TabRecord>(
+        val modernTab = decodeAgentsTermJson<TabRecord>(
             """
             {
               "id": "tab_new",
@@ -1065,7 +1065,7 @@ class ModelsAndStateTest {
               ]
             }
         """.trimIndent()
-        val parsed = com.appevol.agentsterm.data.decodeHerdrJson<com.appevol.agentsterm.data.AgentUsageResponse>(raw)
+        val parsed = com.appevol.agentsterm.data.decodeAgentsTermJson<com.appevol.agentsterm.data.AgentUsageResponse>(raw)
         assertEquals("agy", parsed.agent)
         assertEquals("pro", parsed.plan)
         assertEquals(2, parsed.items.size)

@@ -220,7 +220,7 @@ class AppStateReporter(
             "bufferedCount" to all.size,
             "matchedCount" to matching.size,
             "returnedCount" to returned.size,
-            "events" to returned.map { RawJson(encodeHerdrJson(it)) },
+            "events" to returned.map { RawJson(encodeAgentsTermJson(it)) },
         )
     }
 
@@ -238,7 +238,7 @@ class AppStateReporter(
 /** Pre-encoded JSON that [toJsonText] embeds verbatim. */
 class RawJson(val json: String)
 
-private val jsonStringAdapter = HerdrMoshi.adapter(String::class.java)
+private val jsonStringAdapter = AgentsTermMoshi.adapter(String::class.java)
 
 /**
  * Encodes maps, lists, strings, numbers, booleans, null and [RawJson] to JSON text.

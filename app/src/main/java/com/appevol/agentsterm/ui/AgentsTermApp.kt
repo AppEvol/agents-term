@@ -161,7 +161,7 @@ private fun rememberActiveDraft(state: WorkspaceState): TextFieldState? {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HerdrApp(viewModel: MainViewModel) {
+fun AgentsTermApp(viewModel: MainViewModel) {
     val state by viewModel.chromeState.collectAsStateWithLifecycle()
     val activeDraft = rememberActiveDraft(state)
     val showConnect by viewModel.showConnectScreen.collectAsStateWithLifecycle()

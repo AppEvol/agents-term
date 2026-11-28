@@ -99,11 +99,11 @@ import com.appevol.agentsterm.data.SshSetupAutofill
 import com.appevol.agentsterm.data.TailscaleStatus
 import com.appevol.agentsterm.data.parseSshSetupInput
 import com.appevol.agentsterm.data.tailscaleStatusFlow
+import com.appevol.agentsterm.ui.theme.AgentsTermBlue
+import com.appevol.agentsterm.ui.theme.AgentsTermEmerald
 import com.appevol.agentsterm.ui.theme.AppTheme
 import com.appevol.agentsterm.ui.theme.DarkBackground
 import com.appevol.agentsterm.ui.theme.DarkOnSurface
-import com.appevol.agentsterm.ui.theme.HerdrBlue
-import com.appevol.agentsterm.ui.theme.HerdrEmerald
 import com.appevol.agentsterm.ui.theme.LunaHillBackdrop
 import com.appevol.agentsterm.ui.theme.MonoFontFamily
 import com.appevol.agentsterm.ui.theme.ThemedButton
@@ -370,7 +370,7 @@ fun ConnectScreen(
                             LunaHillBackdrop(modifier = Modifier.fillMaxSize())
                         } else {
                             Image(
-                                painter = painterResource(id = R.drawable.img_herdr_hero_1795442350136),
+                                painter = painterResource(id = R.drawable.img_agentsterm_hero_1795442350136),
                                 contentDescription = stringResource(R.string.connect_title),
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize(),
@@ -397,8 +397,8 @@ fun ConnectScreen(
                         ) {
                             Surface(
                                 shape = themedCorner(10.dp),
-                                color = HerdrBlue.copy(alpha = 0.22f),
-                                border = BorderStroke(1.dp, HerdrBlue.copy(alpha = 0.45f)),
+                                color = AgentsTermBlue.copy(alpha = 0.22f),
+                                border = BorderStroke(1.dp, AgentsTermBlue.copy(alpha = 0.45f)),
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -408,7 +408,7 @@ fun ConnectScreen(
                                     Icon(
                                         imageVector = Icons.Rounded.Hub,
                                         contentDescription = null,
-                                        tint = HerdrEmerald,
+                                        tint = AgentsTermEmerald,
                                         modifier = Modifier.size(15.dp),
                                     )
                                     Text(

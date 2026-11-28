@@ -62,7 +62,7 @@ internal fun recordWebSocketFailure(
     }
 }
 
-open class HerdrApiClient(
+open class AgentsTermApiClient(
     private val debugRecorder: DebugRecorder? = null,
     attachmentReadTimeoutMs: Long = DEFAULT_ATTACHMENT_READ_TIMEOUT_MS,
 ) {
@@ -100,7 +100,7 @@ open class HerdrApiClient(
                 val bodyStr = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     val parsedErr = runCatching {
-                        decodeHerdrJson<ErrorResponse>(bodyStr).error
+                        decodeAgentsTermJson<ErrorResponse>(bodyStr).error
                     }.getOrNull()
                     val errMsg = parsedErr ?: "HTTP ${resp.code}: ${resp.message}"
                     debugRecorder?.record(
@@ -143,7 +143,7 @@ open class HerdrApiClient(
         logPayload: Boolean = true,
     ): T {
         val bodyStr = executeRawJson(request, logPayload)
-        return decodeHerdrJson(bodyStr)
+        return decodeAgentsTermJson(bodyStr)
     }
 
     suspend fun getInfo(config: ConnectionConfig): ServerInfo {
@@ -168,7 +168,7 @@ open class HerdrApiClient(
         config: ConnectionConfig,
         body: DaemonUpdateRequest,
     ): DaemonUpdateStatus {
-        val json = encodeHerdrJson(body)
+        val json = encodeAgentsTermJson(body)
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/daemon/update")
             .withAuth(config)
@@ -190,7 +190,7 @@ open class HerdrApiClient(
         config: ConnectionConfig,
         body: DaemonRollbackRequest = DaemonRollbackRequest(),
     ): DaemonUpdateStatus {
-        val json = encodeHerdrJson(body)
+        val json = encodeAgentsTermJson(body)
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/daemon/rollback")
             .withAuth(config)
@@ -241,7 +241,7 @@ open class HerdrApiClient(
     }
 
     open suspend fun createTab(config: ConnectionConfig, body: CreateTabRequest): TabRecord {
-        val json = encodeHerdrJson(body)
+        val json = encodeAgentsTermJson(body)
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs")
             .withAuth(config)
@@ -251,7 +251,7 @@ open class HerdrApiClient(
     }
 
     suspend fun updateTab(config: ConnectionConfig, tabId: String, body: UpdateTabRequest): TabRecord {
-        val json = encodeHerdrJson(body)
+        val json = encodeAgentsTermJson(body)
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs/$tabId")
             .withAuth(config)
@@ -268,7 +268,7 @@ open class HerdrApiClient(
             .build()
         val bodyStr = executeRawJson(req)
         return bodyStr.takeIf { it.isNotBlank() }?.let {
-            runCatching { decodeHerdrJson<DeleteTabResponse>(it) }.getOrNull()
+            runCatching { decodeAgentsTermJson<DeleteTabResponse>(it) }.getOrNull()
         }
     }
 
@@ -306,7 +306,7 @@ open class HerdrApiClient(
         overridePermissionMode: String? = null,
         attachmentIds: List<String> = emptyList(),
     ): SendMessageResponse {
-        val json = encodeHerdrJson(
+        val json = encodeAgentsTermJson(
             SendMessageRequest(
                 text = text,
                 overridePermissionMode = overridePermissionMode,
@@ -327,7 +327,7 @@ open class HerdrApiClient(
         data: String? = null,
         eof: Boolean = false,
     ) {
-        val json = encodeHerdrJson(SendStdinRequest(data = data, eof = eof))
+        val json = encodeAgentsTermJson(SendStdinRequest(data = data, eof = eof))
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/tabs/$tabId/stdin")
             .withAuth(config)
@@ -441,7 +441,7 @@ open class HerdrApiClient(
         overridePermissionMode: String? = null,
         attachmentIds: List<String> = emptyList(),
     ): TabRecord? {
-        val json = encodeHerdrJson(
+        val json = encodeAgentsTermJson(
             InterruptTabRequest(
                 processQueue = processQueue,
                 text = text?.trim()?.takeIf { it.isNotEmpty() },
@@ -497,7 +497,7 @@ open class HerdrApiClient(
         config: ConnectionConfig,
         body: DebugDumpUploadRequest,
     ): DebugDumpUploadResponse {
-        val json = encodeHerdrJson(body)
+        val json = encodeAgentsTermJson(body)
         val req = Request.Builder()
             .url("${config.httpBaseUrl()}/api/debug/dumps")
             .withAuth(config)
@@ -544,7 +544,7 @@ open class HerdrApiClient(
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    runCatching { decodeHerdrJson<WsServerEnvelope>(text) }
+                    runCatching { decodeAgentsTermJson<WsServerEnvelope>(text) }
                         .onSuccess { env ->
                             if (env.type == "message_delta") {
                                 deltaLogAggregator.recordDelta(env)

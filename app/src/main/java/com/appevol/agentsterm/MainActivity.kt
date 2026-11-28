@@ -18,11 +18,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.appevol.agentsterm.data.ForegroundActivityTracker
 import com.appevol.agentsterm.data.ScreenCaptureConsent
 import com.appevol.agentsterm.data.ScreenCaptureConsentHost
-import com.appevol.agentsterm.ui.HerdrApp
+import com.appevol.agentsterm.ui.AgentsTermApp
 import com.appevol.agentsterm.ui.LocalAttachmentImages
 import com.appevol.agentsterm.ui.MainViewModel
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import com.appevol.agentsterm.ui.theme.AppTheme
-import com.appevol.agentsterm.ui.theme.HerdrTheme
 
 class MainActivity :
     ComponentActivity(),
@@ -42,10 +42,10 @@ class MainActivity :
         handleIntent(intent)
         setContent {
             val theme by viewModel.appTheme.collectAsStateWithLifecycle()
-            HerdrTheme(theme = theme) {
+            AgentsTermTheme(theme = theme) {
                 SystemBarIcons()
                 CompositionLocalProvider(LocalAttachmentImages provides viewModel.attachmentImages) {
-                    HerdrApp(viewModel = viewModel)
+                    AgentsTermApp(viewModel = viewModel)
                 }
             }
         }
