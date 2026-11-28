@@ -30,7 +30,7 @@
 
 - Every test written in this repository must run in CI (`.github/workflows/ci.yml`) and hard-block PR merges into `main` (wire any new CI test job into the `ci-gate` / `All Required CI Checks` job).
 - If a test is not valuable or reliable enough to run in CI and block PR merges, do not add or keep it in the repository.
-- Avoid running the full Android instrumented E2E suite (`android-e2e`, `scripts/ci/run_android_e2e.sh`, or `:app:connectedDebugAndroidTest`) locally and rely on CI instead. Multiple agents typically share the same VM space, Android emulator, ADB server, and forwarded ports (`2222`/`7591`), so `scripts/android_test_retries.py android-e2e` serializes runs VM-wide across worktrees. Reserve local instrumented runs for narrowly targeted single-test debugging when needed.
+- Avoid running the full Android instrumented E2E suite (`android-e2e`, `scripts/ci/run_android_e2e.py`, or `:app:connectedDebugAndroidTest`) locally and rely on CI instead. Multiple agents typically share the same VM space, Android emulator, ADB server, and forwarded ports (`2222`/`7591`), so `scripts/android_test_retries.py android-e2e` serializes runs VM-wide across worktrees. Reserve local instrumented runs for narrowly targeted single-test debugging when needed.
 - A pull request that only changes documentation (`docs/` and top-level `*.md`, except `docs/live-debugging.md` and `docs/agents_debugging_tips.md`, which are embedded in the daemon binary) skips the Android build, unit test and emulator jobs. Keep documentation changes in their own pull request to get the fast path.
 
 ## Static Checks

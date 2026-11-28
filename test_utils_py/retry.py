@@ -1,6 +1,8 @@
 """Isolated CI retry policy shared by the runners and release reporting."""
 
-from typing import Any, Callable, Dict, Optional, Sequence
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 MAX_RETRIES = 5
 
@@ -16,7 +18,8 @@ def record_attempt(payload: Dict[str, Any], attempt: int) -> None:
 
 
 def retry_case(name: str, run_attempt: Callable[[int], Optional[str]]) -> bool:
-    statuses = []
+    """Rerun a single failed test in isolation until two consecutive passes or retries are exhausted."""
+    statuses: List[str] = []
     for attempt in range(1, MAX_RETRIES + 1):
         print(f"Isolated retry {attempt}/{MAX_RETRIES} for {name}", flush=True)
         status = run_attempt(attempt)

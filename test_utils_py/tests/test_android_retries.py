@@ -1,4 +1,4 @@
-"""Android release gates must reject partial suites and ambiguous isolated executions."""
+"""Android release gates must reject partial suites, serialize safely, and configure ADB tunnels."""
 
 from __future__ import annotations
 
@@ -14,13 +14,11 @@ import unittest
 from pathlib import Path
 from typing import Dict, Optional
 
-SCRIPTS_DIR = Path(__file__).resolve().parents[1]
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
+from test_utils_py import REPO_ROOT
+from test_utils_py.runners import android_retries
 
-import android_test_retries  # noqa: E402 - scripts/ is added to sys.path above
-
-RUNNER = SCRIPTS_DIR / "android_test_retries.py"
+RUNNER = REPO_ROOT / "scripts" / "android_test_retries.py"
+E2E_RUNNER = REPO_ROOT / "scripts" / "ci" / "run_android_e2e.py"
 
 
 def _wait_for_path(path: Path, timeout: float = 10.0) -> None:
@@ -118,7 +116,8 @@ if not retry:
     sys.exit(1)
 assert "-Pandroid.testInstrumentationRunnerArguments.class=Example#flaky" in sys.argv
 assert "-Pandroid.testInstrumentationRunnerArguments.realVmDaemonPort=7591" in sys.argv
-"""
+""",
+            encoding="utf-8",
         )
         fake_gradle.chmod(0o755)
         return subprocess.run(
@@ -331,7 +330,7 @@ assert "-Pandroid.testInstrumentationRunnerArguments.realVmDaemonPort=7591" in s
             prev_lock_dir = os.environ.get("AGENTSTERM_LOCK_DIR")
             os.environ["AGENTSTERM_LOCK_DIR"] = str(lock_dir)
             try:
-                lock_path = android_test_retries.lock_path_for("android-unit", cwd=root)
+                lock_path = android_retries.lock_path_for("android-unit", cwd=root)
             finally:
                 if prev_lock_dir is None:
                     os.environ.pop("AGENTSTERM_LOCK_DIR", None)
@@ -362,3 +361,69 @@ assert "-Pandroid.testInstrumentationRunnerArguments.realVmDaemonPort=7591" in s
             self.assertEqual(proc.returncode, 0, out + notice + err)
             events = (sync_dir / "events.log").read_text(encoding="utf-8").splitlines()
             self.assertEqual(events, ["enter:after-clean", "exit:after-clean"])
+
+    def test_run_android_e2e_entrypoint_sets_up_adb_and_invokes_gradle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "checkout"
+            lock_dir = base / "locks"
+            root.mkdir()
+            adb_log = base / "adb.log"
+            gradle_log = base / "gradle.log"
+
+            fake_adb = root / "adb"
+            fake_adb.write_text(
+                f"""#!/usr/bin/env python3
+import json, sys
+with open({str(adb_log)!r}, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1:3] == ["shell", "wm"]:
+    sys.exit(1)
+""",
+                encoding="utf-8",
+            )
+            fake_adb.chmod(0o755)
+
+            fake_gradle = root / "gradle"
+            fake_gradle.write_text(
+                f"""#!/usr/bin/env python3
+import json, sys
+from pathlib import Path
+with open({str(gradle_log)!r}, "w", encoding="utf-8") as fh:
+    json.dump(sys.argv[1:], fh)
+path = Path("app/build/outputs/androidTest-results/connected")
+path.mkdir(parents=True, exist_ok=True)
+(path / "TEST-E2e.xml").write_text(
+    '<testsuite tests="1"><testcase classname="E2e" name="ok"/></testsuite>',
+    encoding="utf-8",
+)
+print("Starting 1 tests on emulator")
+print("Finished 1 tests on emulator")
+""",
+                encoding="utf-8",
+            )
+            fake_gradle.chmod(0o755)
+
+            proc = subprocess.run(
+                [sys.executable, str(E2E_RUNNER)],
+                cwd=root,
+                env=self._runner_env(root, lock_dir),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            adb_calls = [json.loads(line) for line in adb_log.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(
+                adb_calls[:2],
+                [["reverse", "tcp:2222", "tcp:2222"], ["reverse", "tcp:7591", "tcp:7591"]],
+            )
+            self.assertIn(["shell", "wm", "dismiss-keyguard"], adb_calls)
+            gradle_args = json.loads(gradle_log.read_text(encoding="utf-8"))
+            self.assertIn(":app:connectedDebugAndroidTest", gradle_args)
+            self.assertIn("-Pandroid.testInstrumentationRunnerArguments.realVmSshPort=2222", gradle_args)
+            self.assertIn("-Pandroid.testInstrumentationRunnerArguments.realVmDaemonPort=7591", gradle_args)
+
+
+if __name__ == "__main__":
+    unittest.main()

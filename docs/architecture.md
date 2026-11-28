@@ -125,25 +125,31 @@ Previously, all open tabs, recently closed tabs (up to 50 retained for 24 hours)
 
 GitHub Actions orchestration lives in [`.github/workflows/ci.yml`](https://github.com/AppEvol/agents-term/blob/main/.github/workflows/ci.yml) and stays intentionally lean: YAML defines job wiring, caches, artifact handoffs, permissions, and environment variables, while non-trivial shell logic lives in standalone executable scripts (`chmod +x`, `#!/usr/bin/env bash`, `set -euo pipefail`).
 
-### Script Layout Convention (`scripts/` vs `scripts/ci/`)
+### Script & Test Utilities Layout (`test_utils_py/`, `scripts/`, `scripts/ci/`)
 
-- **`scripts/` — Shared & local-development scripts (kebab-case):** Reusable helpers that developers and CI both invoke directly from the repository root:
+- **`test_utils_py/` — Stdlib-only Python 3 package for test runners, retries, Allure 3 reporting, and analytics:**
+  - `test_utils_py/process.py` — Streaming subprocess execution and checkout/VM-wide `flock` serialization.
+  - `test_utils_py/retry.py` — Shared isolated-retry policy (two consecutive isolated passes within five retries to recover).
+  - `test_utils_py/runners/` — Python `unittest` (`unittest_runner.py`), Rust `cargo test` (`cargo_runner.py`), native isolated-retry CI runner (`native_retries.py`), Android Gradle retry runner (`android_retries.py`), and Android emulator E2E setup/execution (`android_e2e.py`).
+  - `test_utils_py/reporters/` — Allure 3 JSON result model (`allure_model.py`), JUnit XML + Roborazzi golden diff converter (`junit_converter.py`), shard merger + retry folding (`merger.py`), Markdown step summaries (`markdown.py`), flakiness HTML page (`flakiness.py`), Allure 3 CLI installer/report builder (`allure_cli.py`), and the CI report pipeline (`ci_report.py`).
+  - `test_utils_py/analytics/` — Suite/retry metric aggregation (`metrics.py`), JSONL trend history filtering/capping & per-test flakiness stats (`history.py`), and self-hosted SVG metric badges + `metrics.json` (`badges.py`).
+  - `test_utils_py/tests/` — Unit tests for `test_utils_py` and its thin `scripts/` entrypoints, executed in CI via `script-tests` and required by `ci-gate`.
+- **`scripts/` — Shared & local-development runnable entrypoints:** Reusable helpers that developers and CI both invoke directly from the repository root:
   - `scripts/static-checks.sh` — Runs `ruff`, `vulture`, `ktlint`, `detekt`, `shellcheck`, and `actionlint` using pinned cached binaries.
   - `scripts/daemon-build-hash.py` — Computes the 40-character `AGENTSTERM_BUILD_HASH` matching `daemon-rs/build.rs`.
   - `scripts/ensure-debug-keystore.sh` — Ensures `debug.keystore` exists (from `DEBUG_KEYSTORE_BASE64`, `debug.keystore.base64`, or `keytool`).
   - `scripts/install-android-sdk.sh` — Accepts Android SDK licenses and installs the required platform and build-tools via `sdkmanager`.
-  - `scripts/allure_results.py` — Stdlib-only CLI that emits Allure 3 JSON test results (`<uuid>-result.json` + attachments) for Python `unittest`, Gradle JUnit XML (including Roborazzi golden diff PNGs), and Rust `cargo test -- --show-output`, plus merges shards and renders Markdown summaries.
-  - `scripts/allure-report.sh` — Installs pinned `allure@3.33.0` into `~/.cache/agentsterm-allure` (Node.js >= 22.18) and builds (or opens with `--open`) the unified Allure 3 Awesome HTML report using `allurerc.json`.
+  - `scripts/allure_results.py`, `scripts/native_test_retries.py`, `scripts/android_test_retries.py`, `scripts/allure-report.py` — Thin Python entrypoints delegating to `test_utils_py` for emitting Allure 3 results, running isolated retries, and building/opening local Allure 3 HTML reports (`allure@3.33.0`, Node.js >= 22.18, `allurerc.json`).
 - **`scripts/ci/` — CI-only workflow scripts (snake_case):** Scripts tied to GitHub Actions runners, `GITHUB_OUTPUT` / `GITHUB_ENV` / `GITHUB_STEP_SUMMARY`, or GitHub Release publishing:
   - `scripts/ci/daemon_change_check.sh` — Verifies whether prebuilt `latest` daemon binaries match the current source hash and classifies changed files (daemon tests, installer tests, Linux VM E2E harness, docs-only PRs).
   - `scripts/ci/setup_rust_toolchain.sh` & `scripts/ci/build_rust_daemon.sh` — Installs Rust musl targets, cross-compiles static `x86_64`/`aarch64` daemon binaries, writes `.sha256` checksums, and verifies the embedded build hash.
   - `scripts/ci/build_and_unit_test.sh` — Computes APK version metadata and pinned `AGENTSTERM_DAEMON_RELEASE_BASE_URL` for release/preview builds, then runs Android Lint, unit tests, and debug/test APK assembly.
   - `scripts/ci/stage_daemon_binary.sh` — Stages the downloaded `x86_64` daemon binary for the multi-distro Linux VM E2E matrix.
-  - `scripts/ci/enable_kvm.sh`, `scripts/ci/set_build_version_env.sh`, `scripts/ci/start_docker_vm.sh`, `scripts/ci/run_android_e2e.sh`, `scripts/ci/stop_docker_vm.sh` — Manages runner KVM permissions, Docker E2E VM lifecycle, and Android emulator instrumented tests.
-  - `scripts/ci/generate_allure_report.sh` — Merges downloaded `allure-results-*` artifacts with GitHub Actions `environment.properties` and `executor.json`, appends a per-suite Markdown summary table to `$GITHUB_STEP_SUMMARY`, and builds the single-file Allure 3 HTML report.
+  - `scripts/ci/enable_kvm.sh`, `scripts/ci/set_build_version_env.sh`, `scripts/ci/start_docker_vm.sh`, `scripts/ci/stop_docker_vm.sh`, and `scripts/ci/run_android_e2e.py` (thin entrypoint into `test_utils_py.runners.android_e2e`) — Manages runner KVM permissions, Docker E2E VM lifecycle, and Android emulator instrumented tests.
+  - `scripts/ci/generate_allure_report.py` — Thin entrypoint into `test_utils_py.reporters.ci_report` that merges downloaded `allure-results-*` artifacts with GitHub Actions `environment.properties` and `executor.json`, appends a per-suite Markdown summary table to `$GITHUB_STEP_SUMMARY`, and builds the single-file Allure 3 HTML report.
   - `scripts/ci/ci_gate.sh` — Evaluates all required and conditionally-skipped job outcomes for the `All Required CI Checks` branch-protection gate.
   - `scripts/ci/publish_branch_prerelease.sh` & `scripts/ci/publish_versioned_releases.sh` — Creates branch preview pre-releases (`v<version>-preview`) or versioned `main` releases (`v<version>`) and updates the rolling `latest` tag/release alias.
-- **`scripts/tests/` — Script unit tests:** Fast `unittest` coverage for the extracted scripts and Allure 3 result helpers, executed unconditionally in CI via the `script-tests` job and hard-required by `ci-gate`.
+- **`scripts/tests/` — Script unit tests:** Fast `unittest` coverage for the CI/local shell scripts, executed unconditionally alongside `test_utils_py/tests/` in CI via the `script-tests` job and hard-required by `ci-gate`.
 
 ### Job Topology & Gating
 
@@ -162,12 +168,12 @@ Allure 3 (`allure@3.33.0`, configured via [`allurerc.json`](https://github.com/A
   - **Daemon Installer Tests** (`installer-tests`, Python 3.11 & 3.13), **Linux VM E2E Matrix** (`docker-vm-e2e`, 7 Linux distros), and **CI & Utility Script Tests** (`script-tests`): `scripts/native_test_retries.py unittest` wraps `unittest` discovery with `-W error::ResourceWarning`. Matrix shards use unique artifact names (`allure-results-installer-py-<ver>`, `allure-results-docker-vm-<target>`), distinct `suite`/`parameters`, and per-shard `historyId`/`testCaseId` so Allure 3 displays every shard separately instead of collapsing them as retries.
 - After a completed suite fails, CI reruns each failed case individually on the same matrix variant. Two consecutive isolated passes within five retries recover the case. Missing results, incomplete suites, and build or infrastructure errors block the job. The merge gate and APK publishing use the job verdict.
 - Each test counts once per variant. The first failure and isolated attempts remain available in the report. First-run failures measure suite reliability, and recoveries show how often retries allowed the job to proceed.
-- **CI report aggregation (`allure-report` job):** Runs with `if: always() && !cancelled()` so failing test runs still produce a full diagnostic report. It downloads all `allure-results-*` artifacts, runs `scripts/ci/generate_allure_report.sh` to write a per-suite Markdown summary table to `$GITHUB_STEP_SUMMARY`, builds a self-contained single-file Allure 3 Awesome report (`allure-report/index.html`, using Node.js 22 and cached `~/.cache/agentsterm-allure`), generates self-hosted SVG metric badges (`allure-report/badges/*.svg`) and `allure-report/metrics.json`, and uploads the `allure-report` artifact (30-day retention).
-- **Hosted Dashboard & README Metrics (`publish-allure-pages` job):** On `push` and `workflow_dispatch` runs on `main`, `scripts/ci/generate_allure_report.sh` restores the previously published `history.jsonl` (capped at the last 30 runs) so Allure 3 renders multi-run trend charts via `historyPath`, and `publish-allure-pages` deploys `allure-report/` to GitHub Pages (`https://appevol.github.io/agents-term/`). The repository `README.md` embeds the deployed SVG badges (`badges/tests.svg`, `badges/pass-rate.svg`, `badges/suites.svg`, `badges/duration.svg`) linking straight to the live dashboard. (Requires one-time GitHub repo setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.)
+- **CI report aggregation (`allure-report` job):** Runs with `if: always() && !cancelled()` so failing test runs still produce a full diagnostic report. It downloads all `allure-results-*` artifacts, runs `scripts/ci/generate_allure_report.py` to write a per-suite Markdown summary table to `$GITHUB_STEP_SUMMARY`, builds a self-contained single-file Allure 3 Awesome report (`allure-report/index.html`, using Node.js 22 and cached `~/.cache/agentsterm-allure`), generates self-hosted SVG metric badges (`allure-report/badges/*.svg`) and `allure-report/metrics.json`, and uploads the `allure-report` artifact (30-day retention).
+- **Hosted Dashboard & README Metrics (`publish-allure-pages` job):** On `push` and `workflow_dispatch` runs on `main`, `scripts/ci/generate_allure_report.py` restores the previously published `history.jsonl` (capped at the last 30 runs) so Allure 3 renders multi-run trend charts via `historyPath`, and `publish-allure-pages` deploys `allure-report/` to GitHub Pages (`https://appevol.github.io/agents-term/`). The repository `README.md` embeds the deployed SVG badges (`badges/tests.svg`, `badges/pass-rate.svg`, `badges/suites.svg`, `badges/duration.svg`) linking straight to the live dashboard. (Requires one-time GitHub repo setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.)
 - **Local usage:** After running local tests (for example `gradle :app:testDebugUnitTest` or emitting results into `allure-results/`), generate and open the report with Node.js >= 22.18:
 
 ```sh
-scripts/allure-report.sh --open
+scripts/allure-report.py --open
 ```
 
 ### Verification
@@ -176,6 +182,7 @@ Run locally before pushing CI or script changes:
 
 ```sh
 python3 -W error::ResourceWarning -m unittest discover -s scripts/tests -v
+python3 -W error::ResourceWarning -m unittest discover -s test_utils_py/tests -t . -v
 scripts/static-checks.sh
 ```
 

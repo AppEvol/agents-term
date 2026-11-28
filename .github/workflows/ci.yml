@@ -85,6 +85,23 @@ jobs:
           path: allure-results/scripts/
           if-no-files-found: ignore
 
+      - name: Run test_utils_py unit tests
+        run: >-
+          python3 -W error::ResourceWarning scripts/native_test_retries.py unittest
+          --start-dir test_utils_py/tests
+          --top-level-dir .
+          --output allure-results/test-utils
+          --parent-suite "Test Utilities (Python)"
+          --tag test-utils
+
+      - name: Upload Allure results (test_utils_py)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-test-utils
+          path: allure-results/test-utils/
+          if-no-files-found: ignore
+
   daemon-change-check:
     name: Daemon Change Check (reuse verified binaries when unchanged)
     runs-on: ubuntu-latest
@@ -460,7 +477,7 @@ jobs:
           profile: pixel_9a
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: scripts/ci/run_android_e2e.sh
+          script: scripts/ci/run_android_e2e.py
 
       - name: Stop Docker E2E VM container
         if: always()
@@ -518,7 +535,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/agentsterm-allure
-          key: allure3-${{ runner.os }}-node22-${{ hashFiles('scripts/allure-report.sh') }}
+          key: allure3-${{ runner.os }}-node22-${{ hashFiles('test_utils_py/reporters/allure_cli.py') }}
 
       - name: Download all Allure result artifacts
         uses: actions/download-artifact@v4
@@ -531,7 +548,7 @@ jobs:
         id: report
         env:
           ALLURE_PAGES_URL: https://appevol.github.io/agents-term
-        run: scripts/ci/generate_allure_report.sh
+        run: scripts/ci/generate_allure_report.py
 
       - name: Upload Allure 3 HTML report
         if: steps.report.outputs.has_report == 'true'
