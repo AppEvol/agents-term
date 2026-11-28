@@ -2731,3 +2731,56 @@ fn pty_ws_query_restart_trailing_output_and_delete_kills_jobs() {
     drop(daemon);
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn patch_tab_rejects_non_string_title_and_permission_mode() {
+    let home = make_temp_dir("patch-tab-validation");
+    let work = home.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let daemon = TestDaemon::start(&home, None);
+
+    let (st, created) = daemon.api(
+        "POST",
+        "/api/tabs",
+        Some(json!({
+            "agent": "agy",
+            "title": "Original Title",
+            "cwd": work.to_string_lossy(),
+            "permissionMode": "full-access",
+        })),
+    );
+    assert_eq!(st, 200, "create tab failed: {created}");
+    let tab_id = created["tab"]["id"].as_str().unwrap().to_string();
+
+    // Non-string title must fail with 400 and leave tab untouched.
+    let (st, err_body) = daemon.api(
+        "PATCH",
+        &format!("/api/tabs/{tab_id}"),
+        Some(json!({ "title": 12345 })),
+    );
+    assert_eq!(st, 400, "expected 400 for non-string title: {err_body}");
+
+    // Non-string permissionMode must fail with 400 and leave tab untouched.
+    let (st, err_body) = daemon.api(
+        "PATCH",
+        &format!("/api/tabs/{tab_id}"),
+        Some(json!({ "permissionMode": { "bad": true } })),
+    );
+    assert_eq!(
+        st, 400,
+        "expected 400 for non-string permissionMode: {err_body}"
+    );
+
+    // Valid trimmed strings still succeed.
+    let (st, patched) = daemon.api(
+        "PATCH",
+        &format!("/api/tabs/{tab_id}"),
+        Some(json!({ "title": "  Renamed Title  ", "permissionMode": "  plan  " })),
+    );
+    assert_eq!(st, 200, "valid patch failed: {patched}");
+    assert_eq!(patched["tab"]["title"], "Renamed Title");
+    assert_eq!(patched["tab"]["permissionMode"], "plan");
+
+    drop(daemon);
+    let _ = fs::remove_dir_all(&home);
+}

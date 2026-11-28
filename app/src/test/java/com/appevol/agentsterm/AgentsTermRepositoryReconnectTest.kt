@@ -19,6 +19,7 @@ import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.data.WsServerEnvelope
 import com.appevol.agentsterm.data.recordWebSocketFailure
 import com.appevol.agentsterm.data.resolveInitialDirectoryListing
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -811,5 +812,42 @@ class AgentsTermRepositoryReconnectTest {
         assertEquals("ws_failure", events[1].event)
         assertEquals("error", events[2].category)
         assertEquals("ws_failure", events[2].event)
+    }
+
+    @Test
+    fun repositorySuspendCallsRethrowCancellationWithoutShowingErrorBanner() = runTest {
+        val cancellingApi = object : AgentsTermApiClient() {
+            override suspend fun createTab(
+                config: ConnectionConfig,
+                body: CreateTabRequest,
+            ): TabRecord = throw CancellationException("caller cancelled")
+
+            override suspend fun listDirectories(
+                config: ConnectionConfig,
+                path: String?,
+            ): FsListResponse = throw CancellationException("caller cancelled")
+        }
+        val repo = AgentsTermRepository(
+            api = cancellingApi,
+            settings = InMemorySettings(connection = testConfig),
+            ioDispatcher = StandardTestDispatcher(testScheduler),
+        )
+
+        var createCancelled = false
+        try {
+            repo.createTab(CreateTabRequest(agent = "agy"))
+        } catch (_: CancellationException) {
+            createCancelled = true
+        }
+        assertTrue("createTab must propagate CancellationException", createCancelled)
+        assertNull("Cancellation must not surface as an error banner", repo.state.value.bannerMessage)
+
+        var listCancelled = false
+        try {
+            repo.listDirectories("/home/test")
+        } catch (_: CancellationException) {
+            listCancelled = true
+        }
+        assertTrue("listDirectories must propagate CancellationException", listCancelled)
     }
 }

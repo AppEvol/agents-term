@@ -74,7 +74,8 @@ class ModelsAndStateTest {
         assertEquals(7501, cfg.port)
         assertEquals("abc_123", cfg.token)
         assertEquals("http://100.71.219.26:7501", cfg.httpBaseUrl())
-        assertEquals("ws://100.71.219.26:7501/ws?token=abc_123", cfg.wsUrl())
+        assertEquals("ws://100.71.219.26:7501/ws", cfg.wsUrl())
+        assertFalse(cfg.wsUrl().contains("abc_123"))
     }
 
     @Test

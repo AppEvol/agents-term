@@ -78,7 +78,8 @@ async fn run_agy_models(binary: &str) -> (String, bool) {
         .env("FORCE_COLOR", "0")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
 
     let Ok(child) = cmd.spawn() else {
         return (String::new(), true);
@@ -101,39 +102,29 @@ async fn run_agy_models(binary: &str) -> (String, bool) {
     }
 }
 
-pub(crate) async fn discover_agy_models(force: bool, home: Option<&Path>) -> Value {
-    let existing_cached = cached("agy");
-    if !force {
-        if let Some(ref cached) = existing_cached {
-            if now_ms() - cached.fetched_at < AGY_CACHE_TTL_MS && !cached.models.is_empty() {
-                return json!({
-                    "fetchedAt": cached.fetched_at,
-                    "defaultModel": cached.default_model,
-                    "models": cached.models,
-                });
-            }
+/// Clears the single-flight slot on normal completion, cancellation, or panic so
+/// subsequent callers can never deadlock waiting on a dropped leader.
+struct InFlightGuard;
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = agy_in_flight().lock() {
+            guard.take();
         }
     }
+}
 
-    let maybe_rx = {
-        let mut guard = agy_in_flight().lock().unwrap();
-        if let Some(ref tx) = *guard {
-            Some(tx.subscribe())
-        } else {
-            let (tx, _) = broadcast::channel(1);
-            *guard = Some(tx);
-            None
-        }
-    };
-    if let Some(mut rx) = maybe_rx {
-        if let Ok(val) = rx.recv().await {
-            return val;
-        }
-    }
-
-    let default_model = read_agy_default_model(home);
-    let result_cached = if let Some(binary) = resolve_binary("agy") {
-        let (combined, err) = run_agy_models(&binary).await;
+async fn execute_agy_discovery<F, Fut>(
+    existing_cached: Option<CachedModels>,
+    home: Option<PathBuf>,
+    run_models: F,
+) -> Value
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<(String, bool)>>,
+{
+    let default_model = read_agy_default_model(home.as_deref());
+    let result_cached = if let Some((combined, err)) = run_models().await {
         let parsed: Vec<Value> = parse_agy_models_output(&combined)
             .into_iter()
             .map(|mut m| {
@@ -177,17 +168,76 @@ pub(crate) async fn discover_agy_models(force: bool, home: Option<&Path>) -> Val
     };
 
     store("agy", result_cached.clone());
-    let val = json!({
+    json!({
         "fetchedAt": result_cached.fetched_at,
         "defaultModel": result_cached.default_model,
         "models": result_cached.models,
-    });
-    if let Ok(mut guard) = agy_in_flight().lock() {
-        if let Some(tx) = guard.take() {
-            let _ = tx.send(val.clone());
+    })
+}
+
+async fn discover_agy_models_with<F, Fut>(force: bool, home: Option<&Path>, run_models: F) -> Value
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Option<(String, bool)>> + Send + 'static,
+{
+    let existing_cached = cached("agy");
+    if !force {
+        if let Some(ref cached) = existing_cached {
+            if now_ms() - cached.fetched_at < AGY_CACHE_TTL_MS && !cached.models.is_empty() {
+                return json!({
+                    "fetchedAt": cached.fetched_at,
+                    "defaultModel": cached.default_model,
+                    "models": cached.models,
+                });
+            }
         }
     }
-    val
+
+    loop {
+        let (rx, is_leader) = {
+            let mut guard = agy_in_flight().lock().unwrap();
+            if let Some(ref tx) = *guard {
+                (tx.subscribe(), false)
+            } else {
+                let (tx, rx) = broadcast::channel(1);
+                *guard = Some(tx);
+                (rx, true)
+            }
+        };
+
+        if !is_leader {
+            let mut rx = rx;
+            if let Ok(val) = rx.recv().await {
+                return val;
+            }
+            // The previous leader dropped without publishing (e.g. cancelled or panicked);
+            // loop to either join a replacement leader or start a fresh discovery.
+            continue;
+        }
+
+        let _in_flight = InFlightGuard;
+        let val =
+            execute_agy_discovery(existing_cached.clone(), home.map(Path::to_path_buf), || {
+                run_models()
+            })
+            .await;
+        if let Ok(mut guard) = agy_in_flight().lock() {
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(val.clone());
+            }
+        }
+        return val;
+    }
+}
+
+pub(crate) async fn discover_agy_models(force: bool, home: Option<&Path>) -> Value {
+    discover_agy_models_with(force, home, || async {
+        match resolve_binary("agy") {
+            Some(binary) => Some(run_agy_models(&binary).await),
+            None => None,
+        }
+    })
+    .await
 }
 
 fn kick_agy_discovery() {
@@ -239,8 +289,12 @@ pub(crate) async fn models(force_refresh: bool) -> ModelList {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_agy_models_output;
+    use super::{agy_in_flight, discover_agy_models_with, parse_agy_models_output};
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Notify;
 
     #[test]
     fn parses_space_and_tab_separated_agy_models_output() {
@@ -262,5 +316,72 @@ mod tests {
                 json!({ "id": "claude-opus-5-5-high", "name": "Claude Opus 5.5 (High)" }),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn cancelled_leader_does_not_deadlock_waiting_or_subsequent_callers() {
+        // Ensure a clean in-flight slot before the test starts.
+        agy_in_flight().lock().unwrap().take();
+
+        let started = Arc::new(Notify::new());
+        let gate = Arc::new(Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let leader_started = Arc::clone(&started);
+        let leader_gate = Arc::clone(&gate);
+        let leader_calls = Arc::clone(&calls);
+        let leader = tokio::spawn(async move {
+            discover_agy_models_with(true, None, move || {
+                let started = Arc::clone(&leader_started);
+                let gate = Arc::clone(&leader_gate);
+                let calls = Arc::clone(&leader_calls);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    started.notify_one();
+                    gate.notified().await;
+                    Some(("model-a\tModel A".to_string(), false))
+                }
+            })
+            .await
+        });
+
+        // Wait until the leader has entered the single-flight runner.
+        started.notified().await;
+
+        // Spawn a waiter that subscribes to the leader's broadcast channel.
+        let waiter_calls = Arc::clone(&calls);
+        let waiter = tokio::spawn(async move {
+            discover_agy_models_with(true, None, move || {
+                let calls = Arc::clone(&waiter_calls);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Some(("model-b\tModel B".to_string(), false))
+                }
+            })
+            .await
+        });
+
+        // Give the waiter a moment to subscribe to the in-flight broadcast channel, then abort the leader.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        leader.abort();
+        let _ = leader.await;
+
+        // Waiter must wake up and succeed instead of hanging forever.
+        let waiter_result = tokio::time::timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("waiter deadlocked after leader cancellation")
+            .expect("waiter task panicked");
+        let models = waiter_result
+            .get("models")
+            .and_then(|v| v.as_array())
+            .expect("expected models array");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "model-b");
+        assert!(
+            agy_in_flight().lock().unwrap().is_none(),
+            "in-flight slot should be cleared after completion"
+        );
+        assert!(calls.load(Ordering::SeqCst) >= 2);
     }
 }

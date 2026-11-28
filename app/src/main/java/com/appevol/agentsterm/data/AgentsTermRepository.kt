@@ -1,5 +1,6 @@
 package com.appevol.agentsterm.data
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +16,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.WebSocket
 import java.util.concurrent.atomic.AtomicBoolean
+
+private inline fun <T> runCatchingCancellable(block: () -> T): Result<T> = runCatching(block)
+    .onFailure { err -> if (err is CancellationException) throw err }
 
 const val MAX_OPEN_TABS = 10
 const val MAX_CLOSED_TABS = 50
@@ -597,7 +601,7 @@ class AgentsTermRepository(
         }
     }
 
-    suspend fun testAndConnect(config: ConnectionConfig): Result<ServerInfo> = runCatching {
+    suspend fun testAndConnect(config: ConnectionConfig): Result<ServerInfo> = runCatchingCancellable {
         val info = api.getInfo(config)
         settings.saveConnection(config)
         val savedLastCwd = settings.loadLastCwd(config.host)
@@ -859,7 +863,7 @@ class AgentsTermRepository(
     private fun markTabRead(cfg: ConnectionConfig, tabId: String) {
         if (!cfg.isValid) return
         scope.launch {
-            runCatching { api.markRead(cfg, tabId) }
+            runCatchingCancellable { api.markRead(cfg, tabId) }
         }
     }
 
@@ -868,7 +872,7 @@ class AgentsTermRepository(
         if (!cfg.isValid) return
         scope.launch {
             _state.update { it.copy(loadingTabIds = it.loadingTabIds + tabId) }
-            runCatching { api.getTabMessages(cfg, tabId) }
+            runCatchingCancellable { api.getTabMessages(cfg, tabId) }
                 .onSuccess { res ->
                     debugRecorder?.record(
                         "state",
@@ -900,7 +904,7 @@ class AgentsTermRepository(
             "Creating tab agent=${request.agent} cwd=${request.cwd} mode=${request.permissionMode} " +
                 "hasSystemPrompt=${!request.systemPrompt.isNullOrBlank()}",
         )
-        runCatching {
+        runCatchingCancellable {
             check(workspace.canCreateTab) { "The limit is $MAX_OPEN_TABS open tabs. Close a tab to make room." }
             val tab = api.createTab(cfg, request)
             settings.saveLastTabId(tab.id)
@@ -915,7 +919,7 @@ class AgentsTermRepository(
 
     suspend fun updateTab(tabId: String, request: UpdateTabRequest): Result<TabRecord> {
         val cfg = _state.value.config
-        return runCatching {
+        return runCatchingCancellable {
             val tab = api.updateTab(cfg, tabId, request)
             val updatedLastCwd = if (!request.cwd.isNullOrBlank()) {
                 tab.cwd.trim().takeIf { it.isNotEmpty() }?.also { settings.saveLastCwd(cfg.host, it) }
@@ -957,7 +961,7 @@ class AgentsTermRepository(
     suspend fun refreshAgentModels(agent: String, forceRefresh: Boolean = false): Result<AgentModelsResponse> {
         val cfg = _state.value.config
         if (!cfg.isValid) return Result.failure(IllegalStateException("Not connected to a VM daemon"))
-        return runCatching {
+        return runCatchingCancellable {
             api.getAgentModels(cfg, agent, refresh = forceRefresh).also { resp ->
                 _state.update { applyRefreshedAgentModels(it, agent, resp) }
             }
@@ -967,13 +971,13 @@ class AgentsTermRepository(
     suspend fun fetchAgentUsage(agent: String): Result<AgentUsageResponse> {
         val cfg = _state.value.config
         if (!cfg.isValid) return Result.failure(IllegalStateException("Not connected to a VM daemon"))
-        return runCatching { api.getAgentUsage(cfg, agent) }
+        return runCatchingCancellable { api.getAgentUsage(cfg, agent) }
     }
 
     suspend fun deleteTab(tabId: String): Result<TabRecord?> {
         val cfg = _state.value.config
         debugRecorder?.record("ui", "delete_tab", "Deleting tab $tabId")
-        return runCatching {
+        return runCatchingCancellable {
             val resp = api.deleteTab(cfg, tabId)
             var nextSelected: String? = null
             synchronized(socketLock) {
@@ -992,7 +996,7 @@ class AgentsTermRepository(
     suspend fun refreshClosedTabs(): Result<List<TabRecord>> {
         val cfg = _state.value.config
         if (!cfg.isValid) return Result.failure(IllegalStateException("Not connected to a VM daemon"))
-        return runCatching {
+        return runCatchingCancellable {
             val resp = api.listClosedTabs(cfg)
             _state.update { it.copy(closedTabs = resp.closedTabs) }
             resp.closedTabs
@@ -1003,7 +1007,7 @@ class AgentsTermRepository(
         val workspace = _state.value
         val cfg = workspace.config
         debugRecorder?.record("ui", "revive_closed_tab", "Reviving closed tab $tabId")
-        runCatching {
+        runCatchingCancellable {
             check(workspace.canCreateTab) { "The limit is $MAX_OPEN_TABS open tabs. Close a tab to make room." }
             val resp = api.reviveClosedTab(cfg, tabId)
             settings.saveLastTabId(resp.tab.id)
@@ -1011,7 +1015,7 @@ class AgentsTermRepository(
             resp.tab
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to revive tab")
-            runCatching { refreshClosedTabs() }
+            runCatchingCancellable { refreshClosedTabs() }
         }
     }
 
@@ -1028,7 +1032,7 @@ class AgentsTermRepository(
             "Sending message to tab=$tabId len=${text.length} overrideMode=${overridePermissionMode ?: "none"}",
             payload = text.take(500),
         )
-        return runCatching {
+        return runCatchingCancellable {
             val resp = api.sendMessage(cfg, tabId, text, overridePermissionMode, attachmentIds)
             resp.tab?.let { updated -> _state.update { applyReplacedTab(it, updated) } }
             Unit
@@ -1048,7 +1052,7 @@ class AgentsTermRepository(
             "send_stdin",
             "Sending stdin to tab=$tabId len=${data?.length ?: 0} eof=$eof",
         )
-        return runCatching {
+        return runCatchingCancellable {
             api.sendStdin(cfg, tabId, data = data, eof = eof)
         }.onFailure { err ->
             showBanner(err.message ?: "Failed to send input")
@@ -1068,7 +1072,7 @@ class AgentsTermRepository(
             "interrupt_tab",
             "Interrupting tab=$tabId processQueue=$processQueue hasText=${!text.isNullOrBlank()}",
         )
-        runCatching {
+        runCatchingCancellable {
             api.interruptTab(
                 config = cfg,
                 tabId = tabId,
@@ -1083,7 +1087,7 @@ class AgentsTermRepository(
     suspend fun removeQueuedMessage(tabId: String, queuedId: String) {
         val cfg = _state.value.config
         debugRecorder?.record("ui", "remove_queued_message", "Removing queued=$queuedId from tab=$tabId")
-        runCatching {
+        runCatchingCancellable {
             api.removeQueuedMessage(cfg, tabId, queuedId)?.let { updated ->
                 _state.update { applyReplacedTab(it, updated) }
             }
@@ -1114,7 +1118,7 @@ class AgentsTermRepository(
 
     suspend fun listDirectories(path: String?): Result<FsListResponse> {
         val cfg = _state.value.config
-        return runCatching { api.listDirectories(cfg, path) }
+        return runCatchingCancellable { api.listDirectories(cfg, path) }
             .onSuccess { res ->
                 debugRecorder?.record(
                     "state",
@@ -1136,7 +1140,7 @@ class AgentsTermRepository(
         if (!cfg.isValid) {
             return Result.failure(IllegalStateException("Not connected to a VM daemon"))
         }
-        return runCatching { api.uploadDebugDump(cfg, request) }
+        return runCatchingCancellable { api.uploadDebugDump(cfg, request) }
     }
 
     fun updateDaemonUpdateStatus(status: DaemonUpdateStatus?) {
