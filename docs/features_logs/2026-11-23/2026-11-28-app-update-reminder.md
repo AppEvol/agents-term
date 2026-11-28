@@ -1,0 +1,4 @@
+- **In-app update reminder** ([PR #201](https://github.com/AppEvol/agents-term/pull/201)):
+  - Compares the installed app version against the latest official GitHub release via a lightweight `HEAD /releases/latest` redirect lookup, throttled to at most once every 2 hours (with a 15-minute retry backoff on failures) and skipped automatically on unversioned local dev builds.
+  - Displays a small indicator dot on the top-bar three-dot icon and an **Update available** item in the overflow menu that opens a dialog with **Download APK**, **View release**, and **Later** (mutes the dot until a newer release ships).
+  - Adds an **App Updates** card in Settings showing the installed version and allowing manual update checks anytime.
