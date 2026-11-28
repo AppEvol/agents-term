@@ -1,0 +1,1 @@
+- Added clone-wide Git hooks that block commits on local `main` and try to fast-forward it before pushes to `origin`. Concurrent pushes and unsafe checkouts skip the sync. [PR #177](https://github.com/AppEvol/agents-term/pull/177)

@@ -31,5 +31,5 @@ changes=$(git status --porcelain --untracked-files=all --ignore-submodules=none)
 git fetch --no-tags --no-write-fetch-head --no-recurse-submodules origin refs/heads/main:refs/remotes/origin/main ||
     skip "could not fetch origin/main"
 [[ $(git symbolic-ref -q HEAD) == refs/heads/main ]] || skip "main worktree changed"
-git merge --ff-only --no-autostash --no-overwrite-ignore refs/remotes/origin/main >&2 ||
+git merge --no-stat --ff-only --no-autostash --no-overwrite-ignore refs/remotes/origin/main >&2 ||
     skip "could not fast-forward main"
