@@ -86,6 +86,7 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.selected
@@ -140,11 +141,9 @@ import com.appevol.agentsterm.ui.theme.statusLabel
 import com.appevol.agentsterm.ui.theme.themedCorner
 import com.appevol.agentsterm.ui.theme.titleBarColors
 import com.appevol.agentsterm.ui.theme.titleBarTitleStyle
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 // Keep the editors composed while their tabs are open, including while Settings covers the workspace.
@@ -171,8 +170,7 @@ fun AgentsTermApp(viewModel: MainViewModel) {
     val pendingPairing by viewModel.pendingPairingConfig.collectAsStateWithLifecycle()
     val pendingSshAutofill by viewModel.pendingSshAutofill.collectAsStateWithLifecycle()
     val sshProfile by viewModel.sshProfile.collectAsStateWithLifecycle()
-    // SSH progress arrives on I/O threads, even when the Compose test dispatcher is unconfined.
-    val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle(context = Dispatchers.Main.immediate)
+    val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle()
     val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
     val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsStateWithLifecycle()
@@ -265,6 +263,7 @@ fun AgentsTermApp(viewModel: MainViewModel) {
     }
 
     val context = LocalContext.current
+    val resources = LocalResources.current
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -307,8 +306,8 @@ fun AgentsTermApp(viewModel: MainViewModel) {
                 scope.launch {
                     snackbarHostState.currentSnackbarData?.dismiss()
                     val result = snackbarHostState.showSnackbar(
-                        message = context.getString(R.string.snackbar_tab_closed, archived.title),
-                        actionLabel = context.getString(R.string.action_undo),
+                        message = resources.getString(R.string.snackbar_tab_closed, archived.title),
+                        actionLabel = resources.getString(R.string.action_undo),
                         withDismissAction = true,
                         duration = SnackbarDuration.Short,
                     )
@@ -327,8 +326,8 @@ fun AgentsTermApp(viewModel: MainViewModel) {
                 if (archived.size == 1) {
                     val only = archived.first()
                     val result = snackbarHostState.showSnackbar(
-                        message = context.getString(R.string.snackbar_tab_closed, only.title),
-                        actionLabel = context.getString(R.string.action_undo),
+                        message = resources.getString(R.string.snackbar_tab_closed, only.title),
+                        actionLabel = resources.getString(R.string.action_undo),
                         withDismissAction = true,
                         duration = SnackbarDuration.Short,
                     )
@@ -337,12 +336,12 @@ fun AgentsTermApp(viewModel: MainViewModel) {
                     }
                 } else {
                     val result = snackbarHostState.showSnackbar(
-                        message = context.resources.getQuantityString(
+                        message = resources.getQuantityString(
                             R.plurals.snackbar_tabs_closed_count,
                             archived.size,
                             archived.size,
                         ),
-                        actionLabel = context.getString(R.string.action_recently_closed_tabs),
+                        actionLabel = resources.getString(R.string.action_recently_closed_tabs),
                         withDismissAction = true,
                         duration = SnackbarDuration.Short,
                     )
@@ -379,7 +378,7 @@ fun AgentsTermApp(viewModel: MainViewModel) {
     }
 
     fun triggerQuickDebugDialog() {
-        scope.launch(Dispatchers.Main.immediate) {
+        scope.launch {
             pendingScreenshotBase64 = if (debugSettings.includeScreenshot) {
                 captureWindowScreenshotBase64(context.findActivityOrNull())
             } else {
@@ -557,7 +556,7 @@ fun AgentsTermApp(viewModel: MainViewModel) {
                     scope.launch {
                         snackbarHostState.currentSnackbarData?.dismiss()
                         snackbarHostState.showSnackbar(
-                            context.getString(R.string.snackbar_tab_revived, revived.title),
+                            resources.getString(R.string.snackbar_tab_revived, revived.title),
                         )
                     }
                 }
@@ -1904,31 +1903,29 @@ internal fun QuickTabStrip(
     }
 
     LaunchedEffect(activeTabId, tabIds, scrollState.viewportSize) {
-        withContext(Dispatchers.Main.immediate) {
-            val targetId = activeTabId ?: return@withContext
-            val (bounds, viewport, maxScroll) = snapshotFlow {
-                Triple(tabBounds[targetId], scrollState.viewportSize, scrollState.maxValue)
-            }.first { (bounds, viewport, maxScroll) ->
-                bounds != null && viewport > 0 && bounds.second <= viewport + maxScroll
-            }
-            val (tabLeft, tabRight) = bounds ?: return@withContext
-            val targetScroll = computeQuickTabScrollTarget(
-                tabLeft = tabLeft,
-                tabRight = tabRight,
-                viewportWidth = viewport,
-                currentScroll = scrollState.value,
-                maxScroll = maxScroll,
-                edgeMarginPx = horizontalPaddingPx,
-            )
-            if (targetScroll != null) {
-                if (!hasAutoScrolled) {
-                    scrollState.scrollTo(targetScroll)
-                } else {
-                    scrollState.animateScrollTo(targetScroll)
-                }
-            }
-            hasAutoScrolled = true
+        val targetId = activeTabId ?: return@LaunchedEffect
+        val (bounds, viewport, maxScroll) = snapshotFlow {
+            Triple(tabBounds[targetId], scrollState.viewportSize, scrollState.maxValue)
+        }.first { (bounds, viewport, maxScroll) ->
+            bounds != null && viewport > 0 && bounds.second <= viewport + maxScroll
         }
+        val (tabLeft, tabRight) = bounds ?: return@LaunchedEffect
+        val targetScroll = computeQuickTabScrollTarget(
+            tabLeft = tabLeft,
+            tabRight = tabRight,
+            viewportWidth = viewport,
+            currentScroll = scrollState.value,
+            maxScroll = maxScroll,
+            edgeMarginPx = horizontalPaddingPx,
+        )
+        if (targetScroll != null) {
+            if (!hasAutoScrolled) {
+                scrollState.scrollTo(targetScroll)
+            } else {
+                scrollState.animateScrollTo(targetScroll)
+            }
+        }
+        hasAutoScrolled = true
     }
 
     val stripBackground = if (luna) {

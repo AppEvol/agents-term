@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -126,14 +127,15 @@ private fun rememberMarkdownLinkHandler(): MarkdownLinkHandler {
     val uriHandler = LocalUriHandler.current
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
-    return remember(uriHandler, clipboard, context) {
+    val resources = LocalResources.current
+    return remember(uriHandler, clipboard, context, resources) {
         MarkdownLinkHandler { target, isWeb ->
             if (isWeb) {
                 // No app can handle some URIs; that must not crash the chat.
                 runCatching { uriHandler.openUri(target) }
             } else {
                 clipboard.setText(AnnotatedString(target))
-                Toast.makeText(context, context.getString(R.string.markdown_path_copied, target), Toast.LENGTH_SHORT)
+                Toast.makeText(context, resources.getString(R.string.markdown_path_copied, target), Toast.LENGTH_SHORT)
                     .show()
             }
         }

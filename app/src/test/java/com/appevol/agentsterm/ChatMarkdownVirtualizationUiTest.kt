@@ -1,17 +1,19 @@
 package com.appevol.agentsterm
 
 import android.widget.Magnifier
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuItem
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuSession
+import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMenuToolbarProvider
+import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuDataProvider
+import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuProvider
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.platform.LocalTextToolbar
-import androidx.compose.ui.platform.TextToolbar
-import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -24,6 +26,7 @@ import com.appevol.agentsterm.ui.ChatWorkspace
 import com.appevol.agentsterm.ui.markdown.LocalMarkdownParseDispatcher
 import com.appevol.agentsterm.ui.markdown.LocalMarkdownSyncParseThreshold
 import com.appevol.agentsterm.ui.theme.AgentsTermTheme
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
@@ -67,25 +70,36 @@ class ChatMarkdownVirtualizationUiTest {
         }
     }
 
-    private class FakeToolbar : TextToolbar {
-        var onCopy: (() -> Unit)? = null
-        var onSelectAll: (() -> Unit)? = null
-        override var status = TextToolbarStatus.Hidden
+    private class FakeTextContextMenuProvider : TextContextMenuProvider {
+        private var dataProvider: TextContextMenuDataProvider? = null
+        private var session: TextContextMenuSession? = null
 
-        override fun showMenu(
-            rect: Rect,
-            onCopyRequested: (() -> Unit)?,
-            onPasteRequested: (() -> Unit)?,
-            onCutRequested: (() -> Unit)?,
-            onSelectAllRequested: (() -> Unit)?,
-        ) {
-            onCopy = onCopyRequested
-            onSelectAll = onSelectAllRequested
-            status = TextToolbarStatus.Shown
+        fun action(key: Any): (() -> Unit)? {
+            val activeSession = session ?: return null
+            val item = dataProvider?.data()?.components
+                ?.filterIsInstance<TextContextMenuItem>()
+                ?.firstOrNull { it.key == key }
+                ?: return null
+            return { item.onClick.invoke(activeSession) }
         }
 
-        override fun hide() {
-            status = TextToolbarStatus.Hidden
+        override suspend fun showTextContextMenu(dataProvider: TextContextMenuDataProvider) {
+            val closed = CompletableDeferred<Unit>()
+            val activeSession = object : TextContextMenuSession {
+                override fun close() {
+                    closed.complete(Unit)
+                }
+            }
+            this.dataProvider = dataProvider
+            this.session = activeSession
+            try {
+                closed.await()
+            } finally {
+                if (this.session === activeSession) {
+                    this.session = null
+                    this.dataProvider = null
+                }
+            }
         }
     }
 
@@ -195,7 +209,7 @@ class ChatMarkdownVirtualizationUiTest {
     @Test
     fun virtualizedMarkdownBlockPreservesSelectionAndCleanCopy() {
         lateinit var clipboard: FakeClipboard
-        val toolbar = FakeToolbar()
+        val toolbar = FakeTextContextMenuProvider()
         val messages = listOf(
             ChatMessage(
                 id = "a1",
@@ -209,7 +223,10 @@ class ChatMarkdownVirtualizationUiTest {
         composeRule.setContent {
             val real = LocalClipboard.current
             clipboard = remember { FakeClipboard(real) }
-            CompositionLocalProvider(LocalClipboard provides clipboard, LocalTextToolbar provides toolbar) {
+            CompositionLocalProvider(
+                LocalClipboard provides clipboard,
+                LocalTextContextMenuToolbarProvider provides toolbar,
+            ) {
                 AgentsTermTheme {
                     ChatWorkspace(
                         tab = testTab,
@@ -227,10 +244,11 @@ class ChatMarkdownVirtualizationUiTest {
 
         composeRule.onNodeWithText("Run", substring = true).performTouchInput { longClick() }
         composeRule.waitForIdle()
-        assertNotNull("long press selects text inside virtualized block", toolbar.onSelectAll)
-        composeRule.runOnUiThread { toolbar.onSelectAll?.invoke() }
+        val selectAll = composeRule.runOnUiThread { toolbar.action(TextContextMenuKeys.SelectAllKey) }
+        assertNotNull("long press selects text inside virtualized block", selectAll)
+        composeRule.runOnUiThread { checkNotNull(selectAll).invoke() }
         composeRule.waitForIdle()
-        composeRule.runOnUiThread { checkNotNull(toolbar.onCopy).invoke() }
+        composeRule.runOnUiThread { checkNotNull(toolbar.action(TextContextMenuKeys.CopyKey)).invoke() }
         composeRule.waitForIdle()
         assertEquals("Run gradle :app:testDebugUnitTest now", clipboard.copied)
     }

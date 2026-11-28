@@ -119,9 +119,7 @@ import com.appevol.agentsterm.ui.theme.lunaTabBaseline
 import com.appevol.agentsterm.ui.theme.themedCorner
 import com.appevol.agentsterm.ui.theme.titleBarColors
 import com.appevol.agentsterm.ui.theme.titleBarTitleStyle
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /** Live Tailscale status of this phone; null until the first reading arrives. */
@@ -129,9 +127,7 @@ import java.util.Locale
 private fun rememberTailscaleStatus(): TailscaleStatus? {
     val context = LocalContext.current.applicationContext
     return produceState<TailscaleStatus?>(initialValue = null, context) {
-        withContext(Dispatchers.Main.immediate) {
-            tailscaleStatusFlow(context).collect { value = it }
-        }
+        tailscaleStatusFlow(context).collect { value = it }
     }.value
 }
 
@@ -1110,9 +1106,7 @@ private fun BootstrapConsoleCard(
     var elapsedSeconds by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(state.logs.size) {
-        withContext(Dispatchers.Main.immediate) {
-            logScrollState.animateScrollTo(logScrollState.maxValue)
-        }
+        logScrollState.animateScrollTo(logScrollState.maxValue)
     }
 
     LaunchedEffect(state.isRunning) {

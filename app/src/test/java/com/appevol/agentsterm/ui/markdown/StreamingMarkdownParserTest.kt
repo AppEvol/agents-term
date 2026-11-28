@@ -7,7 +7,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -237,7 +236,6 @@ class StreamingMarkdownParserTest {
             scope = this,
             parseDispatcher = bgDispatcher,
             syncThresholdChars = 128,
-            commitDispatcher = bgDispatcher,
             onAsyncCommit = { commits.add(it) },
         )
 
@@ -270,42 +268,41 @@ class StreamingMarkdownParserTest {
     }
 
     @Test
-    fun asyncSessionCommitsOnCommitDispatcherEvenUnderUnconfinedScope() {
-        val commitThreadRef = AtomicReference<Thread?>(null)
-        val commitExecutor = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "test-markdown-commit-main").also { commitThreadRef.set(it) }
+    fun asyncSessionCommitsOnOwnerScopeDispatcher() {
+        val ownerThreadRef = AtomicReference<Thread?>(null)
+        val ownerExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "test-markdown-owner-main").also { ownerThreadRef.set(it) }
         }
-        val commitDispatcher = commitExecutor.asCoroutineDispatcher()
-        val unconfinedScope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher())
+        val ownerDispatcher = ownerExecutor.asCoroutineDispatcher()
+        val ownerScope = CoroutineScope(SupervisorJob() + ownerDispatcher)
         val observedCommitThread = AtomicReference<Thread?>(null)
         val committed = CountDownLatch(1)
         val largeDoc = (1..20).joinToString("\n\n") { "Paragraph $it with **bold** and `code`." }
 
         try {
             val session = AsyncMarkdownSession(
-                scope = unconfinedScope,
+                scope = ownerScope,
                 parseDispatcher = Dispatchers.Default,
                 syncThresholdChars = 0,
-                commitDispatcher = commitDispatcher,
                 onAsyncCommit = {
                     observedCommitThread.set(Thread.currentThread())
                     committed.countDown()
                 },
             )
 
-            // Queue and launch on the commit thread (matching Compose UI thread ownership).
-            commitExecutor.submit {
+            // Queue and launch on the owner thread (matching Compose UI thread ownership).
+            ownerExecutor.submit {
                 session.requestBlocks(largeDoc, isStreaming = false)
                 session.launchIfNeeded()
             }.get(5, TimeUnit.SECONDS)
 
             assertTrue("Timed out waiting for async markdown commit", committed.await(5, TimeUnit.SECONDS))
-            assertSame(commitThreadRef.get(), observedCommitThread.get())
+            assertSame(ownerThreadRef.get(), observedCommitThread.get())
             assertEquals(MarkdownParser.parse(largeDoc), session.blocks)
         } finally {
-            unconfinedScope.cancel()
-            commitDispatcher.close()
-            commitExecutor.shutdownNow()
+            ownerScope.cancel()
+            ownerDispatcher.close()
+            ownerExecutor.shutdownNow()
         }
     }
 }
