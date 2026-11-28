@@ -1,7 +1,7 @@
 package com.appevol.agentsterm.ui
 
 import com.appevol.agentsterm.data.AgentUsageUiState
-import com.appevol.agentsterm.data.HerdrRepository
+import com.appevol.agentsterm.data.AgentsTermRepository
 import com.appevol.agentsterm.data.formatDaemonRequestError
 import com.appevol.agentsterm.data.isUnknownEndpointError
 import kotlinx.coroutines.CoroutineScope
@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class AgentUsageController(
-    private val repo: HerdrRepository,
+    private val repo: AgentsTermRepository,
     private val scope: CoroutineScope,
 ) {
     private val _usageByAgent = MutableStateFlow<Map<String, AgentUsageUiState>>(emptyMap())

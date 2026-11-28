@@ -18,7 +18,7 @@ import com.appevol.agentsterm.data.ChatMessage
 import com.appevol.agentsterm.data.QueuedMessage
 import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.ui.ChatWorkspace
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -49,7 +49,7 @@ class ChatQueueUiTest {
         val forced = mutableListOf<String?>()
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = workingTab,
                     messages = emptyList(),
@@ -86,7 +86,7 @@ class ChatQueueUiTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = workingTab.copy(queuedMessages = queued),
                     messages = emptyList(),
@@ -117,7 +117,7 @@ class ChatQueueUiTest {
         val forced = mutableListOf<String?>()
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = workingTab.copy(
                         queuedMessages = listOf(QueuedMessage(id = "q_1", text = "Queued first")),
@@ -145,7 +145,7 @@ class ChatQueueUiTest {
         val forced = mutableListOf<String?>()
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = workingTab,
                     messages = emptyList(),
@@ -186,7 +186,7 @@ class ChatQueueUiTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = workingTab,
                     messages = listOf(streamingMsg),

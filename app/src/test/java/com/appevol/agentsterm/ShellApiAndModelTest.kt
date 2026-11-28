@@ -1,15 +1,15 @@
 package com.appevol.agentsterm
 
+import com.appevol.agentsterm.data.AgentsTermApiClient
+import com.appevol.agentsterm.data.AgentsTermRepository
 import com.appevol.agentsterm.data.ChatMessage
 import com.appevol.agentsterm.data.ConnectionConfig
 import com.appevol.agentsterm.data.ConnectionSettings
 import com.appevol.agentsterm.data.CreateTabRequest
-import com.appevol.agentsterm.data.HerdrApiClient
-import com.appevol.agentsterm.data.HerdrRepository
 import com.appevol.agentsterm.data.HttpStatusException
 import com.appevol.agentsterm.data.SendStdinRequest
-import com.appevol.agentsterm.data.decodeHerdrJson
-import com.appevol.agentsterm.data.encodeHerdrJson
+import com.appevol.agentsterm.data.decodeAgentsTermJson
+import com.appevol.agentsterm.data.encodeAgentsTermJson
 import com.appevol.agentsterm.ui.NewTabController
 import com.appevol.agentsterm.ui.shouldShowAssistantErrorBanner
 import kotlinx.coroutines.CompletableDeferred
@@ -31,7 +31,7 @@ import org.junit.Test
 class ShellApiAndModelTest {
 
     private val server = MockWebServer()
-    private val api = HerdrApiClient()
+    private val api = AgentsTermApiClient()
     private lateinit var config: ConnectionConfig
 
     @Before
@@ -47,19 +47,19 @@ class ShellApiAndModelTest {
 
     @Test
     fun chatMessageDeserializesExitCodeZeroNonZeroAndAbsent() {
-        val okMsg = decodeHerdrJson<ChatMessage>(
+        val okMsg = decodeAgentsTermJson<ChatMessage>(
             """{"id":"m_ok","tabId":"t_sh","role":"assistant","text":"","status":"complete","exitCode":0}""",
         )
         assertEquals(0, okMsg.exitCode)
-        assertEquals(okMsg, decodeHerdrJson<ChatMessage>(encodeHerdrJson(okMsg)))
+        assertEquals(okMsg, decodeAgentsTermJson<ChatMessage>(encodeAgentsTermJson(okMsg)))
 
-        val errMsg = decodeHerdrJson<ChatMessage>(
+        val errMsg = decodeAgentsTermJson<ChatMessage>(
             """{"id":"m_err","tabId":"t_sh","role":"assistant","text":"","status":"error","error":"Exited with code 1","exitCode":1}""",
         )
         assertEquals(1, errMsg.exitCode)
         assertEquals("Exited with code 1", errMsg.error)
 
-        val legacyMsg = decodeHerdrJson<ChatMessage>(
+        val legacyMsg = decodeAgentsTermJson<ChatMessage>(
             """{"id":"m_legacy","tabId":"t_sh","role":"assistant","text":"hello","status":"complete"}""",
         )
         assertNull(legacyMsg.exitCode)
@@ -84,7 +84,7 @@ class ShellApiAndModelTest {
         assertEquals("Bearer secret-token", dataReq.getHeader("Authorization"))
         assertEquals(
             SendStdinRequest(data = "hello\n", eof = false),
-            decodeHerdrJson<SendStdinRequest>(dataReq.body.readUtf8()),
+            decodeAgentsTermJson<SendStdinRequest>(dataReq.body.readUtf8()),
         )
 
         val eofReq = server.takeRequest()
@@ -92,7 +92,7 @@ class ShellApiAndModelTest {
         assertEquals("/api/tabs/tab_sh/stdin", eofReq.path)
         assertEquals(
             SendStdinRequest(data = null, eof = true),
-            decodeHerdrJson<SendStdinRequest>(eofReq.body.readUtf8()),
+            decodeAgentsTermJson<SendStdinRequest>(eofReq.body.readUtf8()),
         )
 
         val err = assertThrows(HttpStatusException::class.java) {
@@ -104,7 +104,7 @@ class ShellApiAndModelTest {
 
     @Test
     fun repositorySurfacesCreateTabAndSendStdinErrors() = runBlocking {
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = InMemoryConnectionSettings(config),
         )
@@ -133,7 +133,7 @@ class ShellApiAndModelTest {
 
     @Test
     fun newTabControllerKeepsSheetOpenAndSurfacesErrorUntilClearedOrSucceeded() = runBlocking {
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = InMemoryConnectionSettings(config),
         )

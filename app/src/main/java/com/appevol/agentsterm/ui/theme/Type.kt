@@ -29,7 +29,7 @@ val MonoFontFamily = FontFamily(
     Font(R.font.jetbrains_mono, FontWeight.SemiBold),
 )
 
-val HerdrTypography = appTypography(display = DisplayFontFamily, body = BodyFontFamily)
+val AgentsTermTypography = appTypography(display = DisplayFontFamily, body = BodyFontFamily)
 
 private fun style(
     family: FontFamily,

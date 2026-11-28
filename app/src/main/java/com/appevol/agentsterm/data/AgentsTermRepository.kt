@@ -510,8 +510,8 @@ private fun applySocketClosed(
     )
 }
 
-class HerdrRepository(
-    private val api: HerdrApiClient,
+class AgentsTermRepository(
+    private val api: AgentsTermApiClient,
     private val settings: ConnectionSettings,
     private val debugRecorder: DebugRecorder? = null,
     private val onOperationalError: ((String) -> Unit)? = null,

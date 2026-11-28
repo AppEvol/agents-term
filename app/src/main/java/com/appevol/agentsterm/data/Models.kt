@@ -6,18 +6,18 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.net.URLDecoder
 import java.net.URLEncoder
 
-val HerdrMoshi: Moshi = Moshi.Builder()
+val AgentsTermMoshi: Moshi = Moshi.Builder()
     .addLast(KotlinJsonAdapterFactory())
     .build()
 
-inline fun <reified T> decodeHerdrJson(raw: String): T {
-    val adapter = HerdrMoshi.adapter(T::class.java)
+inline fun <reified T> decodeAgentsTermJson(raw: String): T {
+    val adapter = AgentsTermMoshi.adapter(T::class.java)
     return adapter.lenient().fromJson(raw)
         ?: throw IllegalArgumentException("Unable to decode ${T::class.java.simpleName} from JSON")
 }
 
-inline fun <reified T> encodeHerdrJson(value: T): String {
-    val adapter = HerdrMoshi.adapter(T::class.java)
+inline fun <reified T> encodeAgentsTermJson(value: T): String {
+    val adapter = AgentsTermMoshi.adapter(T::class.java)
     return adapter.toJson(value)
 }
 

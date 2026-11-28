@@ -21,7 +21,7 @@ import com.appevol.agentsterm.data.WorkspaceState
 import com.appevol.agentsterm.data.resolveTabTaskSummary
 import com.appevol.agentsterm.ui.TabSidebarBody
 import com.appevol.agentsterm.ui.WorkspaceScaffold
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -87,7 +87,7 @@ class TabSummaryUiTest {
             val tab = tabs.firstOrNull { it.id == tabId } ?: return false
             return resolveTabTaskSummary(tab, messagesByTab[tabId].orEmpty()) != null || allowEmpty
         }
-        HerdrTheme {
+        AgentsTermTheme {
             WorkspaceScaffold(
                 state = state,
                 isExpanded = false,
@@ -264,7 +264,7 @@ class TabSummaryUiTest {
             lastMessagePreview = "git status",
         )
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 TabSidebarBody(
                     state = WorkspaceState(
                         config = ConnectionConfig(host = "100.71.219.26", port = 7501),

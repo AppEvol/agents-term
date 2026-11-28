@@ -30,7 +30,7 @@ fun statusLabel(status: String): String = when (status) {
 }
 
 @Composable
-fun HerdrTheme(
+fun AgentsTermTheme(
     theme: AppThemeId = AppThemeId.Default,
     content: @Composable () -> Unit,
 ) {

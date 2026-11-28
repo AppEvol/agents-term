@@ -21,7 +21,7 @@ import com.appevol.agentsterm.data.TailscaleStatus
 import com.appevol.agentsterm.data.WorkspaceState
 import com.appevol.agentsterm.ui.ConnectScreen
 import com.appevol.agentsterm.ui.WorkspaceScaffold
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Before
@@ -116,7 +116,7 @@ class SettingsStoreAndAuthUiTest {
         var reconnectClicks = 0
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 WorkspaceScaffold(
                     state = WorkspaceState(
                         config = ConnectionConfig(host = "100.71.219.26", port = 7501, token = "stale"),
@@ -165,7 +165,7 @@ class SettingsStoreAndAuthUiTest {
     @Test
     fun connectScreenPrefersSshModeWhenRepairingWithSavedSshProfile() {
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ConnectScreen(
                     initialConfig = ConnectionConfig(host = "100.71.219.26", port = 7501, token = "stale"),
                     sshProfile = SshProfile(

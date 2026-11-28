@@ -35,7 +35,7 @@ import com.appevol.agentsterm.ui.ComposerAttachments
 import com.appevol.agentsterm.ui.LocalAttachmentImages
 import com.appevol.agentsterm.ui.PendingAttachment
 import com.appevol.agentsterm.ui.PendingAttachmentState
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -91,7 +91,7 @@ class ChatAttachmentsUiTest {
         attachments: () -> ComposerAttachments?,
     ) {
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 CompositionLocalProvider(LocalAttachmentImages provides images) {
                     ChatWorkspace(
                         tab = tab,

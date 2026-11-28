@@ -23,7 +23,7 @@ import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.ui.ChatWorkspace
 import com.appevol.agentsterm.ui.markdown.LocalMarkdownParseDispatcher
 import com.appevol.agentsterm.ui.markdown.LocalMarkdownSyncParseThreshold
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
@@ -112,7 +112,7 @@ class ChatMarkdownVirtualizationUiTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab,
                     messages = messages,
@@ -165,7 +165,7 @@ class ChatMarkdownVirtualizationUiTest {
                 LocalMarkdownParseDispatcher provides bgDispatcher,
                 LocalMarkdownSyncParseThreshold provides 256,
             ) {
-                HerdrTheme {
+                AgentsTermTheme {
                     ChatWorkspace(
                         tab = testTab,
                         messages = messages,
@@ -210,7 +210,7 @@ class ChatMarkdownVirtualizationUiTest {
             val real = LocalClipboard.current
             clipboard = remember { FakeClipboard(real) }
             CompositionLocalProvider(LocalClipboard provides clipboard, LocalTextToolbar provides toolbar) {
-                HerdrTheme {
+                AgentsTermTheme {
                     ChatWorkspace(
                         tab = testTab,
                         messages = messages,

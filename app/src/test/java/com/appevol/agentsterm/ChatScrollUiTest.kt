@@ -16,7 +16,7 @@ import androidx.compose.ui.test.swipeUp
 import com.appevol.agentsterm.data.ChatMessage
 import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.ui.ChatWorkspace
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -89,7 +89,7 @@ class ChatScrollUiTest {
         var messages by mutableStateOf<List<ChatMessage>>(emptyList())
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab,
                     messages = messages,
@@ -131,7 +131,7 @@ class ChatScrollUiTest {
         val baseUser = ChatMessage(id = "u1", tabId = testTab.id, role = "user", text = "FIRST_PROMPT_AT_TOP")
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab.copy(status = "working"),
                     messages = messages,
@@ -196,7 +196,7 @@ class ChatScrollUiTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab,
                     messages = messages,
@@ -241,7 +241,7 @@ class ChatScrollUiTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab.copy(status = "working"),
                     messages = messages,
@@ -292,7 +292,7 @@ class ChatScrollUiTest {
         var messages by mutableStateOf(multiTurnConversation())
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = testTab,
                     messages = messages,

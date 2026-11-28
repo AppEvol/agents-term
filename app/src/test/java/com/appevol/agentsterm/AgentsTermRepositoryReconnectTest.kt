@@ -1,5 +1,7 @@
 package com.appevol.agentsterm
 
+import com.appevol.agentsterm.data.AgentsTermApiClient
+import com.appevol.agentsterm.data.AgentsTermRepository
 import com.appevol.agentsterm.data.AppStateRequestHandler
 import com.appevol.agentsterm.data.ConnectionConfig
 import com.appevol.agentsterm.data.ConnectionSettings
@@ -10,8 +12,6 @@ import com.appevol.agentsterm.data.FsDirectoryEntry
 import com.appevol.agentsterm.data.FsListResponse
 import com.appevol.agentsterm.data.HTTP_FORBIDDEN
 import com.appevol.agentsterm.data.HTTP_UNAUTHORIZED
-import com.appevol.agentsterm.data.HerdrApiClient
-import com.appevol.agentsterm.data.HerdrRepository
 import com.appevol.agentsterm.data.HttpStatusException
 import com.appevol.agentsterm.data.ServerInfo
 import com.appevol.agentsterm.data.TabMessagesResponse
@@ -38,7 +38,7 @@ import org.junit.Test
 import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class HerdrRepositoryReconnectTest {
+class AgentsTermRepositoryReconnectTest {
 
     private class InMemorySettings(
         private var connection: ConnectionConfig = ConnectionConfig(),
@@ -106,7 +106,7 @@ class HerdrRepositoryReconnectTest {
         var fireClosedOnCancel: Boolean = true,
         var cancelReason: String = "Canceled",
         private val fsMap: MutableMap<String, FsListResponse> = mutableMapOf(),
-    ) : HerdrApiClient() {
+    ) : AgentsTermApiClient() {
         val sockets = mutableListOf<FakeWebSocketHandle>()
         val listDirCalls = mutableListOf<String?>()
         val markReadCalls = mutableListOf<String>()
@@ -171,7 +171,7 @@ class HerdrRepositoryReconnectTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = true, cancelReason = "Canceled")
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = settings,
             ioDispatcher = dispatcher,
@@ -209,7 +209,7 @@ class HerdrRepositoryReconnectTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = settings,
             ioDispatcher = dispatcher,
@@ -253,7 +253,7 @@ class HerdrRepositoryReconnectTest {
         var nowMs = 10_000L
         val api = FakeApiClient(fireClosedOnCancel = true, cancelReason = "Canceled")
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = settings,
             clockMs = { nowMs },
@@ -289,7 +289,7 @@ class HerdrRepositoryReconnectTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = true)
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = settings,
             ioDispatcher = dispatcher,
@@ -336,7 +336,7 @@ class HerdrRepositoryReconnectTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = settings,
             ioDispatcher = dispatcher,
@@ -434,7 +434,7 @@ class HerdrRepositoryReconnectTest {
     @Test
     fun concurrentCreatesShareTheLastSlotEvenWithAnOlderDaemon() = runTest {
         val api = FakeApiClient()
-        val repo = HerdrRepository(api, InMemorySettings(testConfig), ioDispatcher = StandardTestDispatcher(testScheduler))
+        val repo = AgentsTermRepository(api, InMemorySettings(testConfig), ioDispatcher = StandardTestDispatcher(testScheduler))
         val tabs = (1..9).map { TabRecord(id = "t$it", title = "Tab $it", agent = "shell", cwd = "/home/test") }
         repo.connect(testConfig)
         val socket = api.sockets.single()
@@ -476,7 +476,7 @@ class HerdrRepositoryReconnectTest {
         )
         val api = FakeApiClient(fsMap = fsMap)
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(api = api, settings = settings, ioDispatcher = dispatcher)
+        val repo = AgentsTermRepository(api = api, settings = settings, ioDispatcher = dispatcher)
 
         repo.connect(testConfig)
         api.sockets[0].emitOpen()
@@ -495,7 +495,7 @@ class HerdrRepositoryReconnectTest {
         assertEquals("/home/test/projects/worktree-a", settings.loadLastCwd(testConfig.host))
 
         // New repository instance (simulating app restart) restores lastCwd from settings
-        val restartedRepo = HerdrRepository(api = api, settings = settings, ioDispatcher = dispatcher)
+        val restartedRepo = AgentsTermRepository(api = api, settings = settings, ioDispatcher = dispatcher)
         assertEquals("/home/test/projects/worktree-a", restartedRepo.state.value.lastCwd)
 
         // While worktree-a still exists, loadInitialDirectories keeps it
@@ -526,7 +526,7 @@ class HerdrRepositoryReconnectTest {
     fun turnFinishingOnTheVisibleTabIsMarkedReadButOtherTabsStayUnread() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = InMemorySettings(connection = testConfig),
             ioDispatcher = dispatcher,
@@ -557,7 +557,7 @@ class HerdrRepositoryReconnectTest {
     fun appStateRequestsAreAnsweredOnTheSocketAndHelloFollowsSnapshot() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = InMemorySettings(connection = testConfig),
             ioDispatcher = dispatcher,
@@ -595,7 +595,7 @@ class HerdrRepositoryReconnectTest {
     fun appStateResponseIsDroppedWhenSocketWasReplaced() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = InMemorySettings(connection = testConfig),
             ioDispatcher = dispatcher,
@@ -618,7 +618,7 @@ class HerdrRepositoryReconnectTest {
 
     @Test
     fun appStateRequestDecodesFromDaemonJson() {
-        val env = com.appevol.agentsterm.data.decodeHerdrJson<WsServerEnvelope>(
+        val env = com.appevol.agentsterm.data.decodeAgentsTermJson<WsServerEnvelope>(
             """{"type":"app_state_request","requestId":"abc","command":"logs","args":{"limit":5,"categories":["http"]}}""",
         )
         assertEquals("abc", env.requestId)
@@ -632,7 +632,7 @@ class HerdrRepositoryReconnectTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = settings,
             ioDispatcher = dispatcher,
@@ -672,7 +672,7 @@ class HerdrRepositoryReconnectTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = settings,
             ioDispatcher = dispatcher,
@@ -710,7 +710,7 @@ class HerdrRepositoryReconnectTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = settings,
             ioDispatcher = dispatcher,
@@ -754,7 +754,7 @@ class HerdrRepositoryReconnectTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApiClient(fireClosedOnCancel = false)
         val settings = InMemorySettings(connection = testConfig)
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = settings,
             ioDispatcher = dispatcher,

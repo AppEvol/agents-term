@@ -1,11 +1,11 @@
 package com.appevol.agentsterm
 
+import com.appevol.agentsterm.data.AgentsTermApiClient
+import com.appevol.agentsterm.data.AgentsTermRepository
 import com.appevol.agentsterm.data.ChatMessage
 import com.appevol.agentsterm.data.ConnectionConfig
 import com.appevol.agentsterm.data.ConnectionSettings
 import com.appevol.agentsterm.data.DebugRecorder
-import com.appevol.agentsterm.data.HerdrApiClient
-import com.appevol.agentsterm.data.HerdrRepository
 import com.appevol.agentsterm.data.MessageSegment
 import com.appevol.agentsterm.data.TabMessagesResponse
 import com.appevol.agentsterm.data.TabRecord
@@ -63,7 +63,7 @@ class StreamingPerfTest {
 
     private class FakeApi(
         private val tabMessages: Map<String, List<ChatMessage>> = emptyMap(),
-    ) : HerdrApiClient() {
+    ) : AgentsTermApiClient() {
         val sockets = mutableListOf<FakeWebSocket>()
         var getMessagesEnabled = false
 
@@ -94,7 +94,7 @@ class StreamingPerfTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         var nowMs = 1_000L
         val api = FakeApi()
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = InMemorySettings(testConfig),
             deltaFlushIntervalMs = 60L,
@@ -156,7 +156,7 @@ class StreamingPerfTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         var nowMs = 1_000L
         val api = FakeApi()
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = InMemorySettings(testConfig),
             deltaFlushIntervalMs = 60L,
@@ -211,7 +211,7 @@ class StreamingPerfTest {
     fun backgroundTabDeltasDoNotEmitWorkspaceStateUntilSelected() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeApi()
-        val repo = HerdrRepository(
+        val repo = AgentsTermRepository(
             api = api,
             settings = InMemorySettings(testConfig),
             deltaFlushIntervalMs = 60L,

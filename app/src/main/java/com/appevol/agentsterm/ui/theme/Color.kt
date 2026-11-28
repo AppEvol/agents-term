@@ -2,14 +2,14 @@ package com.appevol.agentsterm.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Herdr Obsidian-Slate + Electric Cobalt & Emerald Palette
-val HerdrBlue = Color(0xFF4F8CFF)
-val HerdrBlueSoft = Color(0xFF8AB4F8)
-val HerdrPurple = Color(0xFF9E7BFF)
-val HerdrAmber = Color(0xFFF5A623)
-val HerdrEmerald = Color(0xFF34D399)
-val HerdrRed = Color(0xFFEF5350)
-val HerdrIdleSlate = Color(0xFF7B8794)
+// AgentsTerm Obsidian-Slate + Electric Cobalt & Emerald Palette
+val AgentsTermBlue = Color(0xFF4F8CFF)
+val AgentsTermBlueSoft = Color(0xFF8AB4F8)
+val AgentsTermPurple = Color(0xFF9E7BFF)
+val AgentsTermAmber = Color(0xFFF5A623)
+val AgentsTermEmerald = Color(0xFF34D399)
+val AgentsTermRed = Color(0xFFEF5350)
+val AgentsTermIdleSlate = Color(0xFF7B8794)
 
 // Dark surfaces
 val DarkBackground = Color(0xFF0B0F17)

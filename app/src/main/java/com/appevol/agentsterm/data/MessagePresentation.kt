@@ -57,7 +57,7 @@ fun formatToolCallSummary(toolCall: ToolCallItem): String {
     val rawJson = toolCall.inputJson?.trim()
     if (!rawJson.isNullOrEmpty() && rawJson.startsWith("{")) {
         val parsed = runCatching {
-            HerdrMoshi.adapter(Any::class.java).lenient().fromJson(rawJson) as? Map<String, Any?>
+            AgentsTermMoshi.adapter(Any::class.java).lenient().fromJson(rawJson) as? Map<String, Any?>
         }.getOrNull()
         if (parsed != null) {
             for (key in DESCRIPTION_KEYS) {

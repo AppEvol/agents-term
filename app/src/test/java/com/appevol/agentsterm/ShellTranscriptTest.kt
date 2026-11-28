@@ -18,7 +18,7 @@ import com.appevol.agentsterm.data.ChatMessage
 import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.data.UsageStats
 import com.appevol.agentsterm.ui.ChatWorkspace
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -68,7 +68,7 @@ class ShellTranscriptTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = idleShellTab,
                     messages = messages,
@@ -114,7 +114,7 @@ class ShellTranscriptTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = idleShellTab,
                     messages = messages,
@@ -165,7 +165,7 @@ class ShellTranscriptTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = idleShellTab,
                     messages = messages,
@@ -193,7 +193,7 @@ class ShellTranscriptTest {
         val runningTab = idleShellTab.copy(status = "working", statusDetail = "Running shell command…")
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = runningTab,
                     messages = emptyList(),
@@ -251,7 +251,7 @@ class ShellTranscriptTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = activeTab,
                     messages = emptyList(),
@@ -298,7 +298,7 @@ class ShellTranscriptTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ChatWorkspace(
                     tab = codingTab,
                     messages = emptyList(),

@@ -16,7 +16,7 @@ import androidx.compose.ui.unit.dp
 import com.appevol.agentsterm.data.AppThemeId
 
 private val MidnightColors = darkColorScheme(
-    primary = HerdrBlueSoft,
+    primary = AgentsTermBlueSoft,
     onPrimary = Color(0xFF07162B),
     primaryContainer = DarkPrimaryContainer,
     onPrimaryContainer = DarkOnPrimaryContainer,
@@ -24,7 +24,7 @@ private val MidnightColors = darkColorScheme(
     onSecondary = Color(0xFF1E103D),
     secondaryContainer = DarkSecondaryContainer,
     onSecondaryContainer = DarkOnSecondaryContainer,
-    tertiary = HerdrEmerald,
+    tertiary = AgentsTermEmerald,
     onTertiary = Color(0xFF04261B),
     background = DarkBackground,
     onBackground = DarkOnSurface,
@@ -39,7 +39,7 @@ private val MidnightColors = darkColorScheme(
     surfaceContainerHighest = DarkSurfaceContainerHighest,
     outline = DarkOutline,
     outlineVariant = DarkOutlineVariant,
-    error = HerdrRed,
+    error = AgentsTermRed,
 )
 
 private val DaylightColors = lightColorScheme(
@@ -107,13 +107,13 @@ private val LunaColors = lightColorScheme(
 )
 
 private val MidnightSemantic = SemanticColors(
-    info = HerdrBlue,
-    success = HerdrEmerald,
-    warning = HerdrAmber,
+    info = AgentsTermBlue,
+    success = AgentsTermEmerald,
+    warning = AgentsTermAmber,
     onWarning = Color.Black,
-    danger = HerdrRed,
-    accent = HerdrPurple,
-    idle = HerdrIdleSlate,
+    danger = AgentsTermRed,
+    accent = AgentsTermPurple,
+    idle = AgentsTermIdleSlate,
 )
 
 private val DaylightSemantic = SemanticColors(
@@ -201,7 +201,7 @@ val MidnightTheme = AppThemeSpec(
     colorScheme = MidnightColors,
     colors = MidnightSemantic,
     chrome = flatChrome(MidnightColors, MidnightSemantic, isDark = true),
-    typography = HerdrTypography,
+    typography = AgentsTermTypography,
     shapes = RoundedShapes,
 )
 
@@ -211,7 +211,7 @@ val DaylightTheme = AppThemeSpec(
     colorScheme = DaylightColors,
     colors = DaylightSemantic,
     chrome = flatChrome(DaylightColors, DaylightSemantic, isDark = false),
-    typography = HerdrTypography,
+    typography = AgentsTermTypography,
     shapes = RoundedShapes,
 )
 

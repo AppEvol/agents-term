@@ -31,9 +31,9 @@ import androidx.test.core.app.ApplicationProvider
 import com.appevol.agentsterm.data.AppThemeId
 import com.appevol.agentsterm.data.SettingsStore
 import com.appevol.agentsterm.ui.ThemePickerCard
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import com.appevol.agentsterm.ui.theme.AppTheme
 import com.appevol.agentsterm.ui.theme.DaylightTheme
-import com.appevol.agentsterm.ui.theme.HerdrTheme
 import com.appevol.agentsterm.ui.theme.MidnightTheme
 import com.appevol.agentsterm.ui.theme.ThemedAlertDialog
 import com.appevol.agentsterm.ui.theme.ThemedButton
@@ -100,7 +100,7 @@ class AppThemeTest {
         var success = Color.Unspecified
         var corner: Shape? = null
         composeRule.setContent {
-            HerdrTheme(theme = theme) {
+            AgentsTermTheme(theme = theme) {
                 background = MaterialTheme.colorScheme.background
                 success = AppTheme.colors.success
                 corner = themedCorner(14.dp)
@@ -124,7 +124,7 @@ class AppThemeTest {
     fun themePickerOffersEveryThemeAndReportsTheTappedOne() {
         var selected by mutableStateOf(AppThemeId.XP_LUNA)
         composeRule.setContent {
-            HerdrTheme(theme = selected) {
+            AgentsTermTheme(theme = selected) {
                 ThemePickerCard(selected = selected, onSelect = { selected = it })
             }
         }
@@ -146,7 +146,7 @@ class AppThemeTest {
         var chip by mutableStateOf(false)
         var clicks = 0
         composeRule.setContent {
-            HerdrTheme(theme = theme) {
+            AgentsTermTheme(theme = theme) {
                 Column {
                     ThemedButton(onClick = { clicks++ }, modifier = Modifier.testTag("button")) { Text("Go") }
                     ThemedButton(onClick = { clicks++ }, enabled = false, modifier = Modifier.testTag("disabled")) {
@@ -190,7 +190,7 @@ class AppThemeTest {
     fun windowsXpTextBoxTakesTypedTextAndKeepsItsLabel() {
         var text by mutableStateOf("")
         composeRule.setContent {
-            HerdrTheme(theme = AppThemeId.XP_LUNA) {
+            AgentsTermTheme(theme = AppThemeId.XP_LUNA) {
                 ThemedTextField(
                     value = text,
                     onValueChange = { text = it },
@@ -210,7 +210,7 @@ class AppThemeTest {
         var dismissed = 0
         var saved = 0
         composeRule.setContent {
-            HerdrTheme(theme = AppThemeId.XP_LUNA) {
+            AgentsTermTheme(theme = AppThemeId.XP_LUNA) {
                 ThemedAlertDialog(
                     onDismissRequest = { dismissed++ },
                     title = { Text("Rename tab") },

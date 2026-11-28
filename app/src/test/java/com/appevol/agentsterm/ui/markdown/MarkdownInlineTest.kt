@@ -11,7 +11,7 @@ import androidx.compose.ui.test.performFirstLinkClick
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.font.FontWeight
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -161,7 +161,7 @@ class MarkdownInlineTest {
                     }
                 },
             ) {
-                HerdrTheme { MarkdownText(markdown = "[here](https://example.com/x)") }
+                AgentsTermTheme { MarkdownText(markdown = "[here](https://example.com/x)") }
             }
         }
         compose.onNodeWithText("here").performFirstLinkClick()

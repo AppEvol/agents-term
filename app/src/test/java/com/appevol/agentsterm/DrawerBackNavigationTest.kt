@@ -22,7 +22,7 @@ import com.appevol.agentsterm.data.ConnectionState
 import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.data.WorkspaceState
 import com.appevol.agentsterm.ui.WorkspaceNavigationShell
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -65,7 +65,7 @@ class DrawerBackNavigationTest {
             capturedDrawerState = drawerState
             val scope = rememberCoroutineScope()
 
-            HerdrTheme {
+            AgentsTermTheme {
                 BackHandler { outerBackPresses++ }
                 WorkspaceNavigationShell(
                     isExpanded = false,
@@ -130,7 +130,7 @@ class DrawerBackNavigationTest {
             capturedDrawerState = drawerState
             val scope = rememberCoroutineScope()
 
-            HerdrTheme {
+            AgentsTermTheme {
                 BackHandler { outerBackPresses++ }
                 WorkspaceNavigationShell(
                     isExpanded = isExpanded,

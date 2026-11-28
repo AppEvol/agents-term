@@ -14,6 +14,8 @@ import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import com.appevol.agentsterm.data.AgentModelOption
 import com.appevol.agentsterm.data.AgentUsageUiState
+import com.appevol.agentsterm.data.AgentsTermApiClient
+import com.appevol.agentsterm.data.AgentsTermRepository
 import com.appevol.agentsterm.data.ConnectionConfig
 import com.appevol.agentsterm.data.ConnectionState
 import com.appevol.agentsterm.data.DaemonCompatibilityStatus
@@ -21,14 +23,12 @@ import com.appevol.agentsterm.data.DebugDumpUploadState
 import com.appevol.agentsterm.data.DebugSharingSettings
 import com.appevol.agentsterm.data.EXPECTED_DAEMON_PROTOCOL_VERSION
 import com.appevol.agentsterm.data.HTTP_NOT_FOUND
-import com.appevol.agentsterm.data.HerdrApiClient
-import com.appevol.agentsterm.data.HerdrRepository
 import com.appevol.agentsterm.data.HttpStatusException
 import com.appevol.agentsterm.data.OUTDATED_DAEMON_ENDPOINT_ERROR
 import com.appevol.agentsterm.data.ServerInfo
 import com.appevol.agentsterm.data.SettingsStore
 import com.appevol.agentsterm.data.WorkspaceState
-import com.appevol.agentsterm.data.decodeHerdrJson
+import com.appevol.agentsterm.data.decodeAgentsTermJson
 import com.appevol.agentsterm.data.displayVersionLabel
 import com.appevol.agentsterm.data.evaluateDaemonCompatibility
 import com.appevol.agentsterm.data.formatDaemonRequestError
@@ -38,7 +38,7 @@ import com.appevol.agentsterm.ui.AgentUsageController
 import com.appevol.agentsterm.ui.ModelPickerSheetContent
 import com.appevol.agentsterm.ui.SettingsScreen
 import com.appevol.agentsterm.ui.WorkspaceScaffold
-import com.appevol.agentsterm.ui.theme.HerdrTheme
+import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -68,7 +68,7 @@ class DaemonCompatibilityTest {
         val currentJson =
             """{"version":"0.3.0","protocolVersion":1,"commit":"ed7da85123456",""" +
                 """"buildHash":"abcdef0123456","runtime":"rust","hostname":"dev-vm"}"""
-        val current = decodeHerdrJson<ServerInfo>(currentJson)
+        val current = decodeAgentsTermJson<ServerInfo>(currentJson)
         assertEquals("0.3.0", current.version)
         assertEquals(1, current.protocolVersion)
         assertEquals("ed7da85123456", current.commit)
@@ -76,7 +76,7 @@ class DaemonCompatibilityTest {
         assertEquals("rust", current.runtime)
         assertEquals("v0.3.0 (ed7da85) · proto 1", current.displayVersionLabel())
 
-        val legacy = decodeHerdrJson<ServerInfo>(
+        val legacy = decodeAgentsTermJson<ServerInfo>(
             """{"version":"0.3.0","commit":"9988776655","hostname":"old-vm"}""",
         )
         assertNull(legacy.protocolVersion)
@@ -156,7 +156,7 @@ class DaemonCompatibilityTest {
         )
         server.start()
         try {
-            val api = HerdrApiClient()
+            val api = AgentsTermApiClient()
             val cfg = ConnectionConfig(host = server.hostName, port = server.port, token = "tok")
 
             try {
@@ -184,7 +184,7 @@ class DaemonCompatibilityTest {
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun agentUsageControllerFlagsNeedsDaemonUpdateOn404UnknownEndpoint() = runTest {
-        val fakeApi = object : HerdrApiClient() {
+        val fakeApi = object : AgentsTermApiClient() {
             override suspend fun getAgentUsage(
                 config: ConnectionConfig,
                 agent: String,
@@ -196,7 +196,7 @@ class DaemonCompatibilityTest {
         }
         val settings = SettingsStore(ApplicationProvider.getApplicationContext())
         settings.saveConnection(ConnectionConfig(host = "127.0.0.1", port = 7501, token = "tok"))
-        val repo = HerdrRepository(api = fakeApi, settings = settings)
+        val repo = AgentsTermRepository(api = fakeApi, settings = settings)
         repo.initializeAutoConnect()
 
         val controller = AgentUsageController(repo = repo, scope = this)
@@ -226,7 +226,7 @@ class DaemonCompatibilityTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 TestWorkspaceScaffold(
                     state = workspaceState,
                     onUpdateDaemon = { updateClicks++ },
@@ -272,7 +272,7 @@ class DaemonCompatibilityTest {
         )
 
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 SettingsScreen(
                     workspaceState = workspaceState,
                     debugSettings = DebugSharingSettings(),
@@ -312,7 +312,7 @@ class DaemonCompatibilityTest {
     fun modelPickerUsagePanelShowsUpdateButtonWhenEndpointIsUnsupported() {
         var updateClicks = 0
         composeRule.setContent {
-            HerdrTheme {
+            AgentsTermTheme {
                 ModelPickerSheetContent(
                     agentLabel = "Claude",
                     currentModel = null,
