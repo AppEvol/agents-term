@@ -40,9 +40,12 @@ ignore = [
 
 # Dead code detection.
 [tool.vulture]
-paths = ["daemon-rs/tests"]
+paths = ["daemon-rs/tests", "test_utils_py"]
 min_confidence = 60
 ignore_names = [
   # http.server hooks called by the standard library
   "do_GET", "log_message",
+  # unittest.TextTestResult hooks called by the standard library
+  "startTest", "stopTest", "addSuccess", "addFailure", "addError",
+  "addSkip", "addExpectedFailure", "addUnexpectedSuccess", "addSubTest",
 ]

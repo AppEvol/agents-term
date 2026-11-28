@@ -72,7 +72,7 @@ if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; t
     INSTALLER_TESTS_CHANGED="true"
   fi
   # Exercise all native suites when their common CI runner changes.
-  if grep -qE '^scripts/(allure_results|native_test_retries|retry_report|test_retries)\.py$' <<< "${CHANGED_FILES}"; then
+  if grep -qE '^(test_utils_py/|scripts/(allure_results|native_test_retries)\.py$)' <<< "${CHANGED_FILES}"; then
     DAEMON_RS_TESTS_CHANGED="true"
     DAEMON_E2E_HARNESS_CHANGED="true"
     INSTALLER_TESTS_CHANGED="true"

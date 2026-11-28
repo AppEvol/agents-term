@@ -1,4 +1,4 @@
-"""Exercise CI fail/recover gate decisions at the native runners' CLI entry points."""
+"""Exercise CI fail/recover gate decisions at the native runners' CLI entry point."""
 
 from __future__ import annotations
 
@@ -10,18 +10,21 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-ENTRY = Path(__file__).resolve().parents[1] / "native_test_retries.py"
+from test_utils_py import REPO_ROOT
+
+ENTRY = REPO_ROOT / "scripts" / "native_test_retries.py"
 
 
 class NativeRetryTest(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
         self.root = Path(scratch.name)
         self.out = self.root / "results"
 
-    def run_suite(self, *arguments, env=None):
+    def run_suite(self, *arguments: str, env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(ENTRY), *arguments],
             env=env,
@@ -31,16 +34,16 @@ class NativeRetryTest(unittest.TestCase):
             timeout=30,
         )
 
-    def records(self):
-        return [json.loads(file.read_text()) for file in self.out.glob("*-result.json")]
+    def records(self) -> List[Dict[str, Any]]:
+        return [json.loads(file.read_text(encoding="utf-8")) for file in self.out.glob("*-result.json")]
 
-    def run_python_suite(self, body):
-        (self.root / "test_case.py").write_text(textwrap.dedent(body))
+    def run_python_suite(self, body: str) -> subprocess.CompletedProcess:
+        (self.root / "test_case.py").write_text(textwrap.dedent(body), encoding="utf-8")
         return self.run_suite(
             "unittest", "--parent-suite", "installer", "--variant", "py3", "--start-dir", ".", "--output", str(self.out)
         )
 
-    def test_python_isolates_case_and_keeps_variant_and_subtest_failures(self):
+    def test_python_isolates_case_and_keeps_variant_and_subtest_failures(self) -> None:
         proc = self.run_python_suite(
             """\
             import unittest
@@ -60,7 +63,7 @@ class NativeRetryTest(unittest.TestCase):
         self.assertEqual(len({case["historyId"] for case in recovered}), 1)
         self.assertEqual(len(self.records()), 4)
 
-    def test_python_process_exit_after_an_assertion_cannot_recover(self):
+    def test_python_process_exit_after_an_assertion_cannot_recover(self) -> None:
         proc = self.run_python_suite(
             """\
             import os
@@ -74,7 +77,7 @@ class NativeRetryTest(unittest.TestCase):
         self.assertNotIn("Isolated retry", proc.stdout)
         self.assertEqual(len(self.records()), 1)
 
-    def run_cargo_suite(self, extra_failed=0, incomplete=False):
+    def run_cargo_suite(self, extra_failed: int = 0, incomplete: bool = False) -> subprocess.CompletedProcess:
         # Model two targets with the same test name. A retry must select both the target and the case.
         cargo = self.root / "cargo"
         cargo.write_text(
@@ -102,7 +105,8 @@ class NativeRetryTest(unittest.TestCase):
                     print("error: 1 target failed:")
                     sys.exit(101)
                 """
-            )
+            ),
+            encoding="utf-8",
         )
         cargo.chmod(0o755)
         return self.run_suite(
@@ -118,7 +122,7 @@ class NativeRetryTest(unittest.TestCase):
             env={**os.environ, "PATH": f"{self.root}:{os.environ['PATH']}"},
         )
 
-    def test_cargo_retries_only_the_exact_target_and_case(self):
+    def test_cargo_retries_only_the_exact_target_and_case(self) -> None:
         proc = self.run_cargo_suite()
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertEqual(len(self.records()), 4)
@@ -127,12 +131,16 @@ class NativeRetryTest(unittest.TestCase):
             ["1", "2"],
         )
 
-    def test_cargo_blocks_when_some_failures_could_not_be_parsed(self):
+    def test_cargo_blocks_when_some_failures_could_not_be_parsed(self) -> None:
         proc = self.run_cargo_suite(extra_failed=1)
         self.assertNotEqual(proc.returncode, 0)
         self.assertNotIn("Isolated retry", proc.stdout)
 
-    def test_cargo_blocks_when_another_target_crashed(self):
+    def test_cargo_blocks_when_another_target_crashed(self) -> None:
         proc = self.run_cargo_suite(incomplete=True)
         self.assertNotEqual(proc.returncode, 0)
         self.assertNotIn("Isolated retry", proc.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()
