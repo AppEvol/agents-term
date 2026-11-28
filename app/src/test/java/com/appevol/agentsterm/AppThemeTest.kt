@@ -29,8 +29,12 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.appevol.agentsterm.data.AppThemeId
+import com.appevol.agentsterm.data.PtyTheme
 import com.appevol.agentsterm.data.SettingsStore
+import com.appevol.agentsterm.terminal.TerminalThemePalette
+import com.appevol.agentsterm.ui.PtyThemePickerCard
 import com.appevol.agentsterm.ui.ThemePickerCard
+import com.appevol.agentsterm.ui.terminalThemePalette
 import com.appevol.agentsterm.ui.theme.AgentsTermTheme
 import com.appevol.agentsterm.ui.theme.AppTheme
 import com.appevol.agentsterm.ui.theme.DaylightTheme
@@ -80,6 +84,41 @@ class AppThemeTest {
             assertEquals(theme, SettingsStore(context).loadAppTheme())
             assertEquals(theme, AppThemeId.fromStorageKey(theme.storageKey))
         }
+    }
+
+    @Test
+    fun ptyThemeSelectionPersistsAndCanOverrideTheAppPalette() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = SettingsStore(context)
+        var choice by mutableStateOf(store.loadPtyTheme())
+        var appTheme by mutableStateOf(AppThemeId.MIDNIGHT)
+        var palette = TerminalThemePalette.Light
+        composeRule.setContent {
+            AgentsTermTheme(theme = appTheme) {
+                palette = terminalThemePalette(choice)
+                PtyThemePickerCard(choice) {
+                    choice = it
+                    store.savePtyTheme(it)
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("Follow app theme").assertIsSelected()
+        composeRule.runOnIdle { assertEquals(TerminalThemePalette.Dark, palette) }
+        composeRule.onNodeWithText("Light").performClick()
+        composeRule.runOnIdle {
+            assertEquals(TerminalThemePalette.Light, palette)
+            assertEquals(PtyTheme.LIGHT, SettingsStore(context).loadPtyTheme())
+            appTheme = AppThemeId.DAYLIGHT
+        }
+        composeRule.onNodeWithText("Dark").performClick()
+        composeRule.runOnIdle { assertEquals(TerminalThemePalette.Dark, palette) }
+        composeRule.onNodeWithText("Follow app theme").performClick()
+        composeRule.runOnIdle {
+            assertEquals(TerminalThemePalette.Light, palette)
+            appTheme = AppThemeId.MIDNIGHT
+        }
+        composeRule.runOnIdle { assertEquals(TerminalThemePalette.Dark, palette) }
     }
 
     @Test

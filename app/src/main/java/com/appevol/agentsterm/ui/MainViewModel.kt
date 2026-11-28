@@ -33,6 +33,7 @@ import com.appevol.agentsterm.data.DebugSharingSettings
 import com.appevol.agentsterm.data.ForegroundActivityTracker
 import com.appevol.agentsterm.data.FsListResponse
 import com.appevol.agentsterm.data.HostKeyMismatchException
+import com.appevol.agentsterm.data.PtyTheme
 import com.appevol.agentsterm.data.ScreenRecordingCommands
 import com.appevol.agentsterm.data.ScreenRecordingService
 import com.appevol.agentsterm.data.SettingsStore
@@ -52,8 +53,6 @@ import com.appevol.agentsterm.data.generateDebugDumpId
 import com.appevol.agentsterm.data.parseSshSetupUri
 import com.appevol.agentsterm.data.sanitizeDebugText
 import com.appevol.agentsterm.terminal.PtySessionManager
-import com.appevol.agentsterm.terminal.PtyTabSession
-import com.appevol.agentsterm.terminal.TerminalThemePalette
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -150,6 +149,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _debugSettings = MutableStateFlow(settings.loadDebugSharingSettings())
     val debugSettings: StateFlow<DebugSharingSettings> = _debugSettings.asStateFlow()
 
+    private val _ptyTheme = MutableStateFlow(settings.loadPtyTheme())
+    val ptyTheme = _ptyTheme.asStateFlow()
+
     private val _appTheme = MutableStateFlow(settings.loadAppTheme())
     val appTheme: StateFlow<AppThemeId> = _appTheme.asStateFlow()
 
@@ -232,11 +234,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         ptySessions.observeWorkspace(viewModelScope, repo.state)
     }
 
-    fun ptySessionFor(
-        tabId: String,
-        palette: TerminalThemePalette,
-    ): PtyTabSession = ptySessions.getOrCreate(tabId, state.value.config, palette)
-
     fun onForegroundChanged(inForeground: Boolean) {
         ptySessions.onForegroundChanged(inForeground)
         if (inForeground) {
@@ -307,6 +304,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeAppSettings() {
         _showSettingsScreen.value = false
+    }
+
+    fun setPtyTheme(theme: PtyTheme) {
+        settings.savePtyTheme(theme)
+        _ptyTheme.value = theme
     }
 
     fun setAppTheme(theme: AppThemeId) {

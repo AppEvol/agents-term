@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.appevol.agentsterm.R
 import com.appevol.agentsterm.data.AppThemeId
+import com.appevol.agentsterm.data.PtyTheme
 import com.appevol.agentsterm.ui.theme.AppThemeSpec
 import com.appevol.agentsterm.ui.theme.ThemedRadioIndicator
 import com.appevol.agentsterm.ui.theme.appThemeSpec
@@ -164,6 +165,43 @@ private fun ThemeSwatch(spec: AppThemeSpec) {
                     .align(Alignment.Bottom)
                     .background(spec.chrome.primaryAction),
             )
+        }
+    }
+}
+
+@Composable
+internal fun PtyThemePickerCard(selected: PtyTheme, onSelect: (PtyTheme) -> Unit) {
+    Surface(
+        shape = themedCorner(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(vertical = 12.dp).selectableGroup()) {
+            Text(
+                text = stringResource(R.string.settings_pty_theme),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = sectionTitleColor,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            for (theme in PtyTheme.entries) {
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .selectable(selected = theme == selected, role = Role.RadioButton, onClick = { onSelect(theme) })
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ThemedRadioIndicator(selected = theme == selected)
+                    val label = when (theme) {
+                        PtyTheme.FOLLOW_APP -> R.string.pty_theme_follow_app
+                        PtyTheme.LIGHT -> R.string.pty_theme_light
+                        PtyTheme.DARK -> R.string.pty_theme_dark
+                    }
+                    Text(stringResource(label))
+                }
+            }
         }
     }
 }

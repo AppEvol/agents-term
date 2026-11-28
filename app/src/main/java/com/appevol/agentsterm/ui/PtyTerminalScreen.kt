@@ -90,6 +90,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.appevol.agentsterm.R
+import com.appevol.agentsterm.data.PtyTheme
 import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.terminal.GhosttyCellWide
 import com.appevol.agentsterm.terminal.GhosttyCursorStyle
@@ -121,8 +122,12 @@ private const val TERMINAL_PADDING_DP = 6
 private const val RESIZE_DEBOUNCE_MS = 120L
 
 @Composable
-fun rememberTerminalThemePalette(): TerminalThemePalette {
-    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+internal fun terminalThemePalette(theme: PtyTheme = PtyTheme.FOLLOW_APP): TerminalThemePalette {
+    val isDark = when (theme) {
+        PtyTheme.FOLLOW_APP -> MaterialTheme.colorScheme.background.luminance() < 0.5f
+        PtyTheme.LIGHT -> false
+        PtyTheme.DARK -> true
+    }
     return if (isDark) TerminalThemePalette.Dark else TerminalThemePalette.Light
 }
 
@@ -130,11 +135,11 @@ fun rememberTerminalThemePalette(): TerminalThemePalette {
 fun PtyTerminalWorkspace(
     tab: TabRecord,
     session: PtyTabSession,
+    palette: TerminalThemePalette,
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val uiState by session.uiState.collectAsStateWithLifecycle()
-    val palette = rememberTerminalThemePalette()
     val clipboard = LocalClipboardManager.current
 
     var fontSizeSp by rememberSaveable(tab.id) { mutableFloatStateOf(DEFAULT_TERMINAL_FONT_SP) }
@@ -143,8 +148,7 @@ fun PtyTerminalWorkspace(
     var pendingUnsafePaste by remember(tab.id) { mutableStateOf<String?>(null) }
     var inputViewRef by remember(tab.id) { mutableStateOf<TerminalImeInputView?>(null) }
 
-    LaunchedEffect(tab.id, palette) {
-        session.updatePalette(palette)
+    LaunchedEffect(session) {
         session.ensureConnected()
     }
 

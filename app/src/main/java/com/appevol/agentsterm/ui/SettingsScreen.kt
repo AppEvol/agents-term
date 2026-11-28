@@ -77,6 +77,7 @@ import com.appevol.agentsterm.data.DaemonCompatibilityInfo
 import com.appevol.agentsterm.data.DebugDumpUploadState
 import com.appevol.agentsterm.data.DebugEvent
 import com.appevol.agentsterm.data.DebugSharingSettings
+import com.appevol.agentsterm.data.PtyTheme
 import com.appevol.agentsterm.data.SshAuthMethod
 import com.appevol.agentsterm.data.SshBootstrapConfig
 import com.appevol.agentsterm.data.SshProfile
@@ -113,6 +114,8 @@ fun SettingsScreen(
     workspaceState: WorkspaceState,
     sshProfile: SshProfile = SshProfile(),
     debugSettings: DebugSharingSettings,
+    ptyTheme: PtyTheme = PtyTheme.FOLLOW_APP,
+    onSelectPtyTheme: (PtyTheme) -> Unit = {},
     appTheme: AppThemeId = AppThemeId.Default,
     onSelectTheme: (AppThemeId) -> Unit = {},
     uploadState: DebugDumpUploadState,
@@ -232,6 +235,8 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 ThemePickerCard(selected = appTheme, onSelect = onSelectTheme)
+
+                PtyThemePickerCard(ptyTheme, onSelectPtyTheme)
 
                 // 1. VM Connection Card
                 Surface(

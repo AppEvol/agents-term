@@ -172,6 +172,9 @@ fun AgentsTermApp(viewModel: MainViewModel) {
     val sshProfile by viewModel.sshProfile.collectAsStateWithLifecycle()
     val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle()
     val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
+    val ptyTheme by viewModel.ptyTheme.collectAsStateWithLifecycle()
+    val ptyPalette = terminalThemePalette(ptyTheme)
+    LaunchedEffect(ptyPalette) { viewModel.ptySessions.updatePalette(ptyPalette) }
     val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsStateWithLifecycle()
     val usageByAgent by viewModel.usageController.usageByAgent.collectAsStateWithLifecycle()
@@ -216,6 +219,8 @@ fun AgentsTermApp(viewModel: MainViewModel) {
             sshProfile = sshProfile,
             debugSettings = debugSettings,
             appTheme = appTheme,
+            ptyTheme = ptyTheme,
+            onSelectPtyTheme = viewModel::setPtyTheme,
             onSelectTheme = { viewModel.setAppTheme(it) },
             uploadState = debugUploadState,
             eventCount = debugEventCount,
@@ -521,7 +526,8 @@ fun AgentsTermApp(viewModel: MainViewModel) {
                 },
                 onRetryFullAccess = { viewModel.retryLastUserPromptWithFullAccess() },
                 composerAttachments = composerAttachments,
-                ptySessionProvider = { tabId, palette -> viewModel.ptySessionFor(tabId, palette) },
+                ptyPalette = ptyPalette,
+                ptySessionProvider = { tabId, palette -> viewModel.ptySessions.getOrCreate(tabId, state.config, palette) },
                 onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
             )
         }
@@ -1044,6 +1050,7 @@ internal fun WorkspaceScaffold(
     activeMessagesFlow: StateFlow<List<ChatMessage>>? = null,
     composerAttachments: ComposerAttachments? = null,
     activeDraft: TextFieldState? = rememberActiveDraft(state),
+    ptyPalette: TerminalThemePalette = terminalThemePalette(),
     ptySessionProvider: ((tabId: String, palette: TerminalThemePalette) -> PtyTabSession)? = null,
     onShowMessage: (String) -> Unit = {},
 ) {
@@ -1501,13 +1508,13 @@ internal fun WorkspaceScaffold(
             )
         } else if (activeTab.isPtyShell && ptySessionProvider != null) {
             key(activeTab.id) {
-                val palette = rememberTerminalThemePalette()
                 val ptySession = remember(activeTab.id, state.config) {
-                    ptySessionProvider(activeTab.id, palette)
+                    ptySessionProvider(activeTab.id, ptyPalette)
                 }
                 PtyTerminalWorkspace(
                     tab = activeTab,
                     session = ptySession,
+                    palette = ptyPalette,
                     onShowMessage = onShowMessage,
                     modifier = Modifier
                         .padding(innerPadding)
