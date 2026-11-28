@@ -39,15 +39,6 @@ internal val LocalMarkdownParseDispatcher = staticCompositionLocalOf<CoroutineDi
 }
 
 /**
- * Dispatcher used to commit parsed Markdown blocks back to Compose state. Defaults to
- * [Dispatchers.Main.immediate] so commits and [AsyncMarkdownSession] worker-state updates never
- * run on a background worker thread even when Compose tests use an unconfined effect dispatcher.
- */
-internal val LocalMarkdownCommitDispatcher = staticCompositionLocalOf<CoroutineDispatcher> {
-    Dispatchers.Main.immediate
-}
-
-/**
  * Threshold (in estimated parse chars) below which Markdown parses synchronously; tests can set
  * this to `0` to force all non-empty parses onto [LocalMarkdownParseDispatcher].
  */
@@ -78,7 +69,6 @@ internal class AsyncMarkdownSession(
     private val scope: CoroutineScope,
     private val parseDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val syncThresholdChars: Int = DEFAULT_SYNC_PARSE_THRESHOLD_CHARS,
-    private val commitDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val onAsyncCommit: (List<MdBlock>) -> Unit = {},
 ) {
     private val state = StreamingMarkdownState()
@@ -141,7 +131,7 @@ internal class AsyncMarkdownSession(
         needsWorkerLaunch = false
         workerActive = true
         asyncDispatchCount++
-        workerJob = scope.launch(commitDispatcher) {
+        workerJob = scope.launch {
             try {
                 drainPendingRequests()
             } finally {
@@ -193,15 +183,13 @@ internal fun rememberParsedMarkdownBlocks(
 ): List<MdBlock> {
     val scope = rememberCoroutineScope()
     val dispatcher = LocalMarkdownParseDispatcher.current
-    val commitDispatcher = LocalMarkdownCommitDispatcher.current
     val syncThreshold = LocalMarkdownSyncParseThreshold.current
     var asyncCommitVersion by remember { mutableLongStateOf(0L) }
-    val session = remember(scope, dispatcher, commitDispatcher, syncThreshold) {
+    val session = remember(scope, dispatcher, syncThreshold) {
         AsyncMarkdownSession(
             scope = scope,
             parseDispatcher = dispatcher,
             syncThresholdChars = syncThreshold,
-            commitDispatcher = commitDispatcher,
             onAsyncCommit = { asyncCommitVersion++ },
         )
     }
@@ -226,7 +214,6 @@ internal class ChatMarkdownCache(
     private val scope: CoroutineScope,
     private val parseDispatcher: CoroutineDispatcher,
     private val syncThresholdChars: Int = DEFAULT_SYNC_PARSE_THRESHOLD_CHARS,
-    private val commitDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
 ) {
     private val sessions = HashMap<String, AsyncMarkdownSession>()
     private val displayBlockCache = HashMap<String, CachedDisplayBlocks>()
@@ -257,7 +244,6 @@ internal class ChatMarkdownCache(
                 scope = scope,
                 parseDispatcher = parseDispatcher,
                 syncThresholdChars = syncThresholdChars,
-                commitDispatcher = commitDispatcher,
                 onAsyncCommit = { commitVersion++ },
             )
         }

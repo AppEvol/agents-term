@@ -97,7 +97,6 @@ import com.appevol.agentsterm.ui.theme.sectionTitleColor
 import com.appevol.agentsterm.ui.theme.themedCorner
 import com.appevol.agentsterm.ui.theme.titleBarColors
 import com.appevol.agentsterm.ui.theme.titleBarTitleStyle
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -565,7 +564,7 @@ fun SettingsScreen(
 
                         ThemedButton(
                             onClick = {
-                                scope.launch(Dispatchers.Main.immediate) {
+                                scope.launch {
                                     val shot = if (debugSettings.includeScreenshot) {
                                         captureWindowScreenshotBase64(context.findActivityOrNull())
                                     } else {
@@ -606,7 +605,7 @@ fun SettingsScreen(
                         ThemedOutlinedButton(
                             onClick = {
                                 if (isExportingZip) return@ThemedOutlinedButton
-                                scope.launch(Dispatchers.Main.immediate) {
+                                scope.launch {
                                     isExportingZip = true
                                     val shot = if (debugSettings.includeScreenshot) {
                                         captureWindowScreenshotBase64(context.findActivityOrNull())

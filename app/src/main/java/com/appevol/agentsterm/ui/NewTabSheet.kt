@@ -72,9 +72,7 @@ import com.appevol.agentsterm.ui.theme.ThemedSwitch
 import com.appevol.agentsterm.ui.theme.ThemedTextButton
 import com.appevol.agentsterm.ui.theme.ThemedTextField
 import com.appevol.agentsterm.ui.theme.themedCorner
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @Composable
 internal fun newTabButtonLabel(
@@ -218,23 +216,21 @@ internal fun NewTabSheetContent(
     }
 
     LaunchedEffect(initialCwd) {
-        withContext(Dispatchers.Main.immediate) {
+        fsError = null
+        val loader = onLoadInitialDirectories ?: onLoadDirectories
+        loader(initialCwd).onSuccess {
+            fsListing = it
+            setCwdWithEndSelection(it.path)
             fsError = null
-            val loader = onLoadInitialDirectories ?: onLoadDirectories
-            loader(initialCwd).onSuccess {
-                fsListing = it
-                setCwdWithEndSelection(it.path)
-                fsError = null
-            }.onFailure { err ->
-                fsError = err.message ?: err::class.java.simpleName
-            }
+        }.onFailure { err ->
+            fsError = err.message ?: err::class.java.simpleName
         }
     }
 
     fun browseTo(targetPath: String) {
         setCwdWithEndSelection(targetPath)
         fsError = null
-        scope.launch(Dispatchers.Main.immediate) {
+        scope.launch {
             onLoadDirectories(targetPath).onSuccess {
                 fsListing = it
                 setCwdWithEndSelection(it.path)

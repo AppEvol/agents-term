@@ -127,7 +127,6 @@ import com.appevol.agentsterm.data.formatAttachmentCount
 import com.appevol.agentsterm.data.formatToolCallSummary
 import com.appevol.agentsterm.data.formatToolRunSummary
 import com.appevol.agentsterm.ui.markdown.ChatMarkdownCache
-import com.appevol.agentsterm.ui.markdown.LocalMarkdownCommitDispatcher
 import com.appevol.agentsterm.ui.markdown.LocalMarkdownParseDispatcher
 import com.appevol.agentsterm.ui.markdown.LocalMarkdownSyncParseThreshold
 import com.appevol.agentsterm.ui.markdown.MarkdownStyle
@@ -142,11 +141,9 @@ import com.appevol.agentsterm.ui.theme.ThemedButton
 import com.appevol.agentsterm.ui.theme.ThemedFilterChip
 import com.appevol.agentsterm.ui.theme.isLunaControls
 import com.appevol.agentsterm.ui.theme.themedCorner
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.Locale
 
 private const val CHAT_BOTTOM_SENTINEL_KEY = "__chat_bottom_sentinel__"
@@ -483,14 +480,12 @@ fun ChatWorkspace(
     }
     val scope = rememberCoroutineScope()
     val parseDispatcher = LocalMarkdownParseDispatcher.current
-    val commitDispatcher = LocalMarkdownCommitDispatcher.current
     val syncParseThreshold = LocalMarkdownSyncParseThreshold.current
-    val markdownCache = remember(tab.id, scope, parseDispatcher, commitDispatcher, syncParseThreshold) {
+    val markdownCache = remember(tab.id, scope, parseDispatcher, syncParseThreshold) {
         ChatMarkdownCache(
             scope = scope,
             parseDispatcher = parseDispatcher,
             syncThresholdChars = syncParseThreshold,
-            commitDispatcher = commitDispatcher,
         )
     }
     DisposableEffect(markdownCache) {
@@ -536,32 +531,28 @@ fun ChatWorkspace(
     }
 
     // Track manual scrolls (including non-touch scrolls) to pause/resume auto-scroll.
-    // Confined to Main.immediate so snapshotFlow emissions never run off the UI thread under
-    // Compose's UnconfinedTestDispatcher in instrumented tests.
     LaunchedEffect(tab.id, listState) {
-        withContext(Dispatchers.Main.immediate) {
-            var prevIndex = listState.firstVisibleItemIndex
-            var prevOffset = listState.firstVisibleItemScrollOffset
-            snapshotFlow {
-                ChatScrollSnapshot(
-                    firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                    firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
-                    canScrollForward = listState.canScrollForward,
-                    isScrollInProgress = listState.isScrollInProgress,
-                )
-            }.collect { snap ->
-                val movedBackward = snap.firstVisibleItemIndex < prevIndex ||
-                    (snap.firstVisibleItemIndex == prevIndex && snap.firstVisibleItemScrollOffset < prevOffset)
-                if (!isProgrammaticScroll) {
-                    if (!snap.canScrollForward && !snap.isScrollInProgress) {
-                        autoScrollPinned = true
-                    } else if (snap.canScrollForward && movedBackward) {
-                        autoScrollPinned = false
-                    }
+        var prevIndex = listState.firstVisibleItemIndex
+        var prevOffset = listState.firstVisibleItemScrollOffset
+        snapshotFlow {
+            ChatScrollSnapshot(
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+                canScrollForward = listState.canScrollForward,
+                isScrollInProgress = listState.isScrollInProgress,
+            )
+        }.collect { snap ->
+            val movedBackward = snap.firstVisibleItemIndex < prevIndex ||
+                (snap.firstVisibleItemIndex == prevIndex && snap.firstVisibleItemScrollOffset < prevOffset)
+            if (!isProgrammaticScroll) {
+                if (!snap.canScrollForward && !snap.isScrollInProgress) {
+                    autoScrollPinned = true
+                } else if (snap.canScrollForward && movedBackward) {
+                    autoScrollPinned = false
                 }
-                prevIndex = snap.firstVisibleItemIndex
-                prevOffset = snap.firstVisibleItemScrollOffset
             }
+            prevIndex = snap.firstVisibleItemIndex
+            prevOffset = snap.firstVisibleItemScrollOffset
         }
     }
 
@@ -595,19 +586,17 @@ fun ChatWorkspace(
         sendGeneration = sendGeneration,
     )
     LaunchedEffect(tab.id, autoScrollSignal) {
-        withContext(Dispatchers.Main.immediate) {
-            if (messages.isEmpty() || !autoScrollPinned) return@withContext
-            if (listState.isScrollInProgress) {
-                snapshotFlow { listState.isScrollInProgress }.first { !it }
-            }
-            val sentinelIndex = latestFeedItemCount
-            if (sentinelIndex > 0 && autoScrollPinned) {
-                isProgrammaticScroll = true
-                try {
-                    listState.scrollToItem(sentinelIndex)
-                } finally {
-                    isProgrammaticScroll = false
-                }
+        if (messages.isEmpty() || !autoScrollPinned) return@LaunchedEffect
+        if (listState.isScrollInProgress) {
+            snapshotFlow { listState.isScrollInProgress }.first { !it }
+        }
+        val sentinelIndex = latestFeedItemCount
+        if (sentinelIndex > 0 && autoScrollPinned) {
+            isProgrammaticScroll = true
+            try {
+                listState.scrollToItem(sentinelIndex)
+            } finally {
+                isProgrammaticScroll = false
             }
         }
     }
@@ -687,7 +676,7 @@ fun ChatWorkspace(
             if (showScrollToBottom) {
                 SmallFloatingActionButton(
                     onClick = {
-                        scope.launch(Dispatchers.Main.immediate) {
+                        scope.launch {
                             val sentinelIndex = latestFeedItemCount
                             if (sentinelIndex > 0) {
                                 autoScrollPinned = true
