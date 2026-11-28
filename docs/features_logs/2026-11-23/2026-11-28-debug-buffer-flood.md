@@ -1,0 +1,6 @@
+- **Debug event buffer survives busy agent sessions** ([#188](https://github.com/AppEvol/agents-term/issues/188), [#121](https://github.com/AppEvol/agents-term/issues/121)):
+  - Routine WebSocket frames (streaming deltas, `tab_updated` without a status change, running/done `tool_update`, `model_throughput`, `app_state_request`) are now counted into one `ws_frame_batch` summary every 10 s instead of logged one by one. `ws_delta_batch` is replaced by `ws_frame_batch`.
+  - Tab status changes, failed tools, new messages and unknown frames are still logged individually, with payloads capped at 512 characters.
+  - The 600-event ring is split: network traffic (`ws`, `http`) gets 400 slots and errors, lifecycle, UI and other events keep 200, so traffic can no longer evict them. Unused slots are borrowed.
+  - Payloads are truncated before sanitizing, and the sanitizer also redacts tokens and private keys cut off by truncation.
+  - Uploaded dumps include the summary for the window that is still open.

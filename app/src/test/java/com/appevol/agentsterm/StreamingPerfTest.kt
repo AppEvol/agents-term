@@ -10,7 +10,7 @@ import com.appevol.agentsterm.data.MessageSegment
 import com.appevol.agentsterm.data.TabMessagesResponse
 import com.appevol.agentsterm.data.TabRecord
 import com.appevol.agentsterm.data.ToolCallItem
-import com.appevol.agentsterm.data.WsDeltaLogAggregator
+import com.appevol.agentsterm.data.WsFrameLogAggregator
 import com.appevol.agentsterm.data.WsServerEnvelope
 import com.appevol.agentsterm.data.formatIsoUtc
 import com.appevol.agentsterm.data.sanitizeDebugText
@@ -265,7 +265,7 @@ class StreamingPerfTest {
     fun deltaLogAggregatorBatchesFramesAndSanitizerFastPathAvoidsAllocations() {
         var nowMs = 10_000L
         val recorder = DebugRecorder(maxEvents = 600)
-        val aggregator = WsDeltaLogAggregator(
+        val aggregator = WsFrameLogAggregator(
             debugRecorder = recorder,
             flushIntervalMs = 5_000L,
             clockMs = { nowMs },
@@ -273,7 +273,7 @@ class StreamingPerfTest {
 
         repeat(500) { i ->
             nowMs += 5L // 2.5s total, still within the 5s batch window
-            aggregator.recordDelta(
+            aggregator.onFrame(
                 WsServerEnvelope(
                     type = "message_delta",
                     tabId = "t${i % 3}",
@@ -281,18 +281,21 @@ class StreamingPerfTest {
                     textDelta = "abcd",
                     thinkingDelta = if (i % 2 == 0) "xy" else null,
                 ),
+                rawText = "{}",
             )
         }
         assertEquals(0, recorder.count)
 
         nowMs += 3_000L // crosses 5s window on next delta
-        aggregator.recordDelta(
+        aggregator.onFrame(
             WsServerEnvelope(type = "message_delta", tabId = "t0", messageId = "m1", textDelta = "z"),
+            rawText = "{}",
         )
         assertEquals(1, recorder.count)
         val batch = recorder.snapshot().single()
-        assertEquals("ws_delta_batch", batch.event)
+        assertEquals("ws_frame_batch", batch.event)
         assertTrue(batch.detail.contains("frames=501"))
+        assertTrue(batch.detail.contains("deltas=501"))
         assertTrue(batch.detail.contains("textChars=2001"))
         assertTrue(batch.detail.contains("thinkingChars=500"))
         assertTrue(batch.detail.contains("tabs=3"))

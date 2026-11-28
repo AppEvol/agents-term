@@ -524,7 +524,8 @@ open class AgentsTermApiClient(
         )
 
         val closedNotified = AtomicBoolean(false)
-        val deltaLogAggregator = WsDeltaLogAggregator(debugRecorder)
+        val frameLogAggregator = WsFrameLogAggregator(debugRecorder)
+        debugRecorder?.setPendingFlush(frameLogAggregator::flush)
         fun notifyClosedOnce(reason: String?, httpStatusCode: Int? = null) {
             if (closedNotified.compareAndSet(false, true)) {
                 onClosed(reason, httpStatusCode)
@@ -546,29 +547,7 @@ open class AgentsTermApiClient(
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     runCatching { decodeAgentsTermJson<WsServerEnvelope>(text) }
                         .onSuccess { env ->
-                            if (env.type == "message_delta") {
-                                deltaLogAggregator.recordDelta(env)
-                            } else {
-                                if (env.type == "message_updated") {
-                                    deltaLogAggregator.flush()
-                                }
-                                if (debugRecorder != null) {
-                                    val summary = buildString {
-                                        append("type=${env.type}")
-                                        if (!env.tabId.isNullOrBlank()) append(" tab=${env.tabId}")
-                                        if (!env.messageId.isNullOrBlank()) append(" msg=${env.messageId}")
-                                        if (env.tab != null) append(" tabStatus=${env.tab.status}")
-                                        if (env.message != null) append(" msgStatus=${env.message.status}")
-                                        if (env.toolCall != null) append(" tool=${env.toolCall.name}:${env.toolCall.status}")
-                                    }
-                                    debugRecorder.record(
-                                        category = "ws",
-                                        event = "ws_event",
-                                        detail = summary,
-                                        payload = text,
-                                    )
-                                }
-                            }
+                            frameLogAggregator.onFrame(env, text)
                             onEvent(env)
                         }
                         .onFailure { err ->
@@ -582,7 +561,7 @@ open class AgentsTermApiClient(
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                    deltaLogAggregator.flush()
+                    frameLogAggregator.flush()
                     debugRecorder?.record(
                         category = "ws",
                         event = "ws_closing",
@@ -593,7 +572,7 @@ open class AgentsTermApiClient(
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    deltaLogAggregator.flush()
+                    frameLogAggregator.flush()
                     debugRecorder?.record(
                         category = "ws",
                         event = "ws_closed",
@@ -603,7 +582,7 @@ open class AgentsTermApiClient(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    deltaLogAggregator.flush()
+                    frameLogAggregator.flush()
                     val codeMsg = response?.let { "HTTP ${it.code}: ${it.message}" }
                     val reason = codeMsg ?: t.message ?: "Connection lost"
                     recordWebSocketFailure(
@@ -620,34 +599,104 @@ open class AgentsTermApiClient(
 }
 
 /**
- * Aggregates high-frequency `message_delta` WebSocket frames into periodic summary events so
- * streaming does not allocate per-delta telemetry objects or wipe the 600-event ring buffer.
+ * Keeps WebSocket telemetry from flooding the [DebugRecorder] ring buffer (#33, #188).
+ *
+ * Routine high-frequency frames are only counted and written as one `ws_frame_batch` summary
+ * per window, without payload:
+ * - `message_delta` streaming text,
+ * - `tab_updated` that does not change the tab's status (progress text, `updatedAt`, unread),
+ * - `tool_update` for a tool that is running or finished normally,
+ * - `model_throughput` and `app_state_request` (the debug CLI command is logged separately
+ *   as `app_state_command`).
+ *
+ * Every other frame (tab created/deleted, messages created/updated, tab status changes,
+ * failed tools, unknown types) is still recorded as its own `ws_event` with a short payload.
  */
-internal class WsDeltaLogAggregator(
+internal class WsFrameLogAggregator(
     private val debugRecorder: DebugRecorder?,
     private val flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
 ) {
     private val lock = Any()
     private var frames = 0
+    private var deltas = 0
     private var textChars = 0
     private var thinkingChars = 0
+    private var tabUpdates = 0
+    private var toolUpdates = 0
+    private var throughput = 0
+    private var appStateRequests = 0
     private val tabIds = LinkedHashSet<String>()
     private var windowStartMs = 0L
+    private val lastTabStatus = HashMap<String, String>()
 
-    fun recordDelta(env: WsServerEnvelope) {
+    fun onFrame(env: WsServerEnvelope, rawText: String) {
         if (debugRecorder == null) return
+        if (isRoutine(env)) {
+            countRoutine(env)
+        } else {
+            debugRecorder.record(
+                category = "ws",
+                event = "ws_event",
+                detail = describe(env),
+                payload = rawText,
+                payloadLimit = EVENT_PAYLOAD_CHARS,
+            )
+        }
+    }
+
+    fun flush() {
+        if (debugRecorder == null) return
+        val summary: String
+        val ts: Long
+        synchronized(lock) {
+            if (frames == 0) return
+            ts = clockMs()
+            summary = drainSummaryLocked(ts)
+        }
+        debugRecorder.record(category = "ws", event = BATCH_EVENT, detail = summary, ts = ts)
+    }
+
+    private fun isRoutine(env: WsServerEnvelope): Boolean = when (env.type) {
+        "message_delta", "model_throughput", "app_state_request" -> true
+
+        "tool_update" -> env.toolCall?.status in ROUTINE_TOOL_STATUSES
+
+        "tab_updated" -> {
+            val tab = env.tab
+            if (tab == null) {
+                false
+            } else {
+                synchronized(lock) { lastTabStatus.put(tab.id, tab.status) == tab.status }
+            }
+        }
+
+        else -> false
+    }
+
+    private fun countRoutine(env: WsServerEnvelope) {
         val summary: String?
         val ts: Long
         synchronized(lock) {
             val now = clockMs()
-            if (frames == 0) {
-                windowStartMs = now
-            }
+            if (frames == 0) windowStartMs = now
             frames++
-            textChars += env.textDelta?.length ?: 0
-            thinkingChars += env.thinkingDelta?.length ?: 0
-            env.tabId?.takeIf { it.isNotBlank() }?.let { tabIds.add(it) }
+            when (env.type) {
+                "message_delta" -> {
+                    deltas++
+                    textChars += env.textDelta?.length ?: 0
+                    thinkingChars += env.thinkingDelta?.length ?: 0
+                }
+
+                "tab_updated" -> tabUpdates++
+
+                "tool_update" -> toolUpdates++
+
+                "model_throughput" -> throughput++
+
+                "app_state_request" -> appStateRequests++
+            }
+            (env.tabId ?: env.tab?.id)?.takeIf { it.isNotBlank() }?.let { tabIds.add(it) }
             if (now - windowStartMs >= flushIntervalMs) {
                 summary = drainSummaryLocked(now)
                 ts = now
@@ -657,22 +706,7 @@ internal class WsDeltaLogAggregator(
             }
         }
         if (summary != null) {
-            debugRecorder.record(category = "ws", event = "ws_delta_batch", detail = summary, ts = ts)
-        }
-    }
-
-    fun flush() {
-        if (debugRecorder == null) return
-        val summary: String?
-        val ts: Long
-        synchronized(lock) {
-            if (frames == 0) return
-            val now = clockMs()
-            summary = drainSummaryLocked(now)
-            ts = now
-        }
-        if (summary != null) {
-            debugRecorder.record(category = "ws", event = "ws_delta_batch", detail = summary, ts = ts)
+            debugRecorder?.record(category = "ws", event = BATCH_EVENT, detail = summary, ts = ts)
         }
     }
 
@@ -680,20 +714,41 @@ internal class WsDeltaLogAggregator(
         val elapsedMs = (nowMs - windowStartMs).coerceAtLeast(0L)
         val detail = buildString {
             append("frames=").append(frames)
-            append(" textChars=").append(textChars)
+            if (deltas > 0) append(" deltas=").append(deltas).append(" textChars=").append(textChars)
             if (thinkingChars > 0) append(" thinkingChars=").append(thinkingChars)
+            if (tabUpdates > 0) append(" tabUpdates=").append(tabUpdates)
+            if (toolUpdates > 0) append(" toolUpdates=").append(toolUpdates)
+            if (throughput > 0) append(" throughput=").append(throughput)
+            if (appStateRequests > 0) append(" appStateRequests=").append(appStateRequests)
             append(" tabs=").append(tabIds.size)
             append(" windowMs=").append(elapsedMs)
         }
         frames = 0
+        deltas = 0
         textChars = 0
         thinkingChars = 0
+        tabUpdates = 0
+        toolUpdates = 0
+        throughput = 0
+        appStateRequests = 0
         tabIds.clear()
         windowStartMs = nowMs
         return detail
     }
 
+    private fun describe(env: WsServerEnvelope): String = buildString {
+        append("type=${env.type}")
+        if (!env.tabId.isNullOrBlank()) append(" tab=${env.tabId}")
+        if (!env.messageId.isNullOrBlank()) append(" msg=${env.messageId}")
+        if (env.tab != null) append(" tabStatus=${env.tab.status}")
+        if (env.message != null) append(" msgStatus=${env.message.status}")
+        if (env.toolCall != null) append(" tool=${env.toolCall.name}:${env.toolCall.status}")
+    }
+
     companion object {
-        private const val DEFAULT_FLUSH_INTERVAL_MS = 5_000L
+        const val BATCH_EVENT = "ws_frame_batch"
+        private const val DEFAULT_FLUSH_INTERVAL_MS = 10_000L
+        private const val EVENT_PAYLOAD_CHARS = 512
+        private val ROUTINE_TOOL_STATUSES = setOf("running", "done")
     }
 }

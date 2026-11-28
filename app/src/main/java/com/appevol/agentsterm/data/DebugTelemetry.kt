@@ -40,6 +40,11 @@ private val privateKeyBlockRegex = Regex(
     """-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----""",
 )
 
+// Text is truncated before it is sanitized, so a secret can be cut off before its closing
+// delimiter. These patterns redact such an unterminated secret through the end of the text.
+private val unterminatedPrivateKeyRegex = Regex("""-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*$""")
+private val unterminatedJsonTokenRegex = Regex("""(?i)("token"\s*:\s*")[^"]*$""")
+
 private val UTC_TIME_ZONE: TimeZone = TimeZone.getTimeZone("UTC")
 private val isoUtcFormat: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
     override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
@@ -58,10 +63,12 @@ fun sanitizeDebugText(raw: String): String {
         return raw
     }
     var result = privateKeyBlockRegex.replace(raw, "[REDACTED_PRIVATE_KEY]")
+    result = unterminatedPrivateKeyRegex.replace(result, "[REDACTED_PRIVATE_KEY]")
     result = bearerTokenRegex.replace(result, "Bearer [REDACTED]")
     result = queryTokenRegex.replace(result, "$1[REDACTED]")
     result = labelTokenRegex.replace(result, "$1[REDACTED]")
     result = jsonTokenRegex.replace(result, "$1[REDACTED]$3")
+    result = unterminatedJsonTokenRegex.replace(result, "$1[REDACTED]")
     return result
 }
 
@@ -75,23 +82,46 @@ fun generateDebugDumpId(): String = UUID.randomUUID().toString().substring(0, 8)
 /**
  * Thread-safe bounded ring buffer capturing sanitized HTTP, WebSocket, SSH, and UI events
  * for rapid debugging of mobile issues directly on the connected VM.
+ *
+ * The [maxEvents] slots are split between two classes so that a flood of network traffic
+ * cannot evict the rare events that explain a bug. Network traffic (`ws` and `http`) gets
+ * [trafficBudget] slots and everything else (errors, lifecycle, UI, SSH, PTY, app state)
+ * gets the rest. A class may borrow the other class's unused slots; once the buffer is
+ * full, the oldest event of whichever class is over its budget is evicted.
  */
 class DebugRecorder(
     private val maxEvents: Int = 600,
     private val maxPayloadChars: Int = 2048,
+    trafficBudget: Int = maxEvents * 2 / 3,
 ) {
+    private val trafficBudget = trafficBudget.coerceIn(0, maxEvents)
     private val lock = Any()
-    private val events = ArrayDeque<DebugEvent>(maxEvents.coerceAtMost(600))
+    private val traffic = ArrayDeque<Sequenced>()
+    private val essential = ArrayDeque<Sequenced>()
+    private var nextSeq = 0L
 
     @Volatile
     private var onCountChanged: ((Int) -> Unit)? = null
+
+    @Volatile
+    private var pendingFlush: (() -> Unit)? = null
 
     fun setCountListener(listener: ((Int) -> Unit)?) {
         onCountChanged = listener
     }
 
+    /**
+     * Registers a source of buffered summaries (the live WebSocket's frame aggregator) that is
+     * flushed by [toNdjson], so an uploaded dump includes the summary for the current window.
+     * [snapshot] does not flush, so that polling (`logs -f`, the Recent Events viewer) does
+     * not cut the summary windows short.
+     */
+    fun setPendingFlush(flush: (() -> Unit)?) {
+        pendingFlush = flush
+    }
+
     val count: Int
-        get() = synchronized(lock) { events.size }
+        get() = synchronized(lock) { traffic.size + essential.size }
 
     fun record(
         category: String,
@@ -99,14 +129,15 @@ class DebugRecorder(
         detail: String,
         payload: String? = null,
         ts: Long = System.currentTimeMillis(),
+        payloadLimit: Int = maxPayloadChars,
     ) {
-        val cleanDetail = sanitizeDebugText(detail).take(1000)
+        // Truncate before sanitizing so large frames are never scanned in full (#121).
+        val cleanDetail = sanitizeDebugText(detail.take(MAX_DETAIL_CHARS))
         val cleanPayload = payload?.takeIf { it.isNotBlank() }?.let { raw ->
-            val sanitized = sanitizeDebugText(raw)
-            if (sanitized.length > maxPayloadChars) {
-                sanitized.take(maxPayloadChars) + "…[truncated ${sanitized.length} chars]"
+            if (raw.length > payloadLimit) {
+                sanitizeDebugText(raw.take(payloadLimit)) + "…[truncated ${raw.length} chars]"
             } else {
-                sanitized
+                sanitizeDebugText(raw)
             }
         }
         val entry = DebugEvent(
@@ -117,19 +148,36 @@ class DebugRecorder(
             detail = cleanDetail,
             payload = cleanPayload,
         )
+        val isTraffic = category in TRAFFIC_CATEGORIES
         val newSize = synchronized(lock) {
-            if (events.size >= maxEvents) {
-                events.removeFirst()
+            val own = if (isTraffic) traffic else essential
+            val other = if (isTraffic) essential else traffic
+            val ownBudget = if (isTraffic) trafficBudget else maxEvents - trafficBudget
+            if (traffic.size + essential.size >= maxEvents) {
+                // When full, at least one class is at or over its budget: evict from the
+                // incoming class if it is, otherwise from the other class.
+                if (own.size >= ownBudget || other.isEmpty()) own.removeFirstOrNull() else other.removeFirst()
             }
-            events.addLast(entry)
-            events.size
+            if (maxEvents > 0) own.addLast(Sequenced(nextSeq++, entry))
+            traffic.size + essential.size
         }
         onCountChanged?.invoke(newSize)
     }
 
-    fun snapshot(): List<DebugEvent> = synchronized(lock) { events.toList() }
+    fun snapshot(): List<DebugEvent> = synchronized(lock) {
+        val merged = ArrayList<DebugEvent>(traffic.size + essential.size)
+        var i = 0
+        var j = 0
+        while (i < traffic.size || j < essential.size) {
+            val takeTraffic = j >= essential.size ||
+                (i < traffic.size && traffic[i].seq < essential[j].seq)
+            merged += if (takeTraffic) traffic[i++].event else essential[j++].event
+        }
+        merged
+    }
 
     fun toNdjson(): String {
+        pendingFlush?.invoke()
         val list = snapshot()
         if (list.isEmpty()) return ""
         return buildString {
@@ -140,8 +188,18 @@ class DebugRecorder(
     }
 
     fun clear() {
-        synchronized(lock) { events.clear() }
+        synchronized(lock) {
+            traffic.clear()
+            essential.clear()
+        }
         onCountChanged?.invoke(0)
+    }
+
+    private class Sequenced(val seq: Long, val event: DebugEvent)
+
+    private companion object {
+        const val MAX_DETAIL_CHARS = 1000
+        val TRAFFIC_CATEGORIES = setOf("ws", "http")
     }
 }
 
