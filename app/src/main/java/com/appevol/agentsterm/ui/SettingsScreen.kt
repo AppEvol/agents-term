@@ -236,8 +236,6 @@ fun SettingsScreen(
             ) {
                 ThemePickerCard(selected = appTheme, onSelect = onSelectTheme)
 
-                PtyThemePickerCard(ptyTheme, onSelectPtyTheme)
-
                 // 1. VM Connection Card
                 Surface(
                     shape = themedCorner(18.dp),
@@ -379,6 +377,8 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                PtyThemePickerCard(ptyTheme, onSelectPtyTheme)
 
                 // 2. Debug Sharing to VM Card
                 Surface(
