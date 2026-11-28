@@ -738,7 +738,6 @@ impl StateStore {
         override_permission_mode: Option<&str>,
         attachments: &[Value],
     ) -> Option<(Value, Value)> {
-        let tab = self.get_tab(tab_id)?;
         let mut item = json!({
             "id": format!("q_{}", rand_hex(6)),
             "text": text,
@@ -748,31 +747,53 @@ impl StateStore {
         if !attachments.is_empty() {
             item["attachments"] = Value::Array(attachments.to_vec());
         }
-        let mut queued = tab
-            .get("queuedMessages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        queued.push(item.clone());
-        let mut patch = Map::new();
-        patch.insert("queuedMessages".into(), Value::Array(queued));
-        let updated = self.update_tab(tab_id, patch)?;
+        let updated = {
+            let mut inner = self.inner.lock().unwrap();
+            let tab = inner
+                .tabs
+                .iter_mut()
+                .find(|t| t.get("id").and_then(Value::as_str) == Some(tab_id))?;
+            let obj = tab.as_object_mut()?;
+            let mut queued = obj
+                .get("queuedMessages")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            queued.push(item.clone());
+            obj.insert("queuedMessages".into(), Value::Array(queued));
+            obj.insert("updatedAt".into(), json!(now_ms()));
+            let cloned = tab.clone();
+            inner.mark_index_dirty();
+            cloned
+        };
+        self.schedule_save();
         Some((updated, item))
     }
 
     pub fn remove_queued_message(&self, tab_id: &str, queued_id: &str) -> Option<Value> {
-        let tab = self.get_tab(tab_id)?;
-        let queued: Vec<Value> = tab
-            .get("queuedMessages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|m| m.get("id").and_then(Value::as_str) != Some(queued_id))
-            .collect();
-        let mut patch = Map::new();
-        patch.insert("queuedMessages".into(), Value::Array(queued));
-        self.update_tab(tab_id, patch)
+        let updated = {
+            let mut inner = self.inner.lock().unwrap();
+            let tab = inner
+                .tabs
+                .iter_mut()
+                .find(|t| t.get("id").and_then(Value::as_str) == Some(tab_id))?;
+            let obj = tab.as_object_mut()?;
+            let queued: Vec<Value> = obj
+                .get("queuedMessages")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.get("id").and_then(Value::as_str) != Some(queued_id))
+                .collect();
+            obj.insert("queuedMessages".into(), Value::Array(queued));
+            obj.insert("updatedAt".into(), json!(now_ms()));
+            let cloned = tab.clone();
+            inner.mark_index_dirty();
+            cloned
+        };
+        self.schedule_save();
+        Some(updated)
     }
 
     pub fn pop_next_queued_message(&self, tab_id: &str) -> Option<(Value, Value)> {
@@ -798,18 +819,31 @@ impl StateStore {
     }
 
     pub fn pop_queued_messages(&self, tab_id: &str) -> Option<(Value, Vec<Value>)> {
-        let tab = self.get_tab(tab_id)?;
-        let popped = tab
-            .get("queuedMessages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        if popped.is_empty() {
-            return Some((tab, Vec::new()));
+        let (updated, popped, mutated) = {
+            let mut inner = self.inner.lock().unwrap();
+            let tab = inner
+                .tabs
+                .iter_mut()
+                .find(|t| t.get("id").and_then(Value::as_str) == Some(tab_id))?;
+            let obj = tab.as_object_mut()?;
+            let popped = obj
+                .get("queuedMessages")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if popped.is_empty() {
+                (tab.clone(), Vec::new(), false)
+            } else {
+                obj.insert("queuedMessages".into(), Value::Array(Vec::new()));
+                obj.insert("updatedAt".into(), json!(now_ms()));
+                let cloned = tab.clone();
+                inner.mark_index_dirty();
+                (cloned, popped, true)
+            }
+        };
+        if mutated {
+            self.schedule_save();
         }
-        let mut patch = Map::new();
-        patch.insert("queuedMessages".into(), Value::Array(Vec::new()));
-        let updated = self.update_tab(tab_id, patch)?;
         Some((updated, popped))
     }
 

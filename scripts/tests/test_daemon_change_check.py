@@ -244,6 +244,9 @@ class DaemonChangeCheckTest(unittest.TestCase):
 
         cases = [
             ("daemon-rs/tests/integration.rs", "true", "false", "false"),
+            ("rust-toolchain.toml", "true", "false", "false"),
+            ("scripts/ci/build_rust_daemon.sh", "true", "false", "false"),
+            ("scripts/ci/setup_rust_toolchain.sh", "true", "false", "false"),
             ("e2e/docker-vm/test_e2e.py", "false", "true", "false"),
             ("test_utils_py/retry.py", "true", "true", "true"),
             ("scripts/native_test_retries.py", "true", "true", "true"),

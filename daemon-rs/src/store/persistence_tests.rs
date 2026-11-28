@@ -164,3 +164,48 @@ fn legacy_v1_throughput_file_is_discarded_and_rewritten_on_open() {
         serde_json::from_slice(&fs::read(files.throughput_path()).unwrap()).unwrap();
     assert_eq!(rewritten["version"], 2);
 }
+
+#[test]
+fn concurrent_queue_mutations_do_not_lose_messages() {
+    let home = TestHome::new();
+    let store = StateStore::open(home.files(), write_atomic_file);
+    let tab_id = create_tab(&store);
+
+    let threads: Vec<_> = (0..8)
+        .map(|worker| {
+            let store = store.clone();
+            let tab_id = tab_id.clone();
+            std::thread::spawn(move || {
+                for i in 0..20 {
+                    let msg = format!("w{worker}-m{i}");
+                    store
+                        .enqueue_message(&tab_id, &msg, None, &[])
+                        .expect("enqueue_message failed");
+                }
+            })
+        })
+        .collect();
+    for handle in threads {
+        handle.join().unwrap();
+    }
+
+    let tab = store.get_tab(&tab_id).unwrap();
+    let queued = tab["queuedMessages"].as_array().unwrap();
+    assert_eq!(
+        queued.len(),
+        160,
+        "concurrent enqueue_message lost messages"
+    );
+
+    // Remove one message and pop the rest atomically.
+    let first_id = queued[0]["id"].as_str().unwrap().to_string();
+    let after_remove = store.remove_queued_message(&tab_id, &first_id).unwrap();
+    assert_eq!(
+        after_remove["queuedMessages"].as_array().unwrap().len(),
+        159
+    );
+
+    let (after_pop, popped) = store.pop_queued_messages(&tab_id).unwrap();
+    assert_eq!(popped.len(), 159);
+    assert!(after_pop["queuedMessages"].as_array().unwrap().is_empty());
+}

@@ -42,6 +42,8 @@ MIN_JDK=17
 # Robolectric needs this Java version for the unit tests. app/build.gradle.kts
 # asks Gradle for it as a toolchain; keep the two in step.
 UNIT_TEST_JDK=21
+# Pinned Rust toolchain; keep in step with rust-toolchain.toml.
+RUST_VERSION=1.100.0
 RUST_TARGETS=(x86_64-unknown-linux-musl aarch64-unknown-linux-musl)
 RUST_COMPONENTS=(rustfmt clippy)
 RUST_LINKS=(cargo rustc rustup rustfmt cargo-fmt cargo-clippy clippy-driver)
@@ -305,16 +307,16 @@ if getent group docker >/dev/null && ! id -nG "$target_user" | grep -qw docker; 
   echo "  added $target_user to the docker group (takes effect at next login)"
 fi
 
-step "Rust (rustup stable for $target_user)"
+step "Rust (rustup $RUST_VERSION for $target_user)"
 if ! has rustup; then
   fetch https://sh.rustup.rs "$tmp/rustup-init.sh"
   chmod 755 "$tmp" "$tmp/rustup-init.sh"
-  as_user sh "$tmp/rustup-init.sh" -y --profile minimal --default-toolchain stable
+  as_user sh "$tmp/rustup-init.sh" -y --profile minimal --default-toolchain "$RUST_VERSION"
 fi
-as_user "$target_home/.cargo/bin/rustup" toolchain install stable --no-self-update
-as_user "$target_home/.cargo/bin/rustup" default stable
-as_user "$target_home/.cargo/bin/rustup" component add "${RUST_COMPONENTS[@]}"
-as_user "$target_home/.cargo/bin/rustup" target add "${RUST_TARGETS[@]}"
+as_user "$target_home/.cargo/bin/rustup" toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+as_user "$target_home/.cargo/bin/rustup" default "$RUST_VERSION"
+as_user "$target_home/.cargo/bin/rustup" component add --toolchain "$RUST_VERSION" "${RUST_COMPONENTS[@]}"
+as_user "$target_home/.cargo/bin/rustup" target add --toolchain "$RUST_VERSION" "${RUST_TARGETS[@]}"
 # Agent shells do not always load ~/.cargo/env, so make the tools visible on
 # the default PATH as well.
 for tool in "${RUST_LINKS[@]}"; do

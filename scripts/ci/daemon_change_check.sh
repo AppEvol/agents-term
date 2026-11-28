@@ -62,7 +62,7 @@ fi
 
 if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
   CHANGED_FILES="$(git diff --name-only "${BASE_SHA}" HEAD || true)"
-  if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^daemon-rs/tests/.*\.rs$'; then
+  if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^(daemon-rs/tests/.*\.rs$|rust-toolchain\.toml$|scripts/ci/(build_rust_daemon|setup_rust_toolchain)\.sh$)'; then
     DAEMON_RS_TESTS_CHANGED="true"
   fi
   if printf '%s\n' "${CHANGED_FILES}" | grep -qE '^(e2e/docker-vm/|scripts/daemon-build-hash\.py$)'; then

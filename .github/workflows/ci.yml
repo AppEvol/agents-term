@@ -52,7 +52,18 @@ jobs:
           path: ~/.cache/agentsterm-static-checks
           key: static-checks-${{ runner.os }}-${{ hashFiles('scripts/static-checks.sh') }}
 
-      - name: Run static checks (ruff, ty, vulture, ktlint, detekt, shellcheck, actionlint)
+      - name: Cache Cargo registry and Clippy build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            daemon-rs/target
+          key: cargo-static-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'daemon-rs/Cargo.toml', 'daemon-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-static-${{ runner.os }}-
+
+      - name: Run static checks (ruff, ty, vulture, ktlint, detekt, rustfmt, clippy, shellcheck, actionlint)
         run: scripts/static-checks.sh
 
   script-tests:
@@ -165,7 +176,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             daemon-rs/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('daemon-rs/Cargo.toml', 'daemon-rs/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'daemon-rs/Cargo.toml', 'daemon-rs/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
 

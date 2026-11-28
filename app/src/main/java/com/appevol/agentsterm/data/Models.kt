@@ -36,8 +36,7 @@ data class ConnectionConfig(
 
     fun wsUrl(): String {
         val cleanHost = host.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
-        val base = "ws://$cleanHost:$port/ws"
-        return if (token.isNotBlank()) "$base?token=${token.trim()}" else base
+        return "ws://$cleanHost:$port/ws"
     }
 
     fun ptyWsUrl(

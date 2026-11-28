@@ -715,7 +715,16 @@ async fn patch_tab(
 
     let mut patch = Map::new();
     if let Some(title) = parsed.get("title").filter(|v| !v.is_null()) {
-        patch.insert("title".into(), title.clone());
+        let Some(title_str) = title.as_str() else {
+            return json_status(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "Field 'title' must be a string" }),
+            );
+        };
+        let trimmed = title_str.trim();
+        if !trimmed.is_empty() {
+            patch.insert("title".into(), Value::String(trimmed.to_string()));
+        }
     }
     let mut cwd_changed = false;
     if let Some(cwd) = parsed
@@ -736,7 +745,16 @@ async fn patch_tab(
         }
     }
     if let Some(pm) = parsed.get("permissionMode").filter(|v| !v.is_null()) {
-        patch.insert("permissionMode".into(), pm.clone());
+        let Some(pm_str) = pm.as_str() else {
+            return json_status(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "Field 'permissionMode' must be a string" }),
+            );
+        };
+        let trimmed = pm_str.trim();
+        if !trimmed.is_empty() {
+            patch.insert("permissionMode".into(), Value::String(trimmed.to_string()));
+        }
     }
     if let Some(model_val) = parsed.get("model") {
         let cleaned = model_val

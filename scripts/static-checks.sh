@@ -11,6 +11,7 @@
 #            vulture (dead code)
 #   Kotlin   ktlint (formatting, import order, unused imports),
 #            detekt (code smells, unused private code)
+#   Rust     rustfmt (formatting), clippy (lints, -D warnings)
 #   Shell    shellcheck
 #   CI       actionlint (workflow syntax + embedded shell)
 #
@@ -18,8 +19,9 @@
 # and a compiled app, so it runs as `gradle :app:lintDebug`.
 #
 # Tools are pinned below and downloaded into a cache directory on first use.
-# Requirements: bash, curl, tar, a JDK on PATH (for ktlint and detekt), and
-# either uv or python3 with the venv module.
+# Requirements: bash, curl, tar, a JDK on PATH (for ktlint and detekt),
+# cargo/rustup on PATH (for rustfmt and clippy, pinned in rust-toolchain.toml),
+# and either uv or python3 with the venv module.
 set -euo pipefail
 
 RUFF_VERSION=0.17.6
@@ -125,6 +127,7 @@ if $fix; then
   # check below reports those.
   echo "==> ktlint --format"
   "$ktlint" --format "${kotlin_sources[@]}" >/dev/null 2>&1 || true
+  run "cargo fmt (Rust formatting)" cargo fmt --manifest-path daemon-rs/Cargo.toml
 fi
 
 run "ruff check (Python lint, import order)" "$venv/bin/ruff" check .
@@ -137,6 +140,8 @@ run "detekt (Kotlin code smells, unused code)" java -jar "$detekt" \
   --build-upon-default-config \
   --config config/detekt/detekt.yml \
   --baseline config/detekt/baseline.xml
+run "cargo fmt (Rust formatting)" cargo fmt --manifest-path daemon-rs/Cargo.toml --check
+run "cargo clippy (Rust lints)" cargo clippy --manifest-path daemon-rs/Cargo.toml --all-targets -- -D warnings
 run "shellcheck (shell scripts)" "$shellcheck" "${shell_scripts[@]}"
 run "actionlint (GitHub workflows)" "$actionlint" -shellcheck "$shellcheck"
 
