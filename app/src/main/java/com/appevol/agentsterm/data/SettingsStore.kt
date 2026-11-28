@@ -12,7 +12,21 @@ interface ConnectionSettings {
     fun saveLastCwd(host: String, cwd: String?) {}
 }
 
-class SettingsStore(context: Context) : ConnectionSettings {
+data class CachedAppUpdateState(
+    val latestTag: String? = null,
+    val lastSuccessCheckMs: Long = 0L,
+    val dismissedTag: String? = null,
+)
+
+interface AppUpdatePreferences {
+    fun loadAppUpdateState(): CachedAppUpdateState
+    fun saveLastAppUpdateCheck(latestTag: String, checkedAtMs: Long)
+    fun saveDismissedAppUpdateTag(tag: String?)
+}
+
+class SettingsStore(context: Context) :
+    ConnectionSettings,
+    AppUpdatePreferences {
     /** Non-secret preferences eligible for Android Auto Backup across reinstalls. */
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -200,6 +214,30 @@ class SettingsStore(context: Context) : ConnectionSettings {
             .apply()
     }
 
+    override fun loadAppUpdateState(): CachedAppUpdateState = CachedAppUpdateState(
+        latestTag = localPrefs.getString(KEY_APP_UPDATE_LATEST_TAG, null)?.trim()?.takeIf { it.isNotEmpty() },
+        lastSuccessCheckMs = localPrefs.getLong(KEY_APP_UPDATE_LAST_CHECK_MS, 0L),
+        dismissedTag = localPrefs.getString(KEY_APP_UPDATE_DISMISSED_TAG, null)?.trim()?.takeIf { it.isNotEmpty() },
+    )
+
+    override fun saveLastAppUpdateCheck(latestTag: String, checkedAtMs: Long) {
+        localPrefs.edit {
+            putString(KEY_APP_UPDATE_LATEST_TAG, latestTag.trim())
+            putLong(KEY_APP_UPDATE_LAST_CHECK_MS, checkedAtMs)
+        }
+    }
+
+    override fun saveDismissedAppUpdateTag(tag: String?) {
+        localPrefs.edit {
+            val clean = tag?.trim()?.takeIf { it.isNotEmpty() }
+            if (clean == null) {
+                remove(KEY_APP_UPDATE_DISMISSED_TAG)
+            } else {
+                putString(KEY_APP_UPDATE_DISMISSED_TAG, clean)
+            }
+        }
+    }
+
     private fun hostKeyPrefKey(host: String, port: Int): String = "${KEY_HOST_KEY_PREFIX}${cleanHost(host)}:$port"
 
     private fun lastCwdPrefKey(normalizedHost: String): String = "${KEY_LAST_CWD_PREFIX}$normalizedHost"
@@ -233,5 +271,8 @@ class SettingsStore(context: Context) : ConnectionSettings {
         private const val KEY_DEBUG_LAST_REMOTE_DIR = "debug_last_remote_dir"
         private const val KEY_DEBUG_LAST_SYMLINK = "debug_last_symlink"
         private const val KEY_DEBUG_LAST_UPLOADED_AT = "debug_last_uploaded_at"
+        private const val KEY_APP_UPDATE_LATEST_TAG = "app_update_latest_tag"
+        private const val KEY_APP_UPDATE_LAST_CHECK_MS = "app_update_last_check_ms"
+        private const val KEY_APP_UPDATE_DISMISSED_TAG = "app_update_dismissed_tag"
     }
 }

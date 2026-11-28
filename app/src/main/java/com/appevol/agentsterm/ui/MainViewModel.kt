@@ -32,6 +32,7 @@ import com.appevol.agentsterm.data.DebugRecorder
 import com.appevol.agentsterm.data.DebugSharingSettings
 import com.appevol.agentsterm.data.ForegroundActivityTracker
 import com.appevol.agentsterm.data.FsListResponse
+import com.appevol.agentsterm.data.GitHubAppReleaseFetcher
 import com.appevol.agentsterm.data.HostKeyMismatchException
 import com.appevol.agentsterm.data.PtyTheme
 import com.appevol.agentsterm.data.ScreenRecordingCommands
@@ -170,6 +171,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val usageController = AgentUsageController(repo = repo, scope = viewModelScope)
     val newTabController = NewTabController(repo = repo, scope = viewModelScope)
     val daemonUpdateController = DaemonUpdateController(api, repo, sshClient, debugRecorder, viewModelScope)
+    val appUpdateController = AppUpdateController(
+        fetcher = GitHubAppReleaseFetcher(debugRecorder = debugRecorder),
+        prefs = settings,
+        scope = viewModelScope,
+    )
     val ptySessions = PtySessionManager(debugRecorder = debugRecorder)
     val createTabError: StateFlow<String?> = newTabController.error
     val isCreatingTab: StateFlow<Boolean> = newTabController.isCreating
@@ -232,6 +238,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         repo.initializeAutoConnect()
         ptySessions.observeWorkspace(viewModelScope, repo.state)
+        appUpdateController.checkIfDue()
     }
 
     fun onForegroundChanged(inForeground: Boolean) {
@@ -239,6 +246,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (inForeground) {
             debugRecorder.record("lifecycle", "on_foreground", "App resumed to foreground")
             repo.ensureConnectedOnForeground()
+            appUpdateController.checkIfDue()
         } else {
             debugRecorder.record("lifecycle", "on_background", "App moved to background")
             repo.onBackground()
