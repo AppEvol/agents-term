@@ -171,7 +171,8 @@ fun HerdrApp(viewModel: MainViewModel) {
     val pendingPairing by viewModel.pendingPairingConfig.collectAsStateWithLifecycle()
     val pendingSshAutofill by viewModel.pendingSshAutofill.collectAsStateWithLifecycle()
     val sshProfile by viewModel.sshProfile.collectAsStateWithLifecycle()
-    val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle()
+    // SSH progress arrives on I/O threads, even when the Compose test dispatcher is unconfined.
+    val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle(context = Dispatchers.Main.immediate)
     val debugSettings by viewModel.debugSettings.collectAsStateWithLifecycle()
     val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsStateWithLifecycle()
