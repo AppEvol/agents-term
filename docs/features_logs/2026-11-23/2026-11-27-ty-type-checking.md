@@ -1,3 +1,3 @@
-- **Python type checking with ty** (PR link added below):
+- **Python type checking with ty** ([PR #181](https://github.com/AppEvol/agents-term/pull/181)):
   - `scripts/static-checks.sh` (and so CI) now runs Astral's `ty` (pinned `0.0.112`) next to `ruff`, against a Python 3.8 floor, with warnings treated as errors.
   - Fixed the 13 existing findings: `None`-narrowing of regex matches and lookups in the Docker VM E2E test and the retry runners, a `log_message` override signature, `@contextmanager` return types, and a private `unittest` subtest call.
