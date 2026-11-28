@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.rememberTextFieldState
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Badge
@@ -196,6 +198,7 @@ fun AgentsTermApp(viewModel: MainViewModel) {
     val createTabError by viewModel.createTabError.collectAsStateWithLifecycle()
     val isCreatingTab by viewModel.isCreatingTab.collectAsStateWithLifecycle()
     val daemonUpdateUiState by viewModel.daemonUpdateController.uiState.collectAsStateWithLifecycle()
+    val appUpdateState by viewModel.appUpdateController.uiState.collectAsStateWithLifecycle()
     val daemonUpdateActions = remember(viewModel) {
         DaemonUpdateActions(
             onStartSelfUpdate = { viewModel.daemonUpdateController.startUpdateForCurrentDaemon() },
@@ -231,6 +234,8 @@ fun AgentsTermApp(viewModel: MainViewModel) {
             onUpdateDaemon = { viewModel.openConnectionSettings(preferSsh = true) },
             daemonUpdateUiState = daemonUpdateUiState,
             daemonUpdateActions = daemonUpdateActions,
+            appUpdateState = appUpdateState,
+            onCheckForAppUpdates = { viewModel.appUpdateController.checkNow() },
             onUpdateDebugSettings = { viewModel.updateDebugSettings(it) },
             onUploadDumpToVm = { note, shot ->
                 viewModel.uploadDebugDumpToVm(note = note, screenshotBase64 = shot)
@@ -281,6 +286,7 @@ fun AgentsTermApp(viewModel: MainViewModel) {
     var showSystemPromptDialog by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showQuickDebugDialog by remember { mutableStateOf(false) }
+    var showAppUpdateDialog by remember { mutableStateOf(false) }
     var pendingScreenshotBase64 by remember { mutableStateOf<String?>(null) }
     var taskSummaryTabId by remember { mutableStateOf<String?>(null) }
     var taskSummaryAllowEmpty by remember { mutableStateOf(false) }
@@ -441,7 +447,12 @@ fun AgentsTermApp(viewModel: MainViewModel) {
                 debugSharingEnabled = debugSettings.enabled,
                 snackbarHostState = snackbarHostState,
                 showOverflowMenu = showOverflowMenu,
-                onToggleOverflow = { showOverflowMenu = it },
+                onToggleOverflow = { open ->
+                    showOverflowMenu = open
+                    if (open) viewModel.appUpdateController.checkIfDue()
+                },
+                appUpdateState = appUpdateState,
+                onOpenAppUpdate = { showAppUpdateDialog = true },
                 onOpenDrawer = { scope.launch { drawerState.open() } },
                 onNewTab = { openNewTabSheet() },
                 onQuickDebugDump = { triggerQuickDebugDialog() },
@@ -920,6 +931,31 @@ fun AgentsTermApp(viewModel: MainViewModel) {
             },
         )
     }
+
+    val latestAppRelease = appUpdateState.latestRelease
+    if (showAppUpdateDialog && latestAppRelease != null) {
+        val openUrlError = stringResource(R.string.app_update_open_url_error)
+        AppUpdateDialog(
+            currentVersionLabel = appUpdateState.currentVersionLabel,
+            release = latestAppRelease,
+            onDownloadApk = { url ->
+                showAppUpdateDialog = false
+                if (!openExternalUrl(context, url)) {
+                    scope.launch { snackbarHostState.showSnackbar(openUrlError) }
+                }
+            },
+            onViewRelease = { url ->
+                showAppUpdateDialog = false
+                if (!openExternalUrl(context, url)) {
+                    scope.launch { snackbarHostState.showSnackbar(openUrlError) }
+                }
+            },
+            onLater = {
+                showAppUpdateDialog = false
+                viewModel.appUpdateController.dismissBadgeForCurrentUpdate()
+            },
+        )
+    }
 }
 
 @Composable
@@ -1014,6 +1050,8 @@ internal fun WorkspaceScaffold(
     snackbarHostState: SnackbarHostState,
     showOverflowMenu: Boolean,
     onToggleOverflow: (Boolean) -> Unit,
+    appUpdateState: AppUpdateUiState = AppUpdateUiState(),
+    onOpenAppUpdate: () -> Unit = {},
     onOpenDrawer: () -> Unit,
     onNewTab: () -> Unit,
     onQuickDebugDump: () -> Unit,
@@ -1225,15 +1263,65 @@ internal fun WorkspaceScaffold(
                                     onClick = { onToggleOverflow(true) },
                                     modifier = Modifier.testTag("overflow_menu_button"),
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.MoreVert,
-                                        contentDescription = stringResource(R.string.action_more),
-                                    )
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.MoreVert,
+                                            contentDescription = stringResource(R.string.action_more),
+                                        )
+                                        if (appUpdateState.showOverflowBadge) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(titleBar.semantic.warning)
+                                                    .testTag("overflow_update_badge"),
+                                            )
+                                        }
+                                    }
                                 }
                                 DropdownMenu(
                                     expanded = showOverflowMenu,
                                     onDismissRequest = { onToggleOverflow(false) },
                                 ) {
+                                    val availableRelease = appUpdateState.latestRelease
+                                    if (appUpdateState.updateAvailable && availableRelease != null) {
+                                        DropdownMenuItem(
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.SystemUpdate,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            },
+                                            text = {
+                                                Column {
+                                                    Text(
+                                                        text = stringResource(R.string.menu_app_update_title),
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                    )
+                                                    Text(
+                                                        text = stringResource(
+                                                            R.string.menu_app_update_subtitle,
+                                                            availableRelease.version.shortLabel,
+                                                        ),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontFamily = MonoFontFamily,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                onToggleOverflow(false)
+                                                onOpenAppUpdate()
+                                            },
+                                            modifier = Modifier.testTag("menu_app_update"),
+                                        )
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                    }
                                     if (activeTab != null) {
                                         DropdownMenuItem(
                                             text = { Text(stringResource(R.string.action_rename_tab)) },

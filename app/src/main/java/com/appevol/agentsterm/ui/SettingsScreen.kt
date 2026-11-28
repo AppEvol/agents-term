@@ -131,6 +131,9 @@ fun SettingsScreen(
         onOpenSshSetup = onOpenVmConnection,
     ),
     daemonCompatibilityOverride: DaemonCompatibilityInfo? = null,
+    appUpdateState: AppUpdateUiState = AppUpdateUiState(),
+    onCheckForAppUpdates: () -> Unit = {},
+    onOpenUpdateUrl: ((String) -> Unit)? = null,
     onUpdateDebugSettings: ((DebugSharingSettings) -> DebugSharingSettings) -> Unit,
     onUploadDumpToVm: (note: String?, screenshotBase64: String?) -> Unit,
     onExportOfflineZip: suspend (note: String?, screenshotBase64: String?) -> Result<File>,
@@ -379,6 +382,21 @@ fun SettingsScreen(
                 }
 
                 PtyThemePickerCard(ptyTheme, onSelectPtyTheme)
+
+                val openUrlError = stringResource(R.string.app_update_open_url_error)
+                val openUpdateLink: (String) -> Unit = { url ->
+                    if (onOpenUpdateUrl != null) {
+                        onOpenUpdateUrl(url)
+                    } else if (!openExternalUrl(context, url)) {
+                        scope.launch { snackbarHostState.showSnackbar(openUrlError) }
+                    }
+                }
+                AppUpdateSettingsCard(
+                    updateState = appUpdateState,
+                    onCheckForUpdates = onCheckForAppUpdates,
+                    onDownloadApk = openUpdateLink,
+                    onViewRelease = openUpdateLink,
+                )
 
                 // 2. Debug Sharing to VM Card
                 Surface(

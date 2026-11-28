@@ -346,4 +346,22 @@
     <string name="pty_theme_follow_app">Follow app theme</string>
     <string name="pty_theme_light">Light</string>
     <string name="pty_theme_dark">Dark</string>
+    <string name="menu_app_update_title">Update available</string>
+    <string name="menu_app_update_subtitle">%1$s ready to download</string>
+    <string name="dialog_app_update_title">App Update Available</string>
+    <string name="dialog_app_update_body">A newer release of AgentsTerm is available on GitHub. Download the APK and open it on your device to install.</string>
+    <string name="dialog_app_update_versions">%1$s → %2$s</string>
+    <string name="action_download_apk">Download APK</string>
+    <string name="action_view_release">View release</string>
+    <string name="action_later">Later</string>
+    <string name="app_update_open_url_error">Unable to open link on this device</string>
+    <string name="settings_app_update_section_title">App Updates</string>
+    <string name="settings_app_update_installed_version">Installed: %1$s</string>
+    <string name="settings_app_update_installed_dev">Installed: %1$s (local dev build)</string>
+    <string name="settings_app_update_checking">Checking GitHub releases…</string>
+    <string name="settings_app_update_available">New release available: %1$s</string>
+    <string name="settings_app_update_up_to_date">Up to date (latest: %1$s)</string>
+    <string name="settings_app_update_latest_dev">Latest GitHub release: %1$s</string>
+    <string name="settings_app_update_not_checked">Checks GitHub releases automatically at most once every 2 hours.</string>
+    <string name="action_check_for_updates">Check for updates</string>
 </resources>
